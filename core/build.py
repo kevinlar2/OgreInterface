@@ -44,8 +44,9 @@ class Surface:
         self.miller_index = miller_index
         self.layers = layers
         self.vacuum = vacuum
-        self.slabs = self._generate_slabs()
-        self.number_of_terminations = len(self.slabs)
+        self.slabs_pmg = self._generate_slabs()
+        self.slabs_ase = [AseAtomsAdaptor.get_atoms(slab) for slab in self.slabs_pmg]
+        self.number_of_terminations = len(self.slabs_pmg)
 
     @classmethod
     def from_file(
@@ -91,13 +92,16 @@ class Surface:
 
         to_delete = [np.min(same_slab_index) for same_slab_index in same_slab_indices]
         unique_slab_indices = [i for i in range(len(primitive_slabs)) if i not in to_delete]
-        unique_primitive_slabs = [primitive_slabs[i] for i in unique_slab_indices]
+        unique_primitive_slabs = [
+            primitive_slabs[i].get_sorted_structure() for i in unique_slab_indices
+        ]
 
         return unique_primitive_slabs
 
 
 if __name__ == "__main__":
     s = Surface.from_file('./POSCAR_InAs_conv', miller_index=[1,1,0], layers=5, vacuum=10)
+    print(s.slabs_ase[0])
     
 
 

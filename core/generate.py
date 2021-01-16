@@ -15,107 +15,8 @@ from ase.build.general_surface import ext_gcd
 import numpy as np
 from math import gcd
 from itertools import combinations
-
-
-class Surface:
-    """
-    The Surface class is a container for surfaces generated with the SurfaceGenerator class
-    and will be used as an input to the InterfaceGenerator class
-    """
-
-    def __init__(
-        self,
-        slab,
-        bulk,
-        miller_index,
-        layers,
-        vacuum,
-    ):
-        if type(slab) == Atoms:
-            self.slab_ase = slab
-            self.slab_pmg = AseAtomsAdaptor.get_structure(slab)
-        elif type(slab) == Structure:
-            self.slab_ase = AseAtomsAdaptor.get_atoms(slab)
-            self.slab_pmg = slab
-        else:
-            raise TypeError(f"structure accepts 'pymatgen.core.structure.Structure' or 'ase.Atoms' not '{type(slab).__name__}'")
-
-        if type(bulk) == Atoms:
-            self.bulk_ase = bulk
-            self.bulk_pmg = AseAtomsAdaptor.get_structure(bulk)
-        elif type(bulk) == Structure:
-            self.bulk_ase = AseAtomsAdaptor.get_atoms(bulk)
-            self.bulk_pmg = bulk
-        else:
-            raise TypeError(f"structure accepts 'pymatgen.core.structure.Structure' or 'ase.Atoms' not '{type(bulk).__name__}'")
-
-        self.miller_index = miller_index
-        self.layers = layers
-        self.vacuum = vacuum
-        self.termination = self._get_termination()
-        self.crystallographic_directions = self._get_crystallographic_directions()
-
-
-    def _get_termination(self):
-        z_layers, _ = get_layers(self.slab_ase, (0, 0, 1))
-        top_layer = [i for i, val in enumerate(z_layers == max(z_layers)) if val]
-        termination = np.unique(
-            [self.slab_ase.get_chemical_symbols()[a] for a in top_layer]
-        )
-
-        return termination
-
-    def _get_crystallographic_directions(self, tol=1e-10):
-        """
-        TODO: Figure out how to find the crystallographic directions of the a and b
-        lattice vectors in the primitive slab
-        """
-        indices = np.asarray(self.miller_index)
-
-        if indices.shape != (3,) or not indices.any() or indices.dtype != int:
-            raise ValueError('%s is an invalid surface type' % indices)
-
-        h, k, l = indices
-        h0, k0, l0 = (indices == 0)
-
-        if h0 and k0 or h0 and l0 or k0 and l0:  # if two indices are zero
-            if not h0:
-                c1, c2, c3 = [(0, 1, 0), (0, 0, 1), (1, 0, 0)]
-            if not k0:
-                c1, c2, c3 = [(0, 0, 1), (1, 0, 0), (0, 1, 0)]
-            if not l0:
-                c1, c2, c3 = [(1, 0, 0), (0, 1, 0), (0, 0, 1)]
-        else:
-            p, q = ext_gcd(k, l)
-            a1, a2, a3 = self.bulk_ase.cell
-
-            # constants describing the dot product of basis c1 and c2:
-            # dot(c1,c2) = k1+i*k2, i in Z
-            k1 = np.dot(p * (k * a1 - h * a2) + q * (l * a1 - h * a3),
-                        l * a2 - k * a3)
-            k2 = np.dot(l * (k * a1 - h * a2) - k * (l * a1 - h * a3),
-                        l * a2 - k * a3)
-
-            if abs(k2) > tol:
-                i = -int(round(k1 / k2))  # i corresponding to the optimal basis
-                p, q = p + i * l, q - i * k
-
-            a, b = ext_gcd(p * k + q * l, h)
-
-
-            c1 = (p * k + q * l, -p * h, -q * h)
-            c2 = np.array((0, l, -k)) // abs(gcd(l, k))
-            c3 = (b, a * p, a * q)
-
-        #  print(np.matmul(
-            #  np.linalg.inv(self.slab_basis), structure.lattice.matrix.T).T /
-            #  self.structure.cell[0][0]
-        #  )
-
-
-        return np.array([c1, c2, c3])
-
-
+from surfaces import Surface, Interface
+import time
 
 class SurfaceGenerator:
     """
@@ -242,44 +143,131 @@ class InterfaceGenerator:
         self.angle_tol = angle_tol
         self.length_tol = length_tol
         self.max_area = max_area
+        [self.film_sl_vecs,
+        self.sub_sl_vecs,
+        self.match_area,
+        self.film_vecs,
+        self.sub_vecs,
+        self.film_transformations,
+        self.substrate_transformations] = self._generate_interfaces()
+        self._film_norms = self._get_norm(self.film_sl_vecs, ein='ijk,ijk->ij')
+        self._sub_norms = self._get_norm(self.sub_sl_vecs, ein='ijk,ijk->ij')
+        self.strain = self._get_strain()
+        self.angle_diff = self._get_angle_diff()
+        self.area_diff = self._get_area_diff()
 
 
-        def _generate_interfaces(self):
-            ZSL = ZSLGenerator(
-                max_area_ratio_tol=self.area_tol,
-                max_angle_tol=self.angle_tol,
-                max_length_tol=self.length_tol,
-                max_area=self.max_area,
-            )
-
-            SA = SubstrateAnalyzer(zslgen=ZSL)
-
-            M = SA.calculate(
-                film=self.film.slab_ase,
-                substrate=self.substrate.slab_ase,
-                film_millers=[self.film.miller_index],
-                substrate_millers=[self.substrate.miller_index],
-            )
-
+    def _get_norm(self, a, ein):
+        a_norm = np.sqrt(np.einsum(ein, a, a))
         
+        return a_norm
+
+    def _get_angle(self, a, b):
+        ein='ij,ij->i'
+        a_norm = self._get_norm(a, ein=ein)
+        b_norm = self._get_norm(b,ein=ein)
+        dot_prod = np.einsum('ij,ij->i', a, b)
+        angles = np.arccos(dot_prod / (a_norm * b_norm)) * (180 / np.pi)
+
+        return angles
+
+    def _get_area(self, a, b):
+        cross_prod = np.cross(a,b)
+        area = self._get_norm(cross_prod, ein='ij,ij->i')
+
+        return area
+    
+    def _get_strain(self):
+        a_strain = (self._film_norms[:,0] / self._sub_norms[:,0]) - 1
+        b_strain = (self._film_norms[:,1] / self._sub_norms[:,1]) - 1
+
+        return np.c_[a_strain, b_strain]
+
+    def _get_angle_diff(self):
+        sub_angles = self._get_angle(self.sub_sl_vecs[:,0], self.sub_sl_vecs[:,1])
+        film_angles = self._get_angle(self.film_sl_vecs[:,0], self.film_sl_vecs[:,1])
+        angle_diff = (film_angles / sub_angles) - 1
+
+        return angle_diff
+
+    def _get_area_diff(self):
+        sub_areas = self._get_area(self.sub_sl_vecs[:,0], self.sub_sl_vecs[:,1])
+        film_areas = self._get_area(self.film_sl_vecs[:,0], self.film_sl_vecs[:,1])
+        area_diff = (film_areas / sub_areas) - 1
+
+        return area_diff
+
+
+    def _generate_interfaces(self):
+        zsl = ZSLGenerator(
+            max_area_ratio_tol=self.area_tol,
+            max_angle_tol=self.angle_tol,
+            max_length_tol=self.length_tol,
+            max_area=self.max_area,
+        )
+
+        sa = SubstrateAnalyzer(zslgen=zsl)
+
+        matches = sa.calculate(
+            film=self.film.slab_pmg,
+            substrate=self.substrate.slab_pmg,
+            film_millers=[self.film.miller_index],
+            substrate_millers=[self.substrate.miller_index],
+        )
+
+        match_list = list(matches)
+
+        film_sl_vecs = np.array([match['film_sl_vecs'] for match in match_list])
+        sub_sl_vecs = np.array([match['sub_sl_vecs'] for match in match_list])
+        match_area = np.array([match['match_area'] for match in match_list])
+        film_vecs = np.array([match['film_vecs'] for match in match_list])
+        sub_vecs = np.array([match['sub_vecs'] for match in match_list])
+        film_transformations = np.array([match['film_transformation'] for match in match_list])
+        substrate_transformations = np.array([match['substrate_transformation'] for match in match_list])
+
+        film_3x3_transformations = np.array(
+            [np.eye(3,3) for _ in range(film_transformations.shape[0])]
+        )
+        substrate_3x3_transformations = np.array(
+            [np.eye(3,3) for _ in range(substrate_transformations.shape[0])]
+        )
+
+        film_3x3_transformations[:,:2,:2] = film_transformations
+        substrate_3x3_transformations[:,:2,:2] = substrate_transformations
+
+        return [
+            film_sl_vecs,
+            sub_sl_vecs,
+            match_area,
+            film_vecs,
+            sub_vecs,
+            film_3x3_transformations,
+            substrate_3x3_transformations,
+        ]
+
 
 
 if __name__ == "__main__":
-    s = SurfaceGenerator.from_file(
+    subs = SurfaceGenerator.from_file(
         './POSCAR_InAs_conv',
-        miller_index=[0,1,1],
+        miller_index=[0,0,1],
         layers=5,
         vacuum=10
     )
-    print(s.slabs[0].termination)
-    #  print(np.matmul(s.slabs_pmg[0].lattice.matrix, np.linalg.inv(s.get_basis())))
-    #  bulk = AseAtomsAdaptor.get_structure(s.structure).lattice.matrix
-    #  slab = s.slabs_pmg[0].lattice.matrix
-    #  print(np.matmul(np.linalg.inv(slab), bulk))
-    
-
-
-
-
-
-
+    films = SurfaceGenerator.from_file(
+        './POSCAR_Al_conv',
+        miller_index=[0,0,1],
+        layers=5,
+        vacuum=10
+    )
+    inter = InterfaceGenerator(
+        substrate=subs.slabs[0],
+        film=films.slabs[0],
+    )
+    new = Interface(
+        substrate=subs.slabs[0],
+        film=films.slabs[0],
+        film_transformation=inter.film_transformations[0],
+        substrate_transformation=inter.substrate_transformations[0],
+    )
+    Poscar(AseAtomsAdaptor.get_structure(new.interface).get_sorted_structure()).write_file('POSCAR_int')

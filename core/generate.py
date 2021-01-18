@@ -120,6 +120,8 @@ class InterfaceGenerator:
             angle_tol=0.01,
             length_tol=0.01,
             max_area=500,
+            interfacial_distance=2,
+            sub_strain_frac=0,
     ):
         if type(substrate) == Surface:
             self.substrate = substrate
@@ -135,13 +137,15 @@ class InterfaceGenerator:
         self.angle_tol = angle_tol
         self.length_tol = length_tol
         self.max_area = max_area
+        self.interfacial_distance = interfacial_distance
+        self.sub_strain_frac = sub_strain_frac
         [self.film_sl_vecs,
         self.sub_sl_vecs,
         self.match_area,
         self.film_vecs,
         self.sub_vecs,
         self.film_transformations,
-        self.substrate_transformations] = self._generate_interfaces()
+        self.substrate_transformations] = self._generate_interface_props()
         self._film_norms = self._get_norm(self.film_sl_vecs, ein='ijk,ijk->ij')
         self._sub_norms = self._get_norm(self.sub_sl_vecs, ein='ijk,ijk->ij')
         self.strain = self._get_strain()
@@ -223,7 +227,7 @@ class InterfaceGenerator:
         return rot_mat
 
 
-    def _generate_interfaces(self):
+    def _generate_interface_props(self):
         zsl = ZSLGenerator(
             max_area_ratio_tol=self.area_tol,
             max_angle_tol=self.angle_tol,
@@ -274,18 +278,36 @@ class InterfaceGenerator:
             substrate_3x3_transformations,
         ]
 
+    def generate_interfaces(self):
+        interfaces = []
+        for i in range(self.substrate_transformations.shape[0]):
+            interface = Interface(
+                substrate=self.substrate,
+                film=self.film,
+                film_transformation=self.film_transformations[i],
+                substrate_transformation=self.substrate_transformations[i],
+                strain=self.strain[i],
+                angle_diff=self.angle_diff[i],
+                sub_strain_frac=self.sub_strain_frac,
+                interfacial_distance=self.interfacial_distance,
+            )
+            interfaces.append(interface)
+
+        return interfaces
+
+
 
 
 if __name__ == "__main__":
     subs = SurfaceGenerator.from_file(
         './POSCAR_InAs_conv',
-        miller_index=[1,1,1],
+        miller_index=[0,0,1],
         layers=5,
         vacuum=5,
     )
     films = SurfaceGenerator.from_file(
         './POSCAR_Al_conv',
-        miller_index=[1,1,1],
+        miller_index=[0,0,1],
         layers=5,
         vacuum=5,
     )
@@ -296,104 +318,16 @@ if __name__ == "__main__":
         angle_tol=0.01,
         area_tol=0.01,
         max_area=500,
+        interfacial_distance=0,
+        sub_strain_frac=0
     )
 
-    new = Interface(
-        substrate=subs.slabs[0],
-        film=films.slabs[0],
-        film_transformation=inter.film_transformations[-1],
-        substrate_transformation=inter.substrate_transformations[-1],
-        #  film_sl_vecs=inter.film_sl_vecs[-1],
-        #  sub_sl_vecs=inter.sub_sl_vecs[-1],
-        strain=inter.strain[-1],
-        angle_diff=inter.angle_diff[-1],
-        sub_strain_frac=0.5,
-        interfacial_distance=3
-    )
+    interfaces = inter.generate_interfaces()
 
-    Poscar(new._stack_interface()).write_file('POSCAR_int')
+    import os
 
-    Poscar(new._strain_and_orient_sub()).write_file('POSCAR_sub_sc')
-    Poscar(new._strain_and_orient_film()).write_file('POSCAR_film_sc')
+    for i in range(len(interfaces)):
+        Poscar(interfaces[i].interface).write_file(os.path.join('test', f'POSCAR_{i}'))
+            
+    #  Poscar(new._stack_interface()).write_file('POSCAR_int')
 
-    subs = new.substrate_supercell.lattice.matrix[:,:2]
-    film = new.film_supercell.lattice.matrix[:,:2]
-    new_vecs = new.interface_sl_vectors[:,:2]
-
-
-    import matplotlib.pyplot as plt
-    fig, ax = plt.subplots()
-    ax.plot(
-        [0,subs[0,0]],
-        [0,subs[0,1]],
-        color='red',
-        linewidth=8,
-        zorder=0,
-        label='S',
-    )
-    ax.plot(
-        [0,subs[1,0]],
-        [0,subs[1,1]],
-        color='red',
-        linewidth=8,
-        zorder=0,
-        label='S',
-    )
-    ax.plot(
-        [0,film[0,0]],
-        [0,film[0,1]],
-        color='blue',
-        linewidth=4,
-        zorder=1,
-        label='F',
-    )
-    ax.plot(
-        [0,film[1,0]],
-        [0,film[1,1]],
-        color='blue',
-        linewidth=4,
-        zorder=1,
-        label='F',
-    )
-    ax.plot(
-        [0,new_vecs[0,0]],
-        [0,new_vecs[0,1]],
-        color='green',
-        linewidth=2,
-        zorder=2,
-        label='I',
-    )
-    ax.plot(
-        [0,new_vecs[1,0]],
-        [0,new_vecs[1,1]],
-        color='green',
-        linewidth=2,
-        zorder=2,
-        label='I',
-    )
-    plt.legend()
-    plt.tight_layout()
-    #  plt.show()
-    #  print(new._align_film_a_to_sub_a())
-    #  slab = subs.slabs[0].slab_pmg
-#
-    #  def remove_vacuum(slab):
-        #  struc = copy.deepcopy(slab)
-        #  bot, _ = get_slab_regions(struc)[0]
-        #  struc.translate_sites(range(len(struc)), [0,0,-bot])
-        #  frac_coords = struc.frac_coords
-        #  cart_coords = struc.cart_coords
-        #  max_z = np.max(frac_coords[:,-1])
-        #  _, top_new = get_slab_regions(struc)[0]
-        #  matrix = copy.deepcopy(struc.lattice.matrix)
-        #  matrix[2,2] = top_new * matrix[2,2]
-        #  new_lattice = Lattice(matrix)
-        #  struc.lattice = new_lattice
-#
-        #  for i in range(len(struc)):
-            #  struc.sites[i].frac_coords[-1] = struc.sites[i].frac_coords[-1] / max_z
-            #  struc.sites[i].coords[-1] = cart_coords[i,-1]
-#
-        #  return struc
-
-    #  Poscar(new.interface).write_file('POSCAR_int')

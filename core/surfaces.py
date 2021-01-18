@@ -171,8 +171,8 @@ class Interface:
         substrate_transformation,
         strain,
         angle_diff,
-        sub_strain_frac=0,
-        interfacial_distance=2,
+        sub_strain_frac,
+        interfacial_distance,
         #  area_diff,
     ):
         self.substrate = substrate
@@ -198,7 +198,7 @@ class Interface:
         )
         self.interface_sl_vectors = self._get_interface_sl_vecs()
         self.interfacial_distance = interfacial_distance
-        #  self.interface = self._stack_interface()
+        self.interface = self._stack_interface()
 
     def _get_supercell(self, slab, matrix):
         new_slab = copy.deepcopy(slab)
@@ -374,29 +374,18 @@ class Interface:
 
         return flipped_structure
 
-    def _group_layers(self, structure):
-        sites = structure.sites
-        zvals = np.array([site.c for site in sites])
-        unique_values = np.sort(np.unique(np.round(zvals, 3)))
-        diff = np.mean(np.diff(unique_values)) * 0.2
 
-        grouped = False
-        groups = []
-        group_heights = []
-        zvals_copy = copy.deepcopy(zvals)
-        while not grouped:
-            if len(zvals_copy) > 0:
-                group_index = np.where(
-                    np.isclose(zvals, np.min(zvals_copy), atol=diff)
-                )[0]
-                group_heights.append(np.min(zvals_copy))
-                zvals_copy = np.delete(zvals_copy, np.where(
-                    np.isin(zvals_copy, zvals[group_index]))[0])
-                groups.append(group_index)
-            else:
-                grouped = True
+    def _get_unique_species(self):
+        substrate_species = np.unique(self.substrate.bulk_pmg.species).astype(str)
+        film_species = np.unique(self.film.bulk_pmg.species).astype(str)
 
-        return groups
+        species_in_both = []
+        for species in substrate_species:
+            if species in film_species:
+                species_in_both.append(species)
+
+        return substrate_species, film_species, species_in_both
+
 
     def _stack_interface(self):
         strained_sub = self._strain_and_orient_sub()
@@ -413,10 +402,6 @@ class Interface:
             np.linalg.norm(strained_film.lattice.matrix[-1]),
             self.interfacial_distance,
         ])
-        #  middle_height = np.sum([
-            #  np.linalg.norm(strained_sub.lattice.matrix[-1]),
-            #  0.5 * self.interfacial_distance,
-        #  ])
 
         interface_lattice = Lattice(
             np.vstack([
@@ -424,7 +409,6 @@ class Interface:
                 [0, 0, new_c_len]
             ])
         )
-
 
         interface_struc = Structure(
             lattice=interface_lattice,
@@ -434,47 +418,32 @@ class Interface:
             coords_are_cartesian=True,
         )
 
-        layer_inds_conv = self._group_layers(interface_struc)
-        
-        avg_Zs_conv = []
-        for layer_ind in layer_inds_conv:
-            avg_Z = np.mean([interface_struc.sites[i].species.elements[0].Z for i in layer_ind])
-            avg_Zs_conv.append(avg_Z)
-
         sg = SpacegroupAnalyzer(interface_struc)
         interface_prim_struc = sg.get_primitive_standard_structure()
 
-        layer_inds_prim = self._group_layers(interface_prim_struc)
-        
-        avg_Zs_prim = []
-        for layer_ind in layer_inds_prim:
-            avg_Z = np.mean([interface_prim_struc.sites[i].species.elements[0].Z for i in layer_ind])
-            avg_Zs_prim.append(avg_Z)
+        substrate_species, film_species, species_in_both = self._get_unique_species()
 
-        avg_Zs_conv = np.array(avg_Zs_conv)
-        avg_Zs_prim = np.array(avg_Zs_prim)
-
-        if np.mean(np.isclose(avg_Zs_conv, avg_Zs_prim)) < 1:
-            if np.mean(np.isclose(avg_Zs_conv, np.flip(avg_Zs_prim))) == 1:
-                interface_prim_struc = self._flip_structure(interface_prim_struc)
-            else:
-                pass
-        else:
+        if len(species_in_both) == 0:
             pass
+        else:
+            for i in species_in_both:
+                substrate_species = np.delete(substrate_species, np.where(substrate_species == i))
+                film_species = np.delete(film_species, np.where(film_species == i))
+
+        element_array_prim = np.array([
+            site.species.elements[0].symbol for site in interface_prim_struc
+        ])
+
+        substrate_ind_prim = np.isin(element_array_prim, substrate_species)
+        film_ind_prim = np.isin(element_array_prim, film_species)
+
+        average_sub_height_prim = np.mean(interface_prim_struc.cart_coords[substrate_ind_prim,-1])
+        average_film_height_prim = np.mean(interface_prim_struc.cart_coords[film_ind_prim,-1])
+
+        #  if average_film_height_prim < average_sub_height_prim:
+            #  interface_prim_struc = self._flip_structure(interface_prim_struc)
+        #  else:
+            #  pass
 
         return interface_prim_struc
-
-        #  interface = stack(
-            #  atoms1=self.substrate_supercell,
-            #  atoms2=self.film_supercell,
-        #  )
-        #  interface = merge_slabs(
-            #  substrate=self.substrate_supercell,
-            #  film=self.film_supercell,
-            #  slab_offset=2,
-            #  x_offset=0,
-            #  y_offset=0,
-        #  )
-
-        #  return interface
 

@@ -2,10 +2,12 @@
 This module will be used to construct the surfaces and interfaces used in this package.
 """
 from pymatgen.core.structure import Structure 
+from pymatgen.core.lattice import Lattice
 from pymatgen.io.vasp.inputs import Poscar
 from pymatgen.io.ase import AseAtomsAdaptor
 from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
-from pymatgen.analysis.substrate_analyzer import ZSLGenerator, SubstrateAnalyzer
+from pymatgen.analysis.substrate_analyzer import ZSLGenerator, SubstrateAnalyzer, reduce_vectors
+from pymatgen.core.surface import get_slab_regions
 from ase import Atoms
 from ase.io import read
 from ase.build.surfaces_with_termination import surfaces_with_termination
@@ -17,6 +19,7 @@ from math import gcd
 from itertools import combinations
 from surfaces import Surface, Interface
 import time
+import copy
 
 class SurfaceGenerator:
     """
@@ -63,17 +66,6 @@ class SurfaceGenerator:
         return cls(structure, miller_index, layers, vacuum)
 
 
-    def _get_primitive_cell(self, structure):
-        if type(structure) == Atoms:
-            structure = AseAtomsAdaptor.get_structure(structure)
-
-        spacegroup = SpacegroupAnalyzer(structure)
-        primitive = spacegroup.get_primitive_standard_structure()
-
-
-        return primitive.get_sorted_structure()
-
-
     def _generate_slabs(self):
         slabs = surfaces_with_termination(
             self.structure,
@@ -85,22 +77,22 @@ class SurfaceGenerator:
         )
 
 
-        primitive_slabs = [self._get_primitive_cell(slab) for slab in slabs]
+        pmg_slabs = [AseAtomsAdaptor.get_structure(slab) for slab in slabs]
 
-        combos = combinations(range(len(primitive_slabs)), 2)
+        combos = combinations(range(len(pmg_slabs)), 2)
         same_slab_indices = []
         for combo in combos:
-            if primitive_slabs[combo[0]] == primitive_slabs[combo[1]]:
+            if pmg_slabs[combo[0]] == pmg_slabs[combo[1]]:
                 same_slab_indices.append(combo)
 
         to_delete = [np.min(same_slab_index) for same_slab_index in same_slab_indices]
-        unique_slab_indices = [i for i in range(len(primitive_slabs)) if i not in to_delete]
-        unique_primitive_slabs = [
-            primitive_slabs[i].get_sorted_structure() for i in unique_slab_indices
+        unique_slab_indices = [i for i in range(len(pmg_slabs)) if i not in to_delete]
+        unique_pmg_slabs = [
+            pmg_slabs[i].get_sorted_structure() for i in unique_slab_indices
         ]
 
         surfaces = []
-        for slab in unique_primitive_slabs:
+        for slab in unique_pmg_slabs:
             surface = Surface(
                 slab=slab,
                 bulk=self.structure,
@@ -155,6 +147,7 @@ class InterfaceGenerator:
         self.strain = self._get_strain()
         self.angle_diff = self._get_angle_diff()
         self.area_diff = self._get_area_diff()
+        self.rotation_mat = self._get_rotation_mat()
 
 
     def _get_norm(self, a, ein):
@@ -167,7 +160,7 @@ class InterfaceGenerator:
         a_norm = self._get_norm(a, ein=ein)
         b_norm = self._get_norm(b,ein=ein)
         dot_prod = np.einsum('ij,ij->i', a, b)
-        angles = np.arccos(dot_prod / (a_norm * b_norm)) * (180 / np.pi)
+        angles = np.arccos(dot_prod / (a_norm * b_norm))
 
         return angles
 
@@ -197,6 +190,38 @@ class InterfaceGenerator:
 
         return area_diff
 
+    def _get_rotation_mat(self):
+        dot_prod = np.divide(
+            np.einsum(
+                'ij,ij->i',
+                self.sub_sl_vecs[:,0],
+                self.film_sl_vecs[:,0]
+            ),
+            np.multiply(self._sub_norms[:,0], self._film_norms[:,0])
+        )
+
+        mag_cross = np.divide(
+            self._get_area(
+                self.sub_sl_vecs[:,0],
+                self.film_sl_vecs[:,0]
+            ),
+            np.multiply(self._sub_norms[:,0], self._film_norms[:,0])
+        )
+
+        rot_mat = np.c_[
+            dot_prod,
+            -mag_cross,
+            np.zeros(len(dot_prod)),
+            mag_cross,
+            dot_prod,
+            np.zeros(len(dot_prod)),
+            np.zeros(len(dot_prod)),
+            np.zeros(len(dot_prod)),
+            np.ones(len(dot_prod)),
+        ].reshape(-1,3,3)
+
+        return rot_mat
+
 
     def _generate_interfaces(self):
         zsl = ZSLGenerator(
@@ -209,8 +234,8 @@ class InterfaceGenerator:
         sa = SubstrateAnalyzer(zslgen=zsl)
 
         matches = sa.calculate(
-            film=self.film.slab_pmg,
-            substrate=self.substrate.slab_pmg,
+            film=self.film.bulk_pmg,
+            substrate=self.substrate.bulk_pmg,
             film_millers=[self.film.miller_index],
             substrate_millers=[self.substrate.miller_index],
         )
@@ -222,8 +247,12 @@ class InterfaceGenerator:
         match_area = np.array([match['match_area'] for match in match_list])
         film_vecs = np.array([match['film_vecs'] for match in match_list])
         sub_vecs = np.array([match['sub_vecs'] for match in match_list])
-        film_transformations = np.array([match['film_transformation'] for match in match_list])
-        substrate_transformations = np.array([match['substrate_transformation'] for match in match_list])
+        film_transformations = np.array(
+            [match['film_transformation'] for match in match_list]
+        )
+        substrate_transformations = np.array(
+            [match['substrate_transformation'] for match in match_list]
+        )
 
         film_3x3_transformations = np.array(
             [np.eye(3,3) for _ in range(film_transformations.shape[0])]
@@ -250,24 +279,121 @@ class InterfaceGenerator:
 if __name__ == "__main__":
     subs = SurfaceGenerator.from_file(
         './POSCAR_InAs_conv',
-        miller_index=[0,0,1],
+        miller_index=[1,1,1],
         layers=5,
-        vacuum=10
+        vacuum=5,
     )
     films = SurfaceGenerator.from_file(
         './POSCAR_Al_conv',
-        miller_index=[0,0,1],
+        miller_index=[1,1,1],
         layers=5,
-        vacuum=10
+        vacuum=5,
     )
     inter = InterfaceGenerator(
         substrate=subs.slabs[0],
         film=films.slabs[0],
+        length_tol=0.01,
+        angle_tol=0.01,
+        area_tol=0.01,
+        max_area=500,
     )
+
     new = Interface(
         substrate=subs.slabs[0],
         film=films.slabs[0],
-        film_transformation=inter.film_transformations[0],
-        substrate_transformation=inter.substrate_transformations[0],
+        film_transformation=inter.film_transformations[-1],
+        substrate_transformation=inter.substrate_transformations[-1],
+        #  film_sl_vecs=inter.film_sl_vecs[-1],
+        #  sub_sl_vecs=inter.sub_sl_vecs[-1],
+        strain=inter.strain[-1],
+        angle_diff=inter.angle_diff[-1],
+        sub_strain_frac=0.5,
+        interfacial_distance=3
     )
-    Poscar(AseAtomsAdaptor.get_structure(new.interface).get_sorted_structure()).write_file('POSCAR_int')
+
+    Poscar(new._stack_interface()).write_file('POSCAR_int')
+
+    Poscar(new._strain_and_orient_sub()).write_file('POSCAR_sub_sc')
+    Poscar(new._strain_and_orient_film()).write_file('POSCAR_film_sc')
+
+    subs = new.substrate_supercell.lattice.matrix[:,:2]
+    film = new.film_supercell.lattice.matrix[:,:2]
+    new_vecs = new.interface_sl_vectors[:,:2]
+
+
+    import matplotlib.pyplot as plt
+    fig, ax = plt.subplots()
+    ax.plot(
+        [0,subs[0,0]],
+        [0,subs[0,1]],
+        color='red',
+        linewidth=8,
+        zorder=0,
+        label='S',
+    )
+    ax.plot(
+        [0,subs[1,0]],
+        [0,subs[1,1]],
+        color='red',
+        linewidth=8,
+        zorder=0,
+        label='S',
+    )
+    ax.plot(
+        [0,film[0,0]],
+        [0,film[0,1]],
+        color='blue',
+        linewidth=4,
+        zorder=1,
+        label='F',
+    )
+    ax.plot(
+        [0,film[1,0]],
+        [0,film[1,1]],
+        color='blue',
+        linewidth=4,
+        zorder=1,
+        label='F',
+    )
+    ax.plot(
+        [0,new_vecs[0,0]],
+        [0,new_vecs[0,1]],
+        color='green',
+        linewidth=2,
+        zorder=2,
+        label='I',
+    )
+    ax.plot(
+        [0,new_vecs[1,0]],
+        [0,new_vecs[1,1]],
+        color='green',
+        linewidth=2,
+        zorder=2,
+        label='I',
+    )
+    plt.legend()
+    plt.tight_layout()
+    #  plt.show()
+    #  print(new._align_film_a_to_sub_a())
+    #  slab = subs.slabs[0].slab_pmg
+#
+    #  def remove_vacuum(slab):
+        #  struc = copy.deepcopy(slab)
+        #  bot, _ = get_slab_regions(struc)[0]
+        #  struc.translate_sites(range(len(struc)), [0,0,-bot])
+        #  frac_coords = struc.frac_coords
+        #  cart_coords = struc.cart_coords
+        #  max_z = np.max(frac_coords[:,-1])
+        #  _, top_new = get_slab_regions(struc)[0]
+        #  matrix = copy.deepcopy(struc.lattice.matrix)
+        #  matrix[2,2] = top_new * matrix[2,2]
+        #  new_lattice = Lattice(matrix)
+        #  struc.lattice = new_lattice
+#
+        #  for i in range(len(struc)):
+            #  struc.sites[i].frac_coords[-1] = struc.sites[i].frac_coords[-1] / max_z
+            #  struc.sites[i].coords[-1] = cart_coords[i,-1]
+#
+        #  return struc
+
+    #  Poscar(new.interface).write_file('POSCAR_int')

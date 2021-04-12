@@ -3,10 +3,11 @@ This module will be used to construct the surfaces and interfaces used in this p
 """
 from pymatgen.core.structure import Structure 
 from pymatgen.core.lattice import Lattice 
-from pymatgen.core.surface import get_slab_regions
+from pymatgen.core.surface import get_slab_regions, center_slab
 from pymatgen.io.vasp.inputs import Poscar
 from pymatgen.io.ase import AseAtomsAdaptor
 from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
+from pymatgen.symmetry.structure import SymmetrizedStructure
 from pymatgen.analysis.substrate_analyzer import ZSLGenerator, SubstrateAnalyzer, reduce_vectors
 from pymatgen.symmetry.analyzer import SymmOp
 from ase import Atoms
@@ -20,7 +21,9 @@ import numpy as np
 from math import gcd
 from itertools import combinations
 from pymatgen.analysis.interface import merge_slabs
+from vaspvis.utils import group_layers
 import copy
+import time
 
 
 class Surface:
@@ -46,8 +49,8 @@ class Surface:
         else:
             raise TypeError(f"Structure accepts 'pymatgen.core.structure.Structure' or 'ase.Atoms' not '{type(slab).__name__}'")
 
-        self.no_vac_slab_pmg = self._remove_vacuum(self.slab_pmg)
-        self.no_vac_slab_ase = AseAtomsAdaptor.get_atoms(self.no_vac_slab_pmg)
+        #  self.no_vac_slab_pmg = self._remove_vacuum(self.slab_pmg)
+        #  self.no_vac_slab_ase = AseAtomsAdaptor.get_atoms(self.no_vac_slab_pmg)
 
         self.primitive_slab_pmg = self._get_primitive(self.slab_pmg)
         self.primitive_slab_ase = AseAtomsAdaptor.get_atoms(self._get_primitive(self.slab_pmg))
@@ -66,7 +69,18 @@ class Surface:
         self.vacuum = vacuum
         self.termination = self._get_termination()
         self.crystallographic_directions = self._get_crystallographic_directions()
+        self.area = np.linalg.norm(np.cross(self.slab_pmg.lattice.matrix[0], self.slab_pmg.lattice.matrix[1]))
 
+    def remove_layers(self, num_layers, top=False):
+        group_inds, _ = group_layers(structure=self.slab_pmg)
+        if top:
+            group_inds = group_inds[::-1]
+        
+        to_delete = []
+        for i in range(num_layers):
+            to_delete.extend(group_inds[i])
+
+        self.slab_pmg.remove_sites(to_delete)
 
     def _get_primitive(self, structure):
         if type(structure) == Atoms:
@@ -147,12 +161,6 @@ class Surface:
             c2 = np.array((0, l, -k)) // abs(gcd(l, k))
             c3 = (b, a * p, a * q)
 
-        #  print(np.matmul(
-            #  np.linalg.inv(self.slab_basis), structure.lattice.matrix.T).T /
-            #  self.structure.cell[0][0]
-        #  )
-
-
         return np.array([c1, c2, c3])
 
 
@@ -162,46 +170,55 @@ class Interface:
         self,
         substrate,
         film,
-        #  film_sl_vecs,
-        #  sub_sl_vecs,
-        #  match_area,
-        #  film_vecs,
-        #  sub_vecs,
         film_transformation,
         substrate_transformation,
         strain,
         angle_diff,
         sub_strain_frac,
         interfacial_distance,
-        #  area_diff,
+        vacuum,
     ):
         self.substrate = substrate
         self.film = film
-        #  self.film_sl_vecs = film_sl_vecs
-        #  self.sub_sl_vecs = sub_sl_vecs
-        #  self.match_area = match_area
-        #  self.film_vecs = film_vecs
-        #  self.sub_vecs = sub_vecs
         self.film_transformation = film_transformation
         self.substrate_transformation = substrate_transformation
         self.strain = strain
         self.angle_diff = angle_diff
         self.sub_strain_frac = sub_strain_frac
-        #  self.area_diff = area_diff
-        self.substrate_supercell = self._get_supercell(
+        self.vacuum = vacuum
+        self.substrate_supercell = self._prepare_slab(
             self.substrate.slab_pmg,
             self.substrate_transformation
         )
-        self.film_supercell = self._get_supercell(
+        self.film_supercell = self._prepare_slab(
             self.film.slab_pmg,
             self.film_transformation
         )
         self.interface_sl_vectors = self._get_interface_sl_vecs()
         self.interfacial_distance = interfacial_distance
+        self.interface_height = None
         self.interface = self._stack_interface()
 
+    def shift_film(self, shift):
+        shift = np.array(shift)
+
+        if shift[-1] + self.interfacial_distance < 0.5:
+            raise ValueError(f"The film shift results in an interfacial distance of less than 0.5 Angstroms which is non-physical")
+        
+        shifted_interface = copy.copy(self.interface)
+        norms = np.linalg.norm(shifted_interface.lattice.matrix, axis=1)
+        frac_shift = np.divide(shift, norms)
+
+        film_ind = np.where((shifted_interface.frac_coords[:,-1] > self.interface_height) & (shifted_interface.frac_coords[:,-1] < 0.99))[0]
+        shifted_interface.translate_sites(
+            film_ind,
+            frac_shift,
+        )
+
+        return shifted_interface
+
     def _get_supercell(self, slab, matrix):
-        new_slab = copy.deepcopy(slab)
+        new_slab = copy.copy(slab)
         initial_slab_matrix = new_slab.lattice.matrix
         initial_reduced_vecs = reduce_vectors(
             initial_slab_matrix[0],
@@ -248,7 +265,7 @@ class Interface:
             to_unit_cell=True,
             coords_are_cartesian=True,
         )
-        supercell_slab = copy.deepcopy(initial_reduced_slab)
+        supercell_slab = copy.copy(initial_reduced_slab)
         supercell_slab.make_supercell(scaling_matrix=matrix)
         supercell_slab_matrix = supercell_slab.lattice.matrix
         supercell_reduced_vecs = reduce_vectors(
@@ -289,11 +306,8 @@ class Interface:
         return new_vec
 
     def _get_interface_sl_vecs(self):
-        sub_sl_vecs = copy.deepcopy(
+        sub_sl_vecs = copy.copy(
             self.substrate_supercell.lattice.matrix[:2,:]
-        )
-        film_sl_vecs = copy.deepcopy(
-            self.film_supercell.lattice.matrix[:2,:]
         )
         if self.sub_strain_frac == 0:
             new_sl_vecs = sub_sl_vecs
@@ -304,36 +318,44 @@ class Interface:
             b_strain = self.strain[1]
             a_norm = np.linalg.norm(sub_sl_vecs[0])
             b_norm = np.linalg.norm(sub_sl_vecs[1])
-            #  a1_norm = np.linalg.norm(film_sl_vecs[0])
-            #  b1_norm = np.linalg.norm(film_sl_vecs[1])
             sub_angle = self._get_angle(sub_sl_vecs[0], sub_sl_vecs[1])
-            #  film_angle = self._get_angle(film_sl_vecs[0], film_sl_vecs[1])
             new_angle = sub_angle * (1 + (self.sub_strain_frac * self.angle_diff))
             new_a = sub_sl_vecs[0] * (1 + (self.sub_strain_frac * a_strain))
             new_b = self._rotate(sub_sl_vecs[0] * (b_norm / a_norm), new_angle) * (1 + (self.sub_strain_frac * b_strain))
-            #  print('Sub a', a_norm)
-            #  print('Film a', a1_norm)
-            #  print('New a ', np.linalg.norm(new_a))
-            #  print('Calc Strain', (a_norm - np.linalg.norm(new_a)) / (a_norm - a1_norm))
-            #  print('Sub b', b_norm)
-            #  print('Film b', b1_norm)
-            #  print('New b ', np.linalg.norm(new_b))
-            #  print('Calc Strain', (b_norm - np.linalg.norm(new_b)) / (b_norm - b1_norm))
-
             new_sl_vecs = np.array([new_a, np.squeeze(new_b)])
 
             return new_sl_vecs
 
+    def _get_vacuum_coords(self, structure):
+        z_frac_coords = structure.frac_coords[:,-1]
+        min_z = np.min(z_frac_coords)
+        max_z = np.max(z_frac_coords)
+
+        return min_z, max_z
+
     def _strain_and_orient_film(self):
-        strained_film = copy.deepcopy(self.film_supercell)
+        strained_film = copy.copy(self.film_supercell)
         new_lattice = Lattice(
             np.vstack([
                 self.interface_sl_vectors,
-                strained_film.lattice.matrix[-1],
+                self.film_supercell.lattice.matrix[-1],
             ])
         )
         strained_film.lattice = new_lattice
-        bot, _ = get_slab_regions(strained_film)[0]
+
+        return strained_film
+
+    def _strain_and_orient_film_old(self):
+        strained_film = copy.copy(self.film_supercell)
+        new_lattice = Lattice(
+            np.vstack([
+                self.interface_sl_vectors,
+                self.film_supercell.lattice.matrix[-1],
+            ])
+        )
+        strained_film.lattice = new_lattice
+
+        bot, _ = self._get_vacuum_coords(strained_film)
         strained_film.translate_sites(
             range(len(strained_film)),
             [0,0,-(0.99 * bot)],
@@ -343,25 +365,48 @@ class Interface:
         return strained_film
 
     def _strain_and_orient_sub(self):
-        strained_sub = copy.deepcopy(self.substrate_supercell)
+        strained_sub = copy.copy(self.substrate_supercell)
         new_lattice = Lattice(
             np.vstack([
                 self.interface_sl_vectors,
-                strained_sub.lattice.matrix[-1],
+                self.substrate_supercell.lattice.matrix[-1],
             ])
         )
         strained_sub.lattice = new_lattice
-        _, top = get_slab_regions(strained_sub)[0]
+
+        return strained_sub
+
+    def _strain_and_orient_sub_old(self):
+        strained_sub = copy.copy(self.substrate_supercell)
+        new_lattice = Lattice(
+            np.vstack([
+                self.interface_sl_vectors,
+                self.substrate_supercell.lattice.matrix[-1],
+            ])
+        )
+        strained_sub.lattice = new_lattice
+
+        _, top = self._get_vacuum_coords(strained_sub)
         strained_sub.translate_sites(
             range(len(strained_sub)),
             [0,0,(1 - (1.01 * top))],
         )
-        #  self.interfacial_distance -= 0.01 * (1 - top) * np.linalg.norm(new_lattice.matrix[-1])
 
         return strained_sub
 
     def _flip_structure(self, structure):
-        copy_structure = copy.deepcopy(structure)
+        copy_structure = copy.copy(structure)
+        operation = SymmOp.from_origin_axis_angle(
+            origin=[0.5,0.5,0.5],
+            axis=[1,1,0],
+            angle=180,
+        )
+        copy_structure.apply_operation(operation, fractional=True)
+
+        return copy_structure
+
+    def _flip_structure_old(self, structure):
+        copy_structure = copy.copy(structure)
         operation = SymmOp.reflection([0,0,1], origin=[0.5,0.5,0.5])
         structure.apply_operation(operation, fractional=False)
         flipped_structure = Structure(
@@ -386,10 +431,93 @@ class Interface:
 
         return substrate_species, film_species, species_in_both
 
-
     def _stack_interface(self):
         strained_sub = self._strain_and_orient_sub()
         strained_film = self._strain_and_orient_film()
+        strained_sub_coords = copy.deepcopy(strained_sub.frac_coords)
+        strained_film_coords = copy.deepcopy(strained_film.frac_coords)
+
+        min_sub_coords = np.min(strained_sub_coords[:,-1])
+        max_sub_coords = np.max(strained_sub_coords[:,-1])
+        min_film_coords = np.min(strained_film_coords[:,-1])
+        max_film_coords = np.max(strained_film_coords[:,-1])
+
+        sub_c_len = np.linalg.norm(strained_sub.lattice.matrix[-1])
+        film_c_len = np.linalg.norm(strained_film.lattice.matrix[-1])
+        interface_c_len = np.sum([
+            (max_sub_coords - min_sub_coords) * sub_c_len,
+            (max_film_coords - min_film_coords) * film_c_len,
+            self.vacuum,
+            self.interfacial_distance,
+        ])
+
+        sub_conv_factor = sub_c_len / interface_c_len
+        film_conv_factor = film_c_len / interface_c_len
+
+        strained_sub_coords[:,-1] *= sub_conv_factor
+        strained_film_coords[:,-1] *= film_conv_factor
+
+        sub_size = np.max(strained_sub_coords[:,-1]) - np.min(strained_sub_coords[:,-1])
+        #  film_size = np.max(strained_film_coords[:,-1]) - np.min(strained_film_coords[:,-1])
+
+        strained_sub_coords[:,-1] -= np.min(strained_sub_coords[:,-1])
+        strained_film_coords[:,-1] -= np.min(strained_film_coords[:,-1])
+        strained_film_coords[:,-1] += sub_size + (self.interfacial_distance / interface_c_len)
+
+        interface_coords = np.r_[strained_sub_coords, strained_film_coords]
+        interface_species = strained_sub.species + strained_film.species
+
+        self.interface_height =  sub_size + ((0.5 * self.interfacial_distance) / interface_c_len)
+
+        interface_lattice = Lattice(
+            np.vstack([
+                strained_sub.lattice.matrix[:2],
+                (interface_c_len / np.linalg.norm(strained_sub.lattice.matrix[:,-1])) * strained_sub.lattice.matrix[:,-1] 
+            ])
+        )
+
+        interface_struc = Structure(
+            lattice=interface_lattice,
+            species=interface_species,
+            coords=interface_coords,
+            to_unit_cell=True,
+        )
+
+        reduced_interface_struc = interface_struc.get_reduced_structure()
+        sg = SpacegroupAnalyzer(reduced_interface_struc)
+        refined_interface_struc = sg.get_conventional_standard_structure()
+        primitive_interface_struc = refined_interface_struc.get_reduced_structure()
+        primitive_interface_struc = primitive_interface_struc.get_primitive_structure()
+
+        substrate_species, film_species, species_in_both = self._get_unique_species()
+
+        if len(species_in_both) == 0:
+            pass
+        else:
+            for i in species_in_both:
+                substrate_species = np.delete(substrate_species, np.where(substrate_species == i))
+                film_species = np.delete(film_species, np.where(film_species == i))
+
+        element_array_prim = np.array([
+            site.species.elements[0].symbol for site in primitive_interface_struc
+        ])
+
+        substrate_ind_prim = np.isin(element_array_prim, substrate_species)
+        film_ind_prim = np.isin(element_array_prim, film_species)
+
+        average_sub_height_prim = np.mean(primitive_interface_struc.frac_coords[substrate_ind_prim,-1])
+        average_film_height_prim = np.mean(primitive_interface_struc.frac_coords[film_ind_prim,-1])
+
+        if average_film_height_prim < average_sub_height_prim:
+            primitive_interface_struc = self._flip_structure(primitive_interface_struc)
+        else:
+            pass
+
+        return primitive_interface_struc 
+
+    def _stack_interface_old(self):
+        strained_sub = self._strain_and_orient_sub_old()
+        strained_film = self._strain_and_orient_film_old()
         strained_sub_coords = strained_sub.cart_coords
         strained_film_coords = strained_film.cart_coords
         max_sub_coords = np.max(strained_sub_coords[:,-1])
@@ -402,6 +530,7 @@ class Interface:
             np.linalg.norm(strained_film.lattice.matrix[-1]),
             self.interfacial_distance,
         ])
+        self.interface_height = (np.linalg.norm(strained_sub.lattice.matrix[-1]) + (0.5 * self.interfacial_distance)) / new_c_len
 
         interface_lattice = Lattice(
             np.vstack([
@@ -419,7 +548,9 @@ class Interface:
         )
 
         sg = SpacegroupAnalyzer(interface_struc)
-        interface_prim_struc = sg.get_primitive_standard_structure()
+        interface_prim_struc = sg.get_conventional_standard_structure()
+        #  interface_prim_sg = SpacegroupAnalyzer(interface_prim_struc)
+        #  interface_prim_struc = interface_prim_sg.get_conventional_standard_structure()
 
         substrate_species, film_species, species_in_both = self._get_unique_species()
 
@@ -437,11 +568,11 @@ class Interface:
         substrate_ind_prim = np.isin(element_array_prim, substrate_species)
         film_ind_prim = np.isin(element_array_prim, film_species)
 
-        average_sub_height_prim = np.mean(interface_prim_struc.cart_coords[substrate_ind_prim,-1])
-        average_film_height_prim = np.mean(interface_prim_struc.cart_coords[film_ind_prim,-1])
+        average_sub_height_prim = np.mean(interface_prim_struc.frac_coords[substrate_ind_prim,-1])
+        average_film_height_prim = np.mean(interface_prim_struc.frac_coords[film_ind_prim,-1])
 
         #  if average_film_height_prim < average_sub_height_prim:
-            #  interface_prim_struc = self._flip_structure(interface_prim_struc)
+            #  interface_prim_struc = self._flip_structure_old(interface_prim_struc)
         #  else:
             #  pass
 

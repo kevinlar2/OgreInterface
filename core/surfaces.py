@@ -19,9 +19,13 @@ from ase.geometry import get_layers
 from ase.build.general_surface import ext_gcd
 import numpy as np
 from math import gcd
-from itertools import combinations
+from itertools import combinations, product, repeat
 from pymatgen.analysis.interface import merge_slabs
 from vaspvis.utils import group_layers
+import surface_matching_utils as smu 
+import matplotlib.pyplot as plt
+from matplotlib.colors import Normalize
+from multiprocessing import Pool, cpu_count
 import copy
 import time
 
@@ -197,6 +201,8 @@ class Interface:
         self.interface_sl_vectors = self._get_interface_sl_vecs()
         self.interfacial_distance = interfacial_distance
         self.interface_height = None
+        self.strained_sub = self._strain_and_orient_sub()
+        self.strained_film = self._strain_and_orient_film()
         self.interface = self._stack_interface()
 
     def shift_film(self, shift):
@@ -419,7 +425,6 @@ class Interface:
 
         return flipped_structure
 
-
     def _get_unique_species(self):
         substrate_species = np.unique(self.substrate.bulk_pmg.species).astype(str)
         film_species = np.unique(self.film.bulk_pmg.species).astype(str)
@@ -432,8 +437,8 @@ class Interface:
         return substrate_species, film_species, species_in_both
 
     def _stack_interface(self):
-        strained_sub = self._strain_and_orient_sub()
-        strained_film = self._strain_and_orient_film()
+        strained_sub = self.strained_sub
+        strained_film = self.strained_film
         strained_sub_coords = copy.deepcopy(strained_sub.frac_coords)
         strained_film_coords = copy.deepcopy(strained_film.frac_coords)
 
@@ -458,7 +463,6 @@ class Interface:
         strained_film_coords[:,-1] *= film_conv_factor
 
         sub_size = np.max(strained_sub_coords[:,-1]) - np.min(strained_sub_coords[:,-1])
-        #  film_size = np.max(strained_film_coords[:,-1]) - np.min(strained_film_coords[:,-1])
 
         strained_sub_coords[:,-1] -= np.min(strained_sub_coords[:,-1])
         strained_film_coords[:,-1] -= np.min(strained_film_coords[:,-1])
@@ -515,66 +519,464 @@ class Interface:
 
         return primitive_interface_struc 
 
-    def _stack_interface_old(self):
-        strained_sub = self._strain_and_orient_sub_old()
-        strained_film = self._strain_and_orient_film_old()
-        strained_sub_coords = strained_sub.cart_coords
-        strained_film_coords = strained_film.cart_coords
-        max_sub_coords = np.max(strained_sub_coords[:,-1])
-        film_shift = max_sub_coords + self.interfacial_distance
-        strained_film_coords[:,-1] = strained_film_coords[:,-1] + film_shift
-        interface_coords = np.r_[strained_sub_coords, strained_film_coords]
-        interface_species = strained_sub.species + strained_film.species
-        new_c_len = np.sum([
-            np.linalg.norm(strained_sub.lattice.matrix[-1]),
-            np.linalg.norm(strained_film.lattice.matrix[-1]),
-            self.interfacial_distance,
-        ])
-        self.interface_height = (np.linalg.norm(strained_sub.lattice.matrix[-1]) + (0.5 * self.interfacial_distance)) / new_c_len
+    def _setup_for_surface_matching(self):
+        interface = self.interface
+        interface_layer_inds, interface_layes_heights = group_layers(interface)
+        dist_from_interface = interface_layes_heights - self.interface_height 
+        sub_layer_inds = np.where(dist_from_interface < 0)[0]
+        film_layer_inds = np.where(dist_from_interface > 0)[0]
+        top_sub_inds = sub_layer_inds[-1:]
+        bot_film_inds = film_layer_inds[:1]
+        
+        sub_inds = np.concatenate([interface_layer_inds[i] for i in top_sub_inds])
+        film_inds = np.concatenate([interface_layer_inds[i] for i in bot_film_inds])
 
-        interface_lattice = Lattice(
-            np.vstack([
-                strained_sub.lattice.matrix[:2],
-                [0, 0, new_c_len]
-            ])
-        )
+        smaller_interface_lattice = np.copy(interface.lattice.matrix)
+        interface_c = np.linalg.norm(interface.lattice.matrix[-1])
 
-        interface_struc = Structure(
-            lattice=interface_lattice,
-            species=interface_species,
-            coords=interface_coords,
+        sub_coords = interface.frac_coords[sub_inds]
+        film_coords = interface.frac_coords[film_inds]
+        min_val = np.min([sub_coords[:,-1].min(), film_coords[:,-1].min()])
+        sub_coords[:,-1] -= min_val
+        film_coords[:,-1] -= min_val
+
+        sub_species = [interface.species[i] for i in sub_inds]
+        film_species = [interface.species[i] for i in film_inds]
+
+        smaller_interface_c = (np.max([sub_coords[:,-1].max(), film_coords[:,-1].max()]) * interface_c) + 4
+        smaller_interface_lattice[-1] /= np.linalg.norm(smaller_interface_lattice[-1])
+        smaller_interface_lattice[-1] *= smaller_interface_c
+        conv_factor = interface_c / smaller_interface_c
+
+        sub_coords[:,-1] *= conv_factor
+        film_coords[:,-1] *= conv_factor
+
+        max_val = np.max([sub_coords[:,-1].max(), film_coords[:,-1].max()])
+        sub_coords[:,-1] += (1 - max_val) / 2
+        film_coords[:,-1] += (1 - max_val) / 2
+
+        sub_struc = Structure(
+            lattice=Lattice(smaller_interface_lattice),
+            species=sub_species,
+            coords=sub_coords,
             to_unit_cell=True,
-            coords_are_cartesian=True,
         )
 
-        sg = SpacegroupAnalyzer(interface_struc)
-        interface_prim_struc = sg.get_conventional_standard_structure()
-        #  interface_prim_sg = SpacegroupAnalyzer(interface_prim_struc)
-        #  interface_prim_struc = interface_prim_sg.get_conventional_standard_structure()
+        film_struc = Structure(
+            lattice=Lattice(smaller_interface_lattice),
+            species=film_species,
+            coords=film_coords,
+            to_unit_cell=True,
+        )
 
-        substrate_species, film_species, species_in_both = self._get_unique_species()
+        return sub_struc, film_struc
 
-        if len(species_in_both) == 0:
-            pass
-        else:
-            for i in species_in_both:
-                substrate_species = np.delete(substrate_species, np.where(substrate_species == i))
-                film_species = np.delete(film_species, np.where(film_species == i))
+    def _get_voxelized_structures(self, radius_dict, grid_size=0.05):
+        sub_struc, film_struc = self._setup_for_surface_matching()
+        species = np.unique(
+            np.array(sub_struc.species + film_struc.species, dtype=str)
+        )
+        sub_unit_cell = smu.generate_unit_cell_tensor(
+            structure=sub_struc,
+            grid_size=grid_size,
+            return_plotting_info=False,
+        )
+        film_unit_cell = np.copy(sub_unit_cell) 
+        int_unit_cell = np.copy(sub_unit_cell) 
 
-        element_array_prim = np.array([
-            site.species.elements[0].symbol for site in interface_prim_struc
-        ])
+        radii = {
+            s: smu.get_radii(
+                structure=sub_struc,
+                radius=radius_dict[s],
+                grid_size=grid_size
+            ) for s in species
+        }
 
-        substrate_ind_prim = np.isin(element_array_prim, substrate_species)
-        film_ind_prim = np.isin(element_array_prim, film_species)
+        ellipsoids = {
+            s: smu.generate_ellipsoid(radii[s]) for s in species
+        }
 
-        average_sub_height_prim = np.mean(interface_prim_struc.frac_coords[substrate_ind_prim,-1])
-        average_film_height_prim = np.mean(interface_prim_struc.frac_coords[film_ind_prim,-1])
+        sub_voxel, sub_overlap = smu.append_atoms(
+            structure=sub_struc,
+            unit_cell=sub_unit_cell,
+            ellipsoids=ellipsoids
+        )
 
-        #  if average_film_height_prim < average_sub_height_prim:
-            #  interface_prim_struc = self._flip_structure_old(interface_prim_struc)
-        #  else:
-            #  pass
+        film_voxel, film_overlap = smu.append_atoms(
+            structure=film_struc,
+            unit_cell=film_unit_cell,
+            ellipsoids=ellipsoids
+        )
 
-        return interface_prim_struc
+        return sub_voxel, film_voxel, sub_overlap, film_overlap, sub_struc, film_struc
+
+    def _score_calculator(self, sub_voxel, film_voxel, structure, coeff = 1):
+        overlap = np.logical_and(sub_voxel, film_voxel)
+        empty_space = np.logical_xor(sub_voxel, film_voxel)
+        voxel_dims = smu.get_voxel_dims(sub_voxel, structure)
+        voxel_volume = np.product(voxel_dims)
+
+        overlap_volume = overlap.sum() * voxel_volume
+        empty_volume = empty_space.sum() * voxel_volume
+
+        relative_overlap = overlap_volume / ((np.sum(sub_voxel + film_voxel) * voxel_volume) + (2 * overlap_volume)) 
+        relative_empty = empty_volume / (np.product(sub_voxel.shape) * voxel_volume)
+
+        print(relative_overlap)
+        print(relative_empty)
+
+        score =  ((1 + relative_overlap) ** 2) + (coeff * relative_empty)
+
+        return -score
+
+    def _score_calculator3(
+        self,
+        sub_voxel,
+        film_voxel,
+        volume_diff,
+        overlap_atoms,
+    ):
+        overlap_int = np.logical_and(sub_voxel, film_voxel).sum() * 2
+        empty_space = volume_diff - (overlap_int + overlap_atoms)
+
+        relative_overlap = overlap_int / overlap_atoms
+        relative_empty = empty_space / volume_diff
+        
+        score = relative_overlap / relative_empty
+
+        return score
+
+    def _score_calculator2(
+        self,
+        sub_voxel,
+        film_voxel,
+        sub_overlap,
+        film_overlap,
+        sub_empty,
+        film_empty,
+        structure,
+        coeff=1,
+    ):
+        overlap_int = np.logical_and(sub_voxel, film_voxel).sum()
+
+        film_volume = film_empty + film_voxel.sum()
+        sub_volume = sub_empty + sub_voxel.sum()
+
+        int_overlap = sub_overlap + film_overlap
+        int_voxel = sub_voxel + film_voxel
+        int_atoms = int_voxel.sum()
+
+        int_top = np.where(int_overlap > 0)[-1].max()
+        int_bot = np.where(int_overlap > 0)[-1].min()
+        int_voxel[:,:,:int_bot] = True
+        int_voxel[:,:,int_top:] = True
+        int_empty = np.logical_not(int_voxel).sum()
+        int_voxel[:,:,:int_bot] = False
+        int_voxel[:,:,int_top:] = False
+
+        int_volume = int_empty + int_atoms
+        print(int_volume)
+
+        volume_diff = np.abs(int_volume - (film_volume + sub_volume))
+
+        empty_int = (sub_empty + film_empty) - int_empty
+        
+        scaled_overlap = overlap_int / (sub_voxel.sum() + film_voxel.sum())
+        scaled_empty = empty_int / (int_empty + int_voxel.sum())
+
+        #  score =  ((1 + scaled_overlap) ** 2) + (coeff * scaled_empty)
+        volume_density = int_atoms / (int_empty + int_atoms)
+        #  score = (scaled_empty / scaled_overlap)
+        #  print('Overlap =', 1 / (scaled_overlap / volume_density), 'Empty =', 1 / (scaled_empty * volume_density))
+        #  score = (volume_density / scaled_overlap) - (1 / (volume_density * scaled_empty))
+        #  score = (1 + (scaled_overlap))**2 + (scaled_empty)
+        #  score = (scaled_overlap / volume_density)**2 - (volume_density * scaled_empty)
+        score = overlap_int / volume_diff
+        #  print(score, int_empty / int_atoms)
+
+        return 1 - score
+
+    def _get_score(
+        self,
+        inds,
+        sub_voxel,
+        film_voxel,
+        sub_overlap,
+        film_overlap,
+        sub_empty,
+        film_empty,
+        structure,
+        a_range_ind,
+        b_range_ind,
+    ):
+        shifted_film_voxel = np.roll(film_voxel, shift=[a_range_ind[inds[0]], a_range_ind[inds[1]]], axis=(0,1))
+        shifted_film_overlap = np.roll(film_overlap, shift=[b_range_ind[inds[0]], b_range_ind[inds[1]]], axis=(0,1))
+        score = self._score_calculator2(
+            sub_voxel=sub_voxel,
+            film_voxel=shifted_film_voxel,
+            sub_overlap=sub_overlap,
+            film_overlap=shifted_film_overlap,
+            sub_empty=sub_empty,
+            film_empty=film_empty,
+            structure=structure,
+        )
+        return score
+
+    def _get_score2(
+        self,
+        inds,
+        sub_voxel,
+        film_voxel,
+        volume_diff,
+        overlap_atoms,
+        a_range_ind,
+        b_range_ind,
+    ):
+        shifted_film_voxel = np.roll(film_voxel, shift=[a_range_ind[inds[0]], b_range_ind[inds[1]]], axis=(0,1))
+        score = self._score_calculator3(
+            sub_voxel=sub_voxel,
+            film_voxel=shifted_film_voxel,
+            volume_diff=volume_diff,
+            overlap_atoms=overlap_atoms,
+        )
+        return score
+
+    def run_surface_matching2(
+            self,
+            a_range,
+            b_range,
+            radius_dict,
+            grid_size=0.05
+    ):
+        sub_voxel, film_voxel, sub_overlap, film_overlap, sub_struc, film_struc = self._get_voxelized_structures(
+            radius_dict=radius_dict,
+            grid_size=grid_size,
+        )
+
+        sub_top = np.where(sub_overlap > 0)[-1].max()
+        sub_bot = np.where(sub_overlap > 0)[-1].min()
+        sub_volume = (sub_top - sub_bot) * np.product(sub_voxel.shape[1:])
+
+        film_top = np.where(film_overlap > 0)[-1].max()
+        film_bot = np.where(film_overlap > 0)[-1].min()
+        film_volume = (film_top - film_bot) * np.product(film_voxel.shape[1:])
+
+        int_volume = (film_top - sub_bot) * np.product(film_voxel.shape[1:])
+
+        film_int_atoms = film_voxel[:,:,film_bot:sub_top+1].sum()
+        sub_int_atoms = sub_voxel[:,:,film_bot:sub_top+1].sum()
+
+        overlap_atoms = film_int_atoms + sub_int_atoms
+
+        volume_diff = np.abs(int_volume - (sub_volume + film_volume))
+
+        #  print('TEST =', volume_diff, overlap_atoms)
+
+        g = 41
+
+        unit_cell_size = sub_voxel.shape[0]
+        abc = np.linalg.norm(sub_struc.lattice.matrix, axis=1)
+        voxel_dist = abc / unit_cell_size
+        a_range_s = np.array(a_range) / voxel_dist[0]
+        b_range_s = np.array(b_range) / voxel_dist[1]
+
+        x_s = np.linspace(a_range[0], a_range[1], g)
+        y_s = np.linspace(b_range[0], b_range[1], g)
+        z_s = np.zeros(g)
+
+        cart_array = np.c_[x_s, y_s, z_s]
+        frac_coords = np.vstack([np.dot(cart_array[i], sub_struc.lattice.inv_matrix) for i in range(g)]) 
+        #  print(sub_struc.lattice.inv_matrix.T)
+        #  print(sub_struc.lattice.matrix)
+        #  print(sub_struc.lattice.get_fractional_coords([[2.14197,6.18333,2.00000]]))
+        #  Poscar(sub_struc).write_file('POSCAR_SUB')
+        #  print(np.dot(film_struc.cart_coords[0], sub_struc.lattice.inv_matrix))
+        print(np.dot([1,1,0], sub_struc.lattice.inv_matrix))
+        print(np.dot([-2.14196786, 2*1.23666572, -2.], sub_struc.lattice.inv_matrix))
+
+        fig1, ax1 = plt.subplots()
+        ax1.plot(
+            [0, sub_struc.lattice.matrix[0][0]],
+            [0, sub_struc.lattice.matrix[0][1]],
+            color='red',
+        )
+        ax1.plot(
+            [0, sub_struc.lattice.matrix[1][0]],
+            [0, sub_struc.lattice.matrix[1][1]],
+            color='blue',
+        )
+        ax1.plot(
+            [-1,1,1,-1,-1],
+            [-1,-1,1,1,-1],
+            color='black',
+        )
+        ax1.set_xlim(-8,8)
+        ax1.set_ylim(-8,8)
+        #  plt.show()
+
+        #  print(np.dot([2.14196786, 2*1.23666572, -2.], sub_struc.lattice.inv_matrix))
+        #  print(frac_coords)
+        print(np.round(sub_struc.cart_coords, 3))
+        print(np.round(sub_struc.frac_coords, 3))
+        
+        a_range_ind = np.linspace(a_range_s[0], a_range_s[1], g, dtype=int)
+        b_range_ind = np.linspace(b_range_s[0], b_range_s[1], g, dtype=int)
+
+        scores = np.zeros((len(a_range_ind), len(b_range_ind)))
+
+        indices = list(product(range(len(a_range_ind)), range(len(b_range_ind))))
+        #  indices = list(product(frac_coords[0], ))
+
+        inputs = zip(
+            indices,
+            repeat(sub_voxel),
+            repeat(film_voxel),
+            repeat(volume_diff),
+            repeat(overlap_atoms),
+            repeat(a_range_ind),
+            repeat(b_range_ind),
+        )
+
+        s = time.time()
+        p = Pool(cpu_count())
+        sc = p.starmap(self._get_score2, inputs, chunksize=5)
+        p.close()
+        p.join()
+        e = time.time()
+        print('Parallel =', e - s)
+
+        for i, j in enumerate(indices):
+            scores[j[0], j[1]] = sc[i]
+
+        fig, ax = plt.subplots(figsize=(4,4.5), dpi=400)
+        ax.set_xlabel(r"Shift in $\vec{a}$ direction ($\AA$)", fontsize=12)
+        ax.set_ylabel(r"Shift in $\vec{b}$ direction ($\AA$)", fontsize=12)
+
+        im = ax.contourf(
+            np.linspace(a_range[0], a_range[1], g), 
+            np.linspace(b_range[0], b_range[1], g), 
+            scores.T,
+            cmap='jet',
+            levels=200,
+            norm=Normalize(vmin=scores.min(), vmax=scores.max()),
+        )
+
+        cbar = fig.colorbar(im, ax=ax, orientation='horizontal')
+        cbar.ax.tick_params(labelsize=12)
+        cbar.ax.locator_params(nbins=4)
+        cbar.set_label('Score', fontsize=12)
+        ax.tick_params(labelsize=12)
+        fig.tight_layout()
+        fig.savefig('heatmap.png')
+        #  print(scores)
+
+    def run_surface_matching(self, a_range, b_range, radius_dict, grid_size=0.05):
+        sub_voxel, film_voxel, sub_overlap, film_overlap, sub_struc, film_struc = self._get_voxelized_structures(
+            radius_dict=radius_dict,
+            grid_size=grid_size,
+        )
+
+        sub_top = np.where(sub_overlap > 0)[-1].max()
+        sub_bot = np.where(sub_overlap > 0)[-1].min()
+        sub_voxel[:,:,:sub_bot] = True
+        sub_voxel[:,:,sub_top:] = True
+        sub_empty = np.logical_not(sub_voxel).sum()
+        sub_voxel[:,:,:sub_bot] = False
+        sub_voxel[:,:,sub_top:] = False
+
+        film_top = np.where(film_overlap > 0)[-1].max()
+        film_bot = np.where(film_overlap > 0)[-1].min()
+        film_voxel[:,:,:film_bot] = True
+        film_voxel[:,:,film_top:] = True
+        film_empty = np.logical_not(film_voxel).sum()
+        film_voxel[:,:,:film_bot] = False
+        film_voxel[:,:,film_top:] = False
+
+
+        g = 11
+
+        unit_cell_size = sub_voxel.shape[0]
+        abc = np.linalg.norm(sub_struc.lattice.matrix, axis=1)
+        voxel_dist = abc / unit_cell_size
+        a_range_s = np.array(a_range) / voxel_dist[0]
+        b_range_s = np.array(b_range) / voxel_dist[1]
+        
+        a_range_ind = np.linspace(a_range_s[0], a_range_s[1], g, dtype=int)
+        b_range_ind = np.linspace(b_range_s[0], b_range_s[1], g, dtype=int)
+
+        scores = np.zeros((len(a_range_ind), len(b_range_ind)))
+
+        indices = list(product(range(len(a_range_ind)), range(len(b_range_ind))))
+
+        inputs = zip(
+            indices,
+            repeat(sub_voxel),
+            repeat(film_voxel),
+            repeat(sub_overlap),
+            repeat(film_overlap),
+            repeat(sub_empty),
+            repeat(film_empty),
+            repeat(sub_struc),
+            repeat(a_range_ind),
+            repeat(b_range_ind),
+        )
+
+        s = time.time()
+        p = Pool(cpu_count())
+        sc = p.starmap(self._get_score, inputs, chunksize=5)
+        p.close()
+        p.join()
+        e = time.time()
+        print('Parallel =', e - s)
+
+        for i, j in enumerate(indices):
+            scores[j[0], j[1]] = sc[i]
+#
+        #  s = time.time()
+        #  for i, shift_a in enumerate(a_range_ind):
+            #  for j, shift_b in enumerate(b_range_ind):
+                #  shifted_film_voxel = np.roll(film_voxel, shift=[shift_a, shift_b], axis=(0,1))
+                #  shifted_film_overlap = np.roll(film_overlap, shift=[shift_a, shift_b], axis=(0,1))
+                #  score = self._score_calculator2(
+                    #  sub_voxel=sub_voxel,
+                    #  film_voxel=shifted_film_voxel,
+                    #  sub_overlap=sub_overlap,
+                    #  film_overlap=shifted_film_overlap,
+                    #  sub_empty=sub_empty,
+                    #  film_empty=film_empty,
+                    #  structure=sub_struc,
+                #  )
+                #  #  scores[i,j] = score
+#
+        #  e = time.time()
+        #  print('Loop =', e - s)
+
+        fig, ax = plt.subplots(figsize=(4,4.5), dpi=400)
+        ax.set_xlabel(r"Shift in X direction ($\AA$)", fontsize=12)
+        ax.set_ylabel(r"Shift in Y direction ($\AA$)", fontsize=12)
+
+        im = ax.contourf(
+            np.linspace(a_range[0], a_range[1], g), 
+            np.linspace(b_range[0], b_range[1], g), 
+            scores.T,
+            cmap='jet',
+            levels=200,
+            norm=Normalize(vmin=scores.min(), vmax=scores.max()),
+        )
+
+        cbar = fig.colorbar(im, ax=ax, orientation='horizontal')
+        cbar.ax.tick_params(labelsize=12)
+        cbar.ax.locator_params(nbins=4)
+        cbar.set_label('Score', fontsize=12)
+        ax.tick_params(labelsize=12)
+        fig.tight_layout()
+        fig.savefig('heatmap.png')
+        #  print(scores)
+
+        
+
+
+
+        
+        
 

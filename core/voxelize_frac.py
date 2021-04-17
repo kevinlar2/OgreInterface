@@ -19,6 +19,8 @@ Given a unit cell with side lengths: a, b, c:
 
 r = 1.6
 
+radii = {'In': 1.1, 'Sb': 1.6}
+
 print((4 / 3) * np.pi * r**3)
 
 s = Structure.from_file('./POSCAR_sub_100')
@@ -28,6 +30,7 @@ sg = SpacegroupAnalyzer(s)
 lattice = s.lattice.matrix
 lattice_norm = np.linalg.norm(lattice, axis=1)
 frac_coords = s.frac_coords
+elements = np.array(s.species, dtype=str)
 print(len(frac_coords))
 print(lattice)
 
@@ -90,22 +93,22 @@ def generate_elipsoid(radii):
     
     return sphere, X, Y, Z
 
-def append_atoms(frac_coords, unit_cell, sphere):
+def append_atoms(frac_coords, elements, unit_cell, spheres):
     center_inds = np.int16(np.array(unit_cell.shape) / 2)
     final_coords = np.int16(frac_coords * unit_cell.shape)
     roll_coords = final_coords - center_inds[None, :]
     temp_array = np.zeros(unit_cell.shape, dtype=bool)
     temp_overlap_array = np.zeros(unit_cell.shape, dtype=np.int8)
     overlap_unit_cell = np.zeros(unit_cell.shape, dtype=np.int8)
-    sl = np.s_[
-        center_inds[0] - int(sphere.shape[0] / 2):center_inds[0] + int(sphere.shape[0] / 2) + 1,
-        center_inds[1] - int(sphere.shape[1] / 2):center_inds[1] + int(sphere.shape[1] / 2) + 1,
-        center_inds[2] - int(sphere.shape[2] / 2):center_inds[2] + int(sphere.shape[2] / 2) + 1,
-    ]
-    for roll_coord in roll_coords:
+    for roll_coord, element in zip(roll_coords, elements):
+        sl = np.s_[
+            center_inds[0] - int(spheres[element].shape[0] / 2):center_inds[0] + int(spheres[element].shape[0] / 2) + 1,
+            center_inds[1] - int(spheres[element].shape[1] / 2):center_inds[1] + int(spheres[element].shape[1] / 2) + 1,
+            center_inds[2] - int(spheres[element].shape[2] / 2):center_inds[2] + int(spheres[element].shape[2] / 2) + 1,
+        ]
         s = time.time()
         #  temp_array[sl] = sphere
-        temp_overlap_array[sl] = sphere.astype(np.int8)
+        temp_overlap_array[sl] = spheres[element].astype(np.int8)
         #  rolled_array = np.roll(temp_array, roll_coord, axis=[0,1,2])
         rolled_overlap_array = np.roll(temp_overlap_array, roll_coord, axis=[0,1,2])
         #  temp_array[sl] = False
@@ -120,10 +123,14 @@ def append_atoms(frac_coords, unit_cell, sphere):
     return unit_cell, overlap_unit_cell
 
 
-unit_cell, X, Y, Z = generate_unit_cell_tensor(lattice=lattice, grid_size=0.02)
+grid_size = 0.12
+
+unit_cell, X, Y, Z = generate_unit_cell_tensor(lattice=lattice, grid_size=grid_size)
 
 s = time.time()
-ellipsiod, _, _, _ = generate_elipsoid(get_radii(lattice, r, grid_size=0.02))
+ellipsiod_In, _, _, _ = generate_elipsoid(get_radii(lattice, radii['In'], grid_size=grid_size))
+ellipsiod_Sb, _, _, _ = generate_elipsoid(get_radii(lattice, radii['Sb'], grid_size=grid_size))
+spheres = {'In': ellipsiod_In, 'Sb': ellipsiod_Sb}
 e = time.time()
 print('Sphere Gen = ', e - s)
 
@@ -131,8 +138,9 @@ print('Sphere Gen = ', e - s)
 s = time.time()
 unit_cell, overlap_unit_cell = append_atoms(
     frac_coords=frac_coords,
+    elements=elements,
     unit_cell=unit_cell,
-    sphere=ellipsiod,
+    spheres=spheres,
 )
 e = time.time()
 print('Append atoms = ', e - s)
@@ -141,17 +149,15 @@ print(unit_cell.shape)
 print(get_atoms_volume(unit_cell, lattice) / 4)
 print('Overlap =', get_atoms_volume(overlap_unit_cell > 1, lattice))
 
-    
-
-#  fig = go.Figure(data=go.Volume(
-    #  x=X.flatten(),
-    #  y=Y.flatten(),
-    #  z=Z.flatten(),
-    #  value=unit_cell.flatten(),
-    #  isomin=0.1,
-    #  isomax=0.8,
-    #  opacity=0.2, # needs to be small to see through all surfaces
-    #  surface_count=10, # needs to be a large number for good volume rendering
-    #  ))
-#  #  fig.write_image("fig1.png")
-#  fig.show()
+fig = go.Figure(data=go.Volume(
+    x=X.flatten(),
+    y=Y.flatten(),
+    z=Z.flatten(),
+    value=unit_cell.flatten(),
+    isomin=0.1,
+    isomax=0.8,
+    opacity=0.2, # needs to be small to see through all surfaces
+    surface_count=10, # needs to be a large number for good volume rendering
+    ))
+#  fig.write_image("fig1.png")
+fig.show()

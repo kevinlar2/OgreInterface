@@ -9,6 +9,7 @@ from pymatgen.io.ase import AseAtomsAdaptor
 from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
 from pymatgen.analysis.substrate_analyzer import ZSLGenerator, SubstrateAnalyzer, reduce_vectors
 from pymatgen.core.surface import get_slab_regions
+from pymatgen.core.periodic_table import Element
 from ase import Atoms
 from ase.io import read
 from ase.build.surfaces_with_termination import surfaces_with_termination 
@@ -550,26 +551,26 @@ class InterfaceGenerator:
         sort = np.argsort(areas)
         sorted_unique_interfaces = [unique_interfaces[i] for i in sort]
 
-        return sorted_unique_interfaces
+        return all_int
 
 
 
 if __name__ == "__main__":
-    subs = SurfaceGenerator.from_file(
-        './poscars/POSCAR_InSb_conv',
-        miller_index=[1,0,0],
-        layers=1,
-        vacuum=3.5,
-    )
+    #  subs = SurfaceGenerator.from_file(
+        #  './poscars/POSCAR_InSb_conv',
+        #  miller_index=[1,0,0],
+        #  layers=1,
+        #  vacuum=3.5,
+    #  )
+#
+    #  films = SurfaceGenerator.from_file(
+        #  './poscars/POSCAR_bSn_conv',
+        #  miller_index=[1,0,0],
+        #  layers=8,
+        #  vacuum=5,
+    #  )
 
-    films = SurfaceGenerator.from_file(
-        './poscars/POSCAR_bSn_conv',
-        miller_index=[1,0,0],
-        layers=8,
-        vacuum=5,
-    )
-
-    Poscar(subs.slabs[0].primitive_slab_pmg).write_file('POSCAR_sub_100')
+    #  Poscar(subs.slabs[0].primitive_slab_pmg).write_file('POSCAR_sub_100')
     #  Poscar(films.slabs[0].slab_pmg).write_file('POSCAR_film_121')
 
     #  subs.slabs[3].remove_layers(num_layers=5, top=False)
@@ -602,48 +603,68 @@ if __name__ == "__main__":
             #  output=os.path.join('./test', f'POSCAR_{i}'),
             #  #  passivated_struc='./test/CONTCAR_FeInSb',
         #  )
-    #  sub_layer = 5
-    #  film_layer = 5
-#
-    #  subs = SurfaceGenerator.from_file(
-        #  './poscars/POSCAR_InSb_conv',
-        #  miller_index=[1,0,0],
-        #  layers=sub_layer,
-        #  vacuum=5,
-    #  )
-#
-    #  films = SurfaceGenerator.from_file(
-        #  './poscars/POSCAR_Fe_conv',
-        #  miller_index=[1,0,0],
-        #  layers=film_layer,
-        #  vacuum=5,
-    #  )
-#
-#
-    #  #  films.slabs[1].remove_layers(num_layers=1, top=True)
-    #  #  subs.slabs[3].remove_layers(num_layers=4, top=True)
-#
-    #  inter = InterfaceGenerator(
-        #  substrate=subs.slabs[3],
-        #  film=films.slabs[1],
-        #  length_tol=0.015,
-        #  angle_tol=0.015,
-        #  area_tol=0.015,
-        #  max_area=300,
-        #  interfacial_distance=1.9,
-        #  sub_strain_frac=0,
-        #  vacuum=40,
-    #  )
-#
-#
-    #  interfaces = inter.generate_interfaces()
-#
+    sub_layer = 5
+    film_layer = 5
+
+    subs = SurfaceGenerator.from_file(
+        './poscars/POSCAR_InSb_conv',
+        #  './poscars/POSCAR_InAs_conv',
+        miller_index=[1,0,0],
+        #  miller_index=[1,1,1],
+        layers=sub_layer,
+        vacuum=5,
+    )
+
+    films = SurfaceGenerator.from_file(
+        './poscars/POSCAR_Fe_conv',
+        #  './poscars/POSCAR_Al_conv',
+        miller_index=[1,0,0],
+        #  miller_index=[1,1,1],
+        layers=film_layer,
+        vacuum=5,
+    )
+
+    inter = InterfaceGenerator(
+        substrate=subs.slabs[1],
+        film=films.slabs[0],
+        length_tol=0.013,
+        angle_tol=0.013,
+        area_tol=0.013,
+        max_area=200,
+        interfacial_distance=2.2,
+        sub_strain_frac=0,
+        vacuum=40,
+    )
+
+    r = {'In': 1.37, 'Sb': 1.33, 'Fe': 1.235}
+    r3 = {'In': 1.582, 'As': 1.27, 'Al': 1.43}
+
+    from pymatgen.analysis.molecule_structure_comparator import CovalentRadius
+    r2 = {
+        'In': CovalentRadius.radius['In'],
+        'Sb': CovalentRadius.radius['Sb'],
+        'As': CovalentRadius.radius['As'],
+        'Fe': Element('Fe').metallic_radius,
+        'Al': Element('Al').metallic_radius,
+    }
+
+    print(r)
+    print(r2)
+    interfaces = inter.generate_interfaces()
+    range_a = [-1, 1]
+    range_b = [-1, 1]
+    gs = 0.05
+    interfaces[0].run_surface_matching2(range_a, range_b, radius_dict=r2, grid_size=gs)
+    Poscar(interfaces[0].interface).write_file('POSCAR_interface')
+    #  from surface_matching_utils import view_structure
+    #  view_structure(iface)
+
     #  import os
     #  from vaspvis.utils import passivator
-#
+
     #  #  if not os.path.isdir(f'./test/small_InSb_{sub_layer}_Fe_{film_layer}'):
         #  #  os.mkdir(f'./test/small_InSb_{sub_layer}_Fe_{film_layer}')
-#
+
     #  for i in range(len(interfaces)):
         #  print(interfaces[i].strain)
         #  #  film_vecs = interfaces[i].film_supercell.lattice.matrix[:2]

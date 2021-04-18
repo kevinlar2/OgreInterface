@@ -17,20 +17,20 @@ Given a unit cell with side lengths: a, b, c:
 
 """
 
-r = 1.6
-
-radii = {'In': 1.1, 'Sb': 1.6}
-
-print((4 / 3) * np.pi * r**3)
-
-s = Structure.from_file('./POSCAR_sub_100')
-sg = SpacegroupAnalyzer(s)
-#  ps = sg.get_primitive_standard_structure()
-
-lattice = s.lattice.matrix
-lattice_norm = np.linalg.norm(lattice, axis=1)
-frac_coords = s.frac_coords
-elements = np.array(s.species, dtype=str)
+#  r = 1.6
+#
+#  radii = {'In': 1.1, 'Sb': 1.6}
+#
+#  print((4 / 3) * np.pi * r**3)
+#
+#  s = Structure.from_file('./POSCAR_sub_100')
+#  sg = SpacegroupAnalyzer(s)
+#  #  ps = sg.get_primitive_standard_structure()
+#
+#  lattice = s.lattice.matrix
+#  lattice_norm = np.linalg.norm(lattice, axis=1)
+#  frac_coords = s.frac_coords
+#  elements = np.array(s.species, dtype=str)
 
 
 def generate_unit_cell_tensor(structure, grid_size=0.1, return_plotting_info=False):

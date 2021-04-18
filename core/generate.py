@@ -631,7 +631,7 @@ if __name__ == "__main__":
         angle_tol=0.013,
         area_tol=0.013,
         max_area=200,
-        interfacial_distance=2.2,
+        interfacial_distance=1.9,
         sub_strain_frac=0,
         vacuum=40,
     )
@@ -653,9 +653,15 @@ if __name__ == "__main__":
     interfaces = inter.generate_interfaces()
     range_a = [-1, 1]
     range_b = [-1, 1]
-    gs = 0.05
-    interfaces[0].run_surface_matching2(range_a, range_b, radius_dict=r2, grid_size=gs)
-    Poscar(interfaces[0].interface).write_file('POSCAR_interface')
+    grid_size = 0.04
+    grid_density = 25
+    interfaces[0].run_surface_matching(
+        range_a,
+        range_b,
+        grid_size=grid_size,
+        grid_density=grid_density,
+    )
+    #  Poscar(interfaces[0].interface).write_file('POSCAR_interface')
     #  from surface_matching_utils import view_structure
     #  view_structure(iface)
 

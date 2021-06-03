@@ -1033,14 +1033,11 @@ class Interface:
             all_scores = []
             binding_energy = []
             for z_shift in z_shifts:
-                print('Before Shift =', self.interfacial_distance)
                 self.shift_film([0,0,z_shift])
-                print('Shift =', self.interfacial_distance)
                 scores, abc = self._match2(radius_dict, grid_size, grid_density, a_range, b_range)
                 binding_energy.append(scores[int(grid_density / 2), int(grid_density / 2)])
                 all_scores.append(scores / scores.max())
                 self.shift_film([0,0,-z_shift])
-                print('After Shift =', self.interfacial_distance)
 
             scores_3d = np.dstack(all_scores)
 

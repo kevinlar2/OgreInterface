@@ -299,70 +299,6 @@ class InterfaceGenerator:
                 substrate_3x3_transformations,
             ]
 
-    def _find_unique_reduced_vectors(self):
-        film_lattice = self.film.slab_pmg.lattice.matrix
-        reduced_film_vectors = reduce_vectors(film_lattice[0], film_lattice[1])
-        reduced_film_lattice = np.vstack([reduced_film_vectors, film_lattice[-1]])
-
-        substrate_lattice = self.substrate.slab_pmg.lattice.matrix
-        reduced_substrate_vectors = reduce_vectors(substrate_lattice[0], substrate_lattice[1])
-        reduced_substrate_lattice = np.vstack([reduced_substrate_vectors, substrate_lattice[-1]])
-
-        reduced_sc_substrate_vecs = []
-        for substrate_transformation in self.substrate_transformations:
-            new_substrate_lattice = np.dot(substrate_transformation, reduced_substrate_lattice)
-            new_reduced_vectors = reduce_vectors(new_substrate_lattice[0], new_substrate_lattice[1])
-            reduced_sc_substrate_vecs.append(new_reduced_vectors)
-
-
-        reduced_sc_film_vecs = []
-        for film_transformation in self.film_transformations:
-            new_film_lattice = np.dot(film_transformation, reduced_film_lattice)
-            new_reduced_vectors = reduce_vectors(new_film_lattice[0], new_film_lattice[1])
-            reduced_sc_film_vecs.append(new_reduced_vectors)
-
-        reduced_sc_substrate_vecs = np.round(np.array(reduced_sc_substrate_vecs),4)
-        reduced_sc_film_vecs = np.round(np.array(reduced_sc_film_vecs), 4)
-
-        reduced_sc_substrate_vecs_a = reduced_sc_substrate_vecs[:,0]
-        reduced_sc_film_vecs_a = reduced_sc_film_vecs[:,0]
-        reduced_sc_substrate_vecs_b = reduced_sc_substrate_vecs[:,1]
-        reduced_sc_film_vecs_b = reduced_sc_film_vecs[:,1]
-
-        unique_substrate_vecs_a = np.unique(reduced_sc_substrate_vecs_a, axis=0)
-        unique_film_vecs_a = np.unique(reduced_sc_film_vecs_a, axis=0)
-        unique_substrate_vecs_b = np.unique(reduced_sc_substrate_vecs_b, axis=0)
-        unique_film_vecs_b = np.unique(reduced_sc_film_vecs_b, axis=0)
-
-        subs_ind_a = []
-        for unique_vecs in unique_substrate_vecs_a:
-            ind = np.where((reduced_sc_substrate_vecs_a==unique_vecs).all(axis=1))
-            subs_ind_a.append(ind)
-
-        subs_ind_b = []
-        for unique_vecs in unique_substrate_vecs_b:
-            ind = np.where((reduced_sc_substrate_vecs_b==unique_vecs).all(axis=1))
-            subs_ind_b.append(ind)
-
-        film_ind_a = []
-        for unique_vecs in unique_film_vecs_a:
-            ind = np.where((reduced_sc_film_vecs_a==unique_vecs).all(axis=1))
-            film_ind_a.append(ind)
-
-        film_ind_b = []
-        for unique_vecs in unique_film_vecs_b:
-            ind = np.where((reduced_sc_film_vecs_b==unique_vecs).all(axis=1))
-            film_ind_b.append(ind)
-
-        print(unique_substrate_vecs_a.shape)
-        print(unique_film_vecs_a.shape)
-        print(unique_substrate_vecs_b.shape)
-        print(unique_film_vecs_b.shape)
-#
-        #  film_ind = []
-        #  for unique_vecs in unique_reduced_supercell_film_vecs:
-            #  ind = np.where((reduced_supercell_film_vecs==unique_vecs).all(axis=1).all(axis=1))[0]
-            #  film_ind.append(ind)
 
     def _is_equal(self, structure1, structure2):
         structure_matcher = StructureMatcher(
@@ -438,49 +374,6 @@ class InterfaceGenerator:
                 return True 
             else:
                 return False
-
-
-    def generate_interfaces_old(self):
-        interfaces = []
-        print('Generating Interfaces:')
-        for i in tqdm(range(self.substrate_transformations.shape[0])):
-            interface = Interface(
-                substrate=self.substrate,
-                film=self.film,
-                film_transformation=self.film_transformations[i],
-                substrate_transformation=self.substrate_transformations[i],
-                strain=self.strain[i],
-                angle_diff=self.angle_diff[i],
-                sub_strain_frac=self.sub_strain_frac,
-                interfacial_distance=self.interfacial_distance,
-                vacuum=self.vacuum,
-            )
-            interfaces.append(interface)
-
-        combos = combinations(range(len(interfaces)), 2)
-        same_slab_indices = []
-        print('Finding Symmetrically Equivalent Interfaces:')
-        for combo in tqdm(combos):
-            if self._is_equal(interfaces[combo[0]].interface, interfaces[combo[1]].interface):
-                same_slab_indices.append(combo)
-
-        to_delete = [np.min(same_slab_index) for same_slab_index in same_slab_indices]
-        unique_slab_indices = [i for i in range(len(interfaces)) if i not in to_delete]
-        unique_interfaces = [
-            interfaces[i] for i in unique_slab_indices
-        ]
-
-        areas = []
-
-        for interface in unique_interfaces:
-            matrix = interface.interface.lattice.matrix
-            area = self._get_area([matrix[0]], [matrix[1]])[0]
-            areas.append(area)
-
-        sort = np.argsort(areas)
-        sorted_unique_interfaces = [unique_interfaces[i] for i in sort]
-
-        return sorted_unique_interfaces
 
     def generate_interfaces(self):
         interfaces = []

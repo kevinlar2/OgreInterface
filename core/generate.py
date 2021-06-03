@@ -266,16 +266,6 @@ class InterfaceGenerator:
         
         if len(match_list) == 0:
             return None
-            "TODO: Return None if there are no matches"
-            #  return [
-                #  None,
-                #  None,
-                #  None,
-                #  None,
-                #  None,
-                #  None,
-                #  None,
-            #  ]
         else:
             film_sl_vecs = np.array([match['film_sl_vecs'] for match in match_list])
             sub_sl_vecs = np.array([match['sub_sl_vecs'] for match in match_list])
@@ -551,58 +541,11 @@ class InterfaceGenerator:
         sort = np.argsort(areas)
         sorted_unique_interfaces = [unique_interfaces[i] for i in sort]
 
-        return all_int
+        return sorted_unique_interfaces
 
 
 
 if __name__ == "__main__":
-    #  subs = SurfaceGenerator.from_file(
-        #  './poscars/POSCAR_InSb_conv',
-        #  miller_index=[1,0,0],
-        #  layers=1,
-        #  vacuum=3.5,
-    #  )
-#
-    #  films = SurfaceGenerator.from_file(
-        #  './poscars/POSCAR_bSn_conv',
-        #  miller_index=[1,0,0],
-        #  layers=8,
-        #  vacuum=5,
-    #  )
-
-    #  Poscar(subs.slabs[0].primitive_slab_pmg).write_file('POSCAR_sub_100')
-    #  Poscar(films.slabs[0].slab_pmg).write_file('POSCAR_film_121')
-
-    #  subs.slabs[3].remove_layers(num_layers=5, top=False)
-    #  films.slabs[0].remove_layers(num_layers=1, top=True)
-
-    #  inter = InterfaceGenerator(
-        #  substrate=subs.slabs[0],
-        #  film=films.slabs[0],
-        #  length_tol=0.01,
-        #  angle_tol=0.01,
-        #  area_tol=0.01,
-        #  max_area=500,
-        #  interfacial_distance=2,
-        #  sub_strain_frac=0,
-        #  vacuum=30,
-    #  )
-#
-    #  interfaces = inter.generate_interfaces()
-#  #
-    #  import os
-    #  from vaspvis.utils import passivator
-    #  for i in range(len(interfaces)):
-        #  print(interfaces[i].strain)
-        #  #  Poscar(interfaces[i].interface).write_file(os.path.join('./test_bSn001-InSb1-10', f'POSCAR_{i}'))
-#
-        #  passivator(
-            #  interfaces[i].interface,
-            #  top=False,
-            #  write_file=True,
-            #  output=os.path.join('./test', f'POSCAR_{i}'),
-            #  #  passivated_struc='./test/CONTCAR_FeInSb',
-        #  )
     sub_layer = 5
     film_layer = 5
 
@@ -624,13 +567,25 @@ if __name__ == "__main__":
         vacuum=5,
     )
 
+    #  inter = InterfaceGenerator(
+        #  substrate=subs.slabs[1],
+        #  film=films.slabs[0],
+        #  length_tol=0.01,
+        #  angle_tol=0.01,
+        #  area_tol=0.01,
+        #  max_area=300,
+        #  interfacial_distance=2.2,
+        #  sub_strain_frac=0,
+        #  vacuum=40,
+    #  )
+
     inter = InterfaceGenerator(
         substrate=subs.slabs[1],
         film=films.slabs[0],
-        length_tol=0.013,
-        angle_tol=0.013,
-        area_tol=0.013,
-        max_area=200,
+        length_tol=0.01,
+        angle_tol=0.01,
+        area_tol=0.01,
+        max_area=500,
         interfacial_distance=1.9,
         sub_strain_frac=0,
         vacuum=40,
@@ -648,49 +603,16 @@ if __name__ == "__main__":
         'Al': Element('Al').metallic_radius,
     }
 
-    print(r)
-    print(r2)
     interfaces = inter.generate_interfaces()
     range_a = [-1, 1]
     range_b = [-1, 1]
-    grid_size = 0.04
-    grid_density = 25
-    interfaces[0].run_surface_matching(
-        range_a,
-        range_b,
-        grid_size=grid_size,
-        grid_density=grid_density,
-    )
-    #  Poscar(interfaces[0].interface).write_file('POSCAR_interface')
-    #  from surface_matching_utils import view_structure
-    #  view_structure(iface)
+    grid_size = 0.05
+    grid_density = 15
 
-    #  import os
-    #  from vaspvis.utils import passivator
+    for i, interface in enumerate(interfaces):
+        ranking_score = interface.get_ranking_score(
+            radius_dict=r,
+        )
+        print(ranking_score)
 
-    #  #  if not os.path.isdir(f'./test/small_InSb_{sub_layer}_Fe_{film_layer}'):
-        #  #  os.mkdir(f'./test/small_InSb_{sub_layer}_Fe_{film_layer}')
-
-    #  for i in range(len(interfaces)):
-        #  print(interfaces[i].strain)
-        #  #  film_vecs = interfaces[i].film_supercell.lattice.matrix[:2]
-        #  #  sub_vecs = interfaces[i].substrate_supercell.lattice.matrix[:2]
-        #  #  film_area = np.linalg.norm(np.cross(film_vecs[0], film_vecs[1]))
-        #  #  sub_area = np.linalg.norm(np.cross(sub_vecs[0], sub_vecs[1]))
-        #  #  print('Film', film_area)
-        #  #  print('Sub', sub_area)
-        #  #  print('Diff', (film_area / sub_area) - 1)
-        #  #  #  print(interfaces[i].area_diff)
-        #  #  passivator(
-            #  #  interfaces[i].interface,
-            #  #  top=False,
-            #  #  write_file=True,
-            #  #  output=os.path.join(
-                #  #  'test',
-                #  #  f'InSb_{sub_layer}_Fe_{film_layer}',
-                #  #  f'POSCAR_{i}_InSb_{sub_layer}_Fe_{film_layer}'
-            #  #  ),
-            #  #  passivated_struc='./test/CONTCAR_FeInSb',
-        #  #  )
-        #  Poscar(interfaces[i].interface).write_file(os.path.join('test', f'POSCAR_{i}'))
             

@@ -143,11 +143,11 @@ def view_structure(voxelized_structure):
         y=Y.flatten(),
         z=Z.flatten(),
         value=voxelized_structure.flatten(),
-        isomin=0,
-        isomax=1,
-        opacity=0.2, # needs to be small to see through all surfaces
-        surface_count=20, # needs to be a large number for good volume rendering
-        colorscale='RdBu',
+        isomin=voxelized_structure.min().astype(float),
+        isomax=voxelized_structure.max().astype(float),
+        opacity=0.6, # needs to be small to see through all surfaces
+        surface_count=80, # needs to be a large number for good volume rendering
+        colorscale=['rgba(250, 250, 250, 0)', 'rgb(0,0,0)'],
         #  caps= dict(x_show=True, y_show=True, z_show=True, x_fill=1), # with caps (default mode)
         ))
 #  fig.write_image("fig1.png")

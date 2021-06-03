@@ -222,6 +222,8 @@ class Interface:
             film_ind,
             frac_shift,
         )
+        self.interface_height += frac_shift[-1] / 2
+        self.interfacial_distance += shift[-1]
 
         return shifted_interface
 
@@ -521,14 +523,14 @@ class Interface:
 
         return primitive_interface_struc 
 
-    def _setup_for_surface_matching(self):
+    def _setup_for_surface_matching(self, layers_sub=2, layers_film=2):
         interface = self.interface
         interface_layer_inds, interface_layes_heights = group_layers(interface)
         dist_from_interface = interface_layes_heights - self.interface_height 
         sub_layer_inds = np.where(dist_from_interface < 0)[0]
         film_layer_inds = np.where(dist_from_interface > 0)[0]
-        top_sub_inds = sub_layer_inds[-1:]
-        bot_film_inds = film_layer_inds[:1]
+        top_sub_inds = sub_layer_inds[-layers_sub:]
+        bot_film_inds = film_layer_inds[:layers_film]
         
         sub_inds = np.concatenate([interface_layer_inds[i] for i in top_sub_inds])
         film_inds = np.concatenate([interface_layer_inds[i] for i in bot_film_inds])
@@ -612,6 +614,7 @@ class Interface:
 
         return sub_voxel, film_voxel, sub_overlap, film_overlap, sub_struc, film_struc
 
+
     def _score_calculator(
         self,
         sub_voxel,
@@ -626,14 +629,48 @@ class Interface:
         relative_empty = empty_space / volume_diff
         #  volume_density = relative_empty - (1 - (overlap_atoms / volume_diff))
 
-        #  print('Overlap =', np.round(relative_overlap, 4), 'Density =', np.round(volume_density, 4))
-        #  print('Score = ', relative_overlap + volume_density)
-
-        
-        #  score = relative_overlap / (relative_overlap + relative_empty - volume_density)
+        #  print(np.round(relative_empty, 4))
         score = relative_overlap / relative_empty
+        #  score = (1 + relative_overlap)**2 + relative_empty
 
-        return score
+        return overlap_int, empty_space
+
+    def _score_calculator2(
+        self,
+        sub_voxel,
+        film_voxel,
+        interface_volume,
+        atoms_volume,
+    ):
+        overlap_int = np.logical_and(sub_voxel, film_voxel).sum()
+        #  empty_space = np.logical_xor(sub_voxel, film_voxel).sum()
+        empty_space = np.logical_not(sub_voxel + film_voxel).sum()
+        #  print(empty_space, empty_space2)
+
+        relative_overlap = overlap_int / atoms_volume
+        relative_empty = empty_space / interface_volume
+
+        #  score = np.sqrt((1 / relative_overlap) + (1 / relative_empty))
+
+        return overlap_int, empty_space
+
+    def _score_calculator_paper(
+        self,
+        sub_voxel,
+        film_voxel,
+        cell_volume,
+    ):
+        interface_atoms_volume = np.logical_and(sub_voxel, film_voxel).sum()
+        total_atoms_volume = sub_voxel.sum() + film_voxel.sum()
+        interface_overlap_volume = np.logical_and(sub_voxel, film_voxel).sum()
+        interface_empty_space = cell_volume - interface_atoms_volume
+
+        relative_overlap = interface_overlap_volume / total_atoms_volume
+        relative_empty = interface_empty_space / cell_volume
+
+        #  score = (1 + relative_overlap)**2 + (c * relative_empty)
+
+        return relative_overlap, relative_empty
 
     def _get_score(
         self,
@@ -651,6 +688,43 @@ class Interface:
             film_voxel=shifted_film_voxel,
             volume_diff=volume_diff,
             overlap_atoms=overlap_atoms,
+        )
+        return score
+
+
+    def _get_score2(
+        self,
+        inds,
+        sub_voxel,
+        film_voxel,
+        interface_volume,
+        atoms_volume,
+        a_range_ind,
+        b_range_ind,
+    ):
+        shifted_film_voxel = np.roll(film_voxel, shift=[a_range_ind[inds[0]], b_range_ind[inds[1]]], axis=(0,1))
+        score = self._score_calculator2(
+            sub_voxel=sub_voxel,
+            film_voxel=shifted_film_voxel,
+            interface_volume=interface_volume,
+            atoms_volume=atoms_volume,
+        )
+        return score
+
+    def _get_score_paper(
+        self,
+        inds,
+        sub_voxel,
+        film_voxel,
+        cell_volume,
+        a_range_ind,
+        b_range_ind,
+    ):
+        shifted_film_voxel = np.roll(film_voxel, shift=[a_range_ind[inds[0]], b_range_ind[inds[1]]], axis=(0,1))
+        score = self._score_calculator_paper(
+            sub_voxel=sub_voxel,
+            film_voxel=shifted_film_voxel,
+            cell_volume=cell_volume,
         )
         return score
 
@@ -700,22 +774,14 @@ class Interface:
 
         return sub_dict
 
-
-
-    def run_surface_matching(
+    def _match(
         self,
+        radius_dict,
+        grid_size,
+        grid_density,
         a_range,
         b_range,
-        custom_radius_dict=None,
-        grid_size=0.05,
-        grid_density=10,
     ):
-        if custom_radius_dict is None:
-            radius_dict = self._get_radii()
-        else:
-            if type(custom_radius_dict) == dict:
-                radius_dict = custom_radius_dict
-
         voxel_output = self._get_voxelized_structures(
             radius_dict=radius_dict,
             grid_size=grid_size,
@@ -727,6 +793,7 @@ class Interface:
         film_overlap = voxel_output[3]
         sub_struc = voxel_output[4]
         film_struc = voxel_output[5]
+        #  smu.view_structure(sub_voxel)
 
 
         sub_top = np.where(sub_overlap > 0)[-1].max()
@@ -756,7 +823,9 @@ class Interface:
         a_range_ind = np.linspace(a_range_s[0], a_range_s[1], grid_density, dtype=int)
         b_range_ind = np.linspace(b_range_s[0], b_range_s[1], grid_density, dtype=int)
 
-        scores = np.zeros((len(a_range_ind), len(b_range_ind)))
+        overlap = np.zeros((len(a_range_ind), len(b_range_ind)))
+        empty = np.zeros((len(a_range_ind), len(b_range_ind)))
+        #  scores = np.zeros((len(a_range_ind), len(b_range_ind)))
 
         indices = list(product(range(len(a_range_ind)), range(len(b_range_ind))))
 
@@ -776,36 +845,331 @@ class Interface:
         p.close()
         p.join()
         e = time.time()
-        print('Parallel =', e - s)
+        #  print('Parallel =', e - s)
 
         for i, j in enumerate(indices):
-            scores[j[0], j[1]] = sc[i]
+            #  scores[j[0], j[1]] = sc[i]
+            overlap[j[0], j[1]] = sc[i][0]
+            empty[j[0], j[1]] = sc[i][1]
 
-        fig, ax = plt.subplots(figsize=(4,4.5), dpi=400)
-        ax.set_xlabel(r"Fractional Shift in $\vec{a}$ Direction", fontsize=12)
-        ax.set_ylabel(r"Fractional Shift in $\vec{b}$ Direction", fontsize=12)
+        return overlap, empty, abc
 
-        im = ax.contourf(
-            np.linspace(a_range[0], a_range[1], grid_density) / abc[0],
-            np.linspace(b_range[0], b_range[1], grid_density) / abc[1],
-            scores.T,
-            cmap='jet',
-            levels=200,
-            norm=Normalize(vmin=scores.min(), vmax=scores.max()),
+    def _match2(
+        self,
+        radius_dict,
+        grid_size,
+        grid_density,
+        a_range,
+        b_range,
+    ):
+        voxel_output = self._get_voxelized_structures(
+            radius_dict=radius_dict,
+            grid_size=grid_size,
         )
 
-        cbar = fig.colorbar(im, ax=ax, orientation='horizontal')
-        cbar.ax.tick_params(labelsize=12)
-        cbar.ax.locator_params(nbins=4)
-        cbar.set_label('Score', fontsize=12)
-        ax.tick_params(labelsize=12)
-        fig.tight_layout()
-        fig.savefig('heatmap.png')
+        sub_voxel = voxel_output[0]
+        film_voxel = voxel_output[1]
+        sub_overlap = voxel_output[2]
+        film_overlap = voxel_output[3]
+        sub_struc = voxel_output[4]
+        film_struc = voxel_output[5]
+        smu.view_structure(sub_voxel)
+
+        sub_top = np.where(sub_overlap > 0)[-1].max()
+        sub_bot = np.where(sub_overlap > 0)[-1].min()
+        sub_volume = (sub_top - sub_bot) * np.product(sub_voxel.shape[1:])
+        sub_atoms_volume = sub_voxel.sum()
+        sub_voxel[:,:,:sub_bot] = True
+
+        film_top = np.where(film_overlap > 0)[-1].max()
+        film_bot = np.where(film_overlap > 0)[-1].min()
+        film_volume = (film_top - film_bot) * np.product(film_voxel.shape[1:])
+        film_atoms_volume = sub_voxel.sum()
+        film_voxel[:,:,film_top:] = True
+
+        int_volume = (film_top - sub_bot) * np.product(film_voxel.shape[1:])
+        atoms_volume = sub_atoms_volume + film_atoms_volume
+
+        unit_cell_size = sub_voxel.shape[0]
+        abc = np.linalg.norm(sub_struc.lattice.matrix, axis=1)
+        voxel_dist = abc / unit_cell_size
+
+        a_range_s = np.array(a_range) / voxel_dist[0]
+        b_range_s = np.array(b_range) / voxel_dist[1]
+        
+        a_range_ind = np.linspace(a_range_s[0], a_range_s[1], grid_density, dtype=int)
+        b_range_ind = np.linspace(b_range_s[0], b_range_s[1], grid_density, dtype=int)
+
+        overlap = np.zeros((len(a_range_ind), len(b_range_ind)))
+        empty = np.zeros((len(a_range_ind), len(b_range_ind)))
+
+        indices = list(product(range(len(a_range_ind)), range(len(b_range_ind))))
+
+        inputs = zip(
+            indices,
+            repeat(sub_voxel),
+            repeat(film_voxel),
+            repeat(int_volume),
+            repeat(atoms_volume),
+            repeat(a_range_ind),
+            repeat(b_range_ind),
+        )
+
+        s = time.time()
+        p = Pool(cpu_count())
+        sc = p.starmap(self._get_score2, inputs, chunksize=5)
+        p.close()
+        p.join()
+        e = time.time()
+        #  print('Parallel =', e - s)
+
+        for i, j in enumerate(indices):
+            overlap[j[0], j[1]] = sc[i][0]
+            empty[j[0], j[1]] = sc[i][1]
+
+        return overlap, empty, abc
+
+    def _match_paper(
+        self,
+        radius_dict,
+        grid_size,
+        grid_density,
+        a_range,
+        b_range,
+        ncores,
+    ):
+        voxel_output = self._get_voxelized_structures(
+            radius_dict=radius_dict,
+            grid_size=grid_size,
+        )
+
+        sub_voxel = voxel_output[0]
+        film_voxel = voxel_output[1]
+        sub_overlap = voxel_output[2]
+        film_overlap = voxel_output[3]
+        sub_struc = voxel_output[4]
+        film_struc = voxel_output[5]
+
+        sub_top = np.where(sub_overlap > 0)[-1].max()
+        sub_bot = np.where(sub_overlap > 0)[-1].min()
+        sub_volume = (sub_top - sub_bot) * np.product(sub_voxel.shape[1:])
+
+        film_top = np.where(film_overlap > 0)[-1].max()
+        film_bot = np.where(film_overlap > 0)[-1].min()
+        film_volume = (film_top - film_bot) * np.product(film_voxel.shape[1:])
+
+        int_volume = (film_top - sub_bot) * np.product(film_voxel.shape[1:])
+
+        film_int_atoms = film_voxel[:,:,film_bot:sub_top+1].sum()
+        sub_int_atoms = sub_voxel[:,:,film_bot:sub_top+1].sum()
+
+        overlap_atoms = film_int_atoms + sub_int_atoms
+
+        volume_diff = np.abs(int_volume - (sub_volume + film_volume))
+
+        unit_cell_size = sub_voxel.shape[0]
+        abc = np.linalg.norm(sub_struc.lattice.matrix, axis=1)
+        voxel_dist = abc / unit_cell_size
+
+        a_range_s = np.array(a_range) / voxel_dist[0]
+        b_range_s = np.array(b_range) / voxel_dist[1]
+        
+        a_range_ind = np.linspace(a_range_s[0], a_range_s[1], grid_density, dtype=int)
+        b_range_ind = np.linspace(b_range_s[0], b_range_s[1], grid_density, dtype=int)
+
+        overlap = np.zeros((len(a_range_ind), len(b_range_ind)))
+        empty = np.zeros((len(a_range_ind), len(b_range_ind)))
+        #  scores = np.zeros((len(a_range_ind), len(b_range_ind)))
+
+        indices = list(product(range(len(a_range_ind)), range(len(b_range_ind))))
+
+        inputs = zip(
+            indices,
+            repeat(sub_voxel),
+            repeat(film_voxel),
+            repeat(int_volume),
+            repeat(a_range_ind),
+            repeat(b_range_ind),
+        )
+
+        #### SCALING
+        s = time.time()
+        #  p = Pool(cpu_count())
+        p = Pool(ncores)
+        sc = p.starmap(self._get_score_paper, inputs, chunksize=5)
+        p.close()
+        p.join()
+        e = time.time()
+        #  print('Parallel =', e - s)
+
+        for i, j in enumerate(indices):
+            #  scores[j[0], j[1]] = sc[i]
+            overlap[j[0], j[1]] = sc[i][0]
+            empty[j[0], j[1]] = sc[i][1]
+
+        return overlap, empty, abc
+
+    def run_surface_matching(
+        self,
+        a_range,
+        b_range,
+        custom_radius_dict=None,
+        grid_size=0.075,
+        grid_density=20,
+        output='PES.png',
+        zrange=None,
+        zlevels=10,
+        c=1,
+        ncores=cpu_count(),
+    ):
+        if custom_radius_dict is None:
+            radius_dict = self._get_radii()
+        else:
+            if type(custom_radius_dict) == dict:
+                radius_dict = custom_radius_dict
+
+        if zrange is not None:
+            z_shifts = np.linspace(zrange[0], zrange[1], zlevels) 
+            all_scores = []
+            binding_energy = []
+            for z_shift in z_shifts:
+                print('Before Shift =', self.interfacial_distance)
+                self.shift_film([0,0,z_shift])
+                print('Shift =', self.interfacial_distance)
+                scores, abc = self._match2(radius_dict, grid_size, grid_density, a_range, b_range)
+                binding_energy.append(scores[int(grid_density / 2), int(grid_density / 2)])
+                all_scores.append(scores / scores.max())
+                self.shift_film([0,0,-z_shift])
+                print('After Shift =', self.interfacial_distance)
+
+            scores_3d = np.dstack(all_scores)
+
+            fig1, ax1 = plt.subplots()
+            ax1.plot(
+                z_shifts,
+                binding_energy,
+            )
+            fig1.savefig('be.png')
+        else:
+            #  scores, abc = self._match2(radius_dict, grid_size, grid_density, a_range, b_range)
+            #  overlap, empty, abc = self._match(radius_dict, grid_size, grid_density, a_range, b_range)
+            overlap, empty, abc = self._match_paper(radius_dict, grid_size, grid_density, a_range, b_range, ncores)
+
+
+        #  overlap = (overlap - overlap.min()) / (overlap.max() - overlap.min())
+        #  empty = (empty - empty.min()) / (empty.max() - empty.min())
+
+        #  fig, ax = plt.subplots(figsize=(4,4.5), dpi=400)
+        #  ax.set_xlabel(r"Fractional Shift in $\vec{a}$ Direction", fontsize=12)
+        #  ax.set_ylabel(r"Fractional Shift in $\vec{b}$ Direction", fontsize=12)
+#
+        #  score = (1 + overlap)**2 + (c * empty)
+        #  score -= score.min()
+        #  score /= score.max()
+#
+        #  im = ax.contourf(
+            #  np.linspace(a_range[0], a_range[1], grid_density) / abc[0],
+            #  np.linspace(b_range[0], b_range[1], grid_density) / abc[1],
+            #  score.T,
+            #  cmap='jet',
+            #  levels=200,
+            #  norm=Normalize(vmin=score.min(), vmax=score.max()),
+        #  )
+#
+        #  cbar = fig.colorbar(im, ax=ax, orientation='horizontal')
+        #  cbar.ax.tick_params(labelsize=12)
+        #  cbar.ax.locator_params(nbins=4)
+        #  cbar.set_label('Score', fontsize=12)
+        #  ax.tick_params(labelsize=12)
+        #  fig.tight_layout()
+        #  fig.savefig(output)
 
         
+    def get_ranking_score(self, radius_dict, grid_size=0.05):
+        int_struc_sub_sub, int_struc_film_sub = self._setup_for_surface_matching(
+            layers_sub=4,
+            layers_film=1,
+        )
+
+        int_struc_sub_film, int_struc_film_film = self._setup_for_surface_matching(
+            layers_sub=1,
+            layers_film=4,
+        )
+
+        species = np.unique(
+            np.array(int_struc_sub_sub.species + int_struc_film_film.species, dtype=str)
+        )
+
+        int_sub_sub_unit_cell = smu.generate_unit_cell_tensor(
+            structure=int_struc_sub_sub,
+            grid_size=grid_size,
+            return_plotting_info=False,
+        ) 
+        int_film_sub_unit_cell = np.copy(int_sub_sub_unit_cell) 
+
+        int_sub_film_unit_cell = smu.generate_unit_cell_tensor(
+            structure=int_struc_sub_film,
+            grid_size=grid_size,
+            return_plotting_info=False,
+        ) 
+        int_film_film_unit_cell = np.copy(int_sub_film_unit_cell) 
+
+        radii_int_sub = {
+            s: smu.get_radii(
+                structure=int_struc_sub_sub,
+                radius=radius_dict[s],
+                grid_size=grid_size
+            ) for s in species
+        }
+
+        radii_int_film = {
+            s: smu.get_radii(
+                structure=int_struc_film_film,
+                radius=radius_dict[s],
+                grid_size=grid_size
+            ) for s in species
+        }
+
+        ellipsoids_int_sub = {
+            s: smu.generate_ellipsoid(radii_int_sub[s]) for s in species
+        }
+
+        ellipsoids_int_film = {
+            s: smu.generate_ellipsoid(radii_int_film[s]) for s in species
+        }
+
+        int_sub_sub_voxel, int_sub_sub_overlap = smu.append_atoms(
+            structure=int_struc_sub_sub,
+            unit_cell=int_sub_sub_unit_cell,
+            ellipsoids=ellipsoids_int_sub
+        )
+
+        int_film_sub_voxel, int_film_sub_overlap = smu.append_atoms(
+            structure=int_struc_film_sub,
+            unit_cell=int_film_sub_unit_cell,
+            ellipsoids=ellipsoids_int_sub
+        )
+
+        int_sub_film_voxel, int_sub_film_overlap = smu.append_atoms(
+            structure=int_struc_sub_film,
+            unit_cell=int_sub_film_unit_cell,
+            ellipsoids=ellipsoids_int_film
+        )
+
+        int_film_film_voxel, int_film_film_overlap = smu.append_atoms(
+            structure=int_struc_film_film,
+            unit_cell=int_film_film_unit_cell,
+            ellipsoids=ellipsoids_int_film
+        )
+
+        O_sub = (int_sub_sub_overlap > 1).sum() / int_sub_sub_voxel.sum()
+        O_film = (int_film_film_overlap > 1).sum() / int_film_film_voxel.sum()
+        O_int_sub = (int_sub_sub_overlap + int_film_sub_overlap > 1).sum() / (int_sub_sub_voxel + int_film_sub_voxel).sum()
+        O_int_film = (int_sub_film_overlap + int_film_film_overlap > 1).sum() / (int_sub_film_voxel + int_film_film_voxel).sum()
+
+        ranking_score = np.abs(O_int_sub - O_sub) - np.abs(O_int_film - O_film)
+
+        return ranking_score
 
 
-
-        
-        
 

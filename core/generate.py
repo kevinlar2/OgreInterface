@@ -439,26 +439,27 @@ class InterfaceGenerator:
 
 
 if __name__ == "__main__":
-    sub_layer = 5
-    film_layer = 5
+    sub_layer = 24
+    film_layer = 10
 
     subs = SurfaceGenerator.from_file(
-        './poscars/POSCAR_InSb_conv',
-        #  './poscars/POSCAR_InAs_conv',
-        miller_index=[1,0,0],
-        #  miller_index=[1,1,1],
+        #  './poscars/POSCAR_InSb_conv',
+        './poscars/POSCAR_InAs_conv',
+        miller_index=[1,1,1],
         layers=sub_layer,
         vacuum=5,
     )
 
     films = SurfaceGenerator.from_file(
-        './poscars/POSCAR_Fe_conv',
-        #  './poscars/POSCAR_Al_conv',
-        miller_index=[1,0,0],
-        #  miller_index=[1,1,1],
+        #  './poscars/POSCAR_Fe_conv',
+        './poscars/POSCAR_Al_conv',
+        miller_index=[1,1,1],
         layers=film_layer,
         vacuum=5,
     )
+
+    subs.slabs[3].remove_layers(num_layers=5)
+    #  films.slabs[0].remove_layers(num_layers=1)
 
     #  inter = InterfaceGenerator(
         #  substrate=subs.slabs[1],
@@ -473,15 +474,15 @@ if __name__ == "__main__":
     #  )
 
     inter = InterfaceGenerator(
-        substrate=subs.slabs[1],
+        substrate=subs.slabs[3],
         film=films.slabs[0],
         length_tol=0.01,
         angle_tol=0.01,
         area_tol=0.01,
         max_area=500,
-        interfacial_distance=1.9,
+        interfacial_distance=2.2,
         sub_strain_frac=0,
-        vacuum=40,
+        vacuum=2.2,
     )
 
     r = {'In': 1.37, 'Sb': 1.33, 'Fe': 1.235}
@@ -503,9 +504,10 @@ if __name__ == "__main__":
     grid_density = 15
 
     for i, interface in enumerate(interfaces):
-        ranking_score = interface.get_ranking_score(
-            radius_dict=r,
-        )
-        print(ranking_score)
+        Poscar(interface.interface).write_file(f'./test/AlInAs/POSCAR_{i}')
+        #  ranking_score = interface.get_ranking_score(
+            #  radius_dict=r,
+        #  )
+        #  print(ranking_score)
 
             

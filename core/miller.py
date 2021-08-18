@@ -11,6 +11,7 @@ from matplotlib.collections import PatchCollection
 from matplotlib.colors import Normalize
 from mpl_toolkits.axes_grid1.axes_divider import make_axes_locatable
 from mpl_toolkits.axes_grid1.colorbar import colorbar
+from functools import reduce
 
 
 
@@ -58,6 +59,22 @@ class MillerSearch(object):
         self.area_data = None
         self.count_data = None 
 
+    def _float_gcd(self, a, b, rtol = 1e-05, atol = 1e-08):
+        t = min(abs(a), abs(b))
+        while abs(b) > rtol * t + atol:
+            a, b = b, a % b
+        return a
+
+    def _hex_to_cubic(self, uvtw):
+        u = 2 * uvtw[0] + uvtw[1]
+        v = 2 * uvtw[1] + uvtw[0]
+        w = uvtw[-1]
+
+        output = np.array([u, v, w])
+        gcd = np.abs(reduce(self._float_gcd, output))
+        output = output / gcd
+
+        return output
 
     def _get_unique_miller_indices(self):
         sub_sg = SpacegroupAnalyzer(self.substrate)
@@ -204,17 +221,17 @@ class MillerSearch(object):
 
 if __name__ == "__main__":
     ms = MillerSearch(
-        substrate='./poscars/POSCAR_InSb_conv',
-        film='./poscars/POSCAR_bSn_conv',
+        substrate='./poscars/GaAs.cif',
+        film='./poscars/MnAs.cif',
         max_film_index=1,
         max_substrate_index=1,
         length_tol=0.01,
         angle_tol=0.01,
         area_tol=0.01,
-        max_area=600,
+        max_area=500,
     )
     ms.run_scan()
-    ms.plot_misfits()
+    ms.plot_misfits(figsize=(5.5,5))
     
 
 

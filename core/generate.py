@@ -439,8 +439,11 @@ class InterfaceGenerator:
 
 
 if __name__ == "__main__":
-    sub_layer = 24
-    film_layer = 10
+    sub_layer = 31
+    film_layer = 13
+
+    #  sub_layer = 13
+    #  film_layer = 8
 
     subs = SurfaceGenerator.from_file(
         #  './poscars/POSCAR_InSb_conv',
@@ -458,32 +461,35 @@ if __name__ == "__main__":
         vacuum=5,
     )
 
-    subs.slabs[3].remove_layers(num_layers=5)
-    #  films.slabs[0].remove_layers(num_layers=1)
-
-    #  inter = InterfaceGenerator(
-        #  substrate=subs.slabs[1],
-        #  film=films.slabs[0],
-        #  length_tol=0.01,
-        #  angle_tol=0.01,
-        #  area_tol=0.01,
-        #  max_area=300,
-        #  interfacial_distance=2.2,
-        #  sub_strain_frac=0,
-        #  vacuum=40,
-    #  )
+    #  subs.slabs[3].remove_layers(num_layers=5)
+    #  films.slabs[0].remove_layers(num_layers=1, top=True)
 
     inter = InterfaceGenerator(
-        substrate=subs.slabs[3],
+        #  substrate=films.slabs[0],
+        #  film=subs.slabs[1],
+        substrate=subs.slabs[2],
         film=films.slabs[0],
         length_tol=0.01,
         angle_tol=0.01,
         area_tol=0.01,
-        max_area=500,
+        max_area=400,
         interfacial_distance=2.2,
-        sub_strain_frac=0,
-        vacuum=2.2,
+        sub_strain_frac=1,
+        vacuum=80,
     )
+
+    #  inter = InterfaceGenerator(
+        #  substrate=subs.slabs[3],
+        #  film=films.slabs[0],
+        #  length_tol=0.05,
+        #  angle_tol=0.05,
+        #  area_tol=0.05,
+        #  max_area=700,
+        #  interfacial_distance=2.2,
+        #  sub_strain_frac=0,
+        #  #  vacuum=2.2,
+        #  vacuum=30,
+    #  )
 
     r = {'In': 1.37, 'Sb': 1.33, 'Fe': 1.235}
     r3 = {'In': 1.582, 'As': 1.27, 'Al': 1.43}
@@ -502,9 +508,29 @@ if __name__ == "__main__":
     range_b = [-1, 1]
     grid_size = 0.05
     grid_density = 15
+    
+    from vaspvis.utils import passivator
 
     for i, interface in enumerate(interfaces):
-        Poscar(interface.interface).write_file(f'./test/AlInAs/POSCAR_{i}')
+        pas = passivator(
+            struc=interface.interface,
+            #  top=True,
+            #  bot=False,
+            bot=True,
+            top=False,
+            symmetrize=False,
+            passivated_struc='./test/Al-InAs111A/CONTCAR'
+        )
+        coords = pas.frac_coords
+        shift_val = (coords[:,-1].max() - coords[:,-1].min()) / 2
+        pas.translate_sites(
+            indices=range(len(pas)),
+            vector=[0,0,shift_val],
+            frac_coords=True,
+            to_unit_cell=True,
+        )
+        Poscar(pas).write_file(f'./test/Al-InAs111A/larger/POSCAR_{i}')
+        #  Poscar(pas).write_file(f'./test/Al-InAs111B/POSCAR_{i}')
         #  ranking_score = interface.get_ranking_score(
             #  radius_dict=r,
         #  )

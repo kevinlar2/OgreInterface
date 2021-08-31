@@ -7,14 +7,14 @@ film_layer = 5
 
 subs = SurfaceGenerator.from_file(
     './poscars/GaAs.cif',
-    miller_index=[0,0,1],
+    miller_index=[1,1,0],
     layers=sub_layer,
     vacuum=5,
 )
 
 films = SurfaceGenerator.from_file(
     './poscars/MnAs.cif',
-    miller_index=[1,0,0],
+    miller_index=[1,-1,0],
     layers=film_layer,
     vacuum=5,
 )
@@ -23,10 +23,10 @@ films = SurfaceGenerator.from_file(
 inter = InterfaceGenerator(
     substrate=subs.slabs[0],
     film=films.slabs[0],
-    length_tol=0.01,
-    angle_tol=0.01,
-    area_tol=0.01,
-    max_area=500,
+    length_tol=0.04,
+    angle_tol=0.04,
+    area_tol=0.04,
+    max_area=300,
     interfacial_distance=2.2,
     sub_strain_frac=0,
     vacuum=40,

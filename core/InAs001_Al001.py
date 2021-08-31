@@ -2,19 +2,19 @@ from generate import InterfaceGenerator, SurfaceGenerator
 from vaspvis.utils import passivator
 from pymatgen.io.vasp.inputs import Poscar
 
-sub_layer = 5
-film_layer = 5
+sub_layer = 10
+film_layer = 10
 
 subs = SurfaceGenerator.from_file(
     './poscars/POSCAR_InAs_conv',
-    miller_index=[1,1,1],
+    miller_index=[1,0,0],
     layers=sub_layer,
     vacuum=5,
 )
 
 films = SurfaceGenerator.from_file(
     './poscars/POSCAR_Al_conv',
-    miller_index=[1,1,1],
+    miller_index=[1,0,0],
     layers=film_layer,
     vacuum=5,
 )
@@ -23,15 +23,15 @@ films = SurfaceGenerator.from_file(
 #  films.slabs[0].remove_layers(num_layers=1, top=True)
 
 inter = InterfaceGenerator(
-    substrate=subs.slabs[2],
+    substrate=subs.slabs[0],
     film=films.slabs[0],
-    length_tol=0.02,
-    angle_tol=0.02,
-    area_tol=0.02,
+    length_tol=0.01,
+    angle_tol=0.01,
+    area_tol=0.01,
     max_area=500,
     interfacial_distance=2.2,
-    #  sub_strain_frac=0,
-    vacuum=20,
+    sub_strain_frac=1,
+    vacuum=80,
 )
 
 interfaces = inter.generate_interfaces()
@@ -52,4 +52,4 @@ for i, interface in enumerate(interfaces):
         #  frac_coords=True,
         #  to_unit_cell=True,
     #  )
-    Poscar(pas).write_file(f'./test/Al111-InAs111/POSCAR_{i}')
+    Poscar(pas).write_file(f'./test/Al001-InAs001/POSCAR_{i}')

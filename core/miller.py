@@ -143,7 +143,8 @@ class MillerSearch(object):
                     strains = np.c_[strain, angle_diff]
                     max_misfits = strains[:, np.argmax(np.abs(strains), axis=1)]
                     #  min_strain = np.min(np.abs(max_misfits))
-                    min_strain = np.min(np.abs(interface.area_ratio))
+                    #  min_strain = np.min(np.abs(interface.area_ratio))
+                    min_strain = np.min(np.abs(strain))
                     misfits[i,j] = min_strain 
                     areas[i,j] = np.min(interface.substrate_areas)
                     counts[i,j] = len(max_misfits)
@@ -168,7 +169,7 @@ class MillerSearch(object):
         M = len(self.substrate_inds)
         x, y = np.meshgrid(np.arange(M), np.arange(N))
         s = self.areas
-        c = self.misfits
+        c = self.misfits* 100
         
         fig, ax = plt.subplots(figsize=figsize, dpi=400)
         ax_divider = make_axes_locatable(ax)
@@ -221,17 +222,17 @@ class MillerSearch(object):
 
 if __name__ == "__main__":
     ms = MillerSearch(
-        substrate='./poscars/GaAs.cif',
-        film='./poscars/MnAs.cif',
-        max_film_index=1,
-        max_substrate_index=1,
-        length_tol=0.01,
-        angle_tol=0.01,
-        area_tol=0.01,
-        max_area=500,
+        substrate='./poscars/POSCAR_InSb_conv',
+        film='./poscars/POSCAR_EuS_conv',
+        max_film_index=2,
+        max_substrate_index=2,
+        length_tol=0.06,
+        angle_tol=0.06,
+        area_tol=0.06,
+        max_area=400,
     )
     ms.run_scan()
-    ms.plot_misfits(figsize=(5.5,5))
+    ms.plot_misfits(figsize=(6,5))
     
 
 

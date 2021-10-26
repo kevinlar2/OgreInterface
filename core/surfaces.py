@@ -1028,6 +1028,8 @@ class Interface:
             if type(custom_radius_dict) == dict:
                 radius_dict = custom_radius_dict
 
+        print(radius_dict)
+
         if zrange is not None:
             z_shifts = np.linspace(zrange[0], zrange[1], zlevels) 
             all_scores = []

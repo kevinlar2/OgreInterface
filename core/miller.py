@@ -74,7 +74,19 @@ class MillerSearch(object):
         gcd = np.abs(reduce(self._float_gcd, output))
         output = output / gcd
 
-        return output
+        return output.astype(int)
+
+    def _cubic_to_hex(self, uvw):
+        u = (1/3) * ((2 * uvw[0]) - uvw[1])
+        v = (1/3) * ((2 * uvw[1]) - uvw[0])
+        t = -(u + v)
+        w = uvw[-1]
+
+        output = np.array([u, v, t, w])
+        gcd = np.abs(reduce(self._float_gcd, output))
+        output /= gcd
+
+        return output.astype(int)
 
     def _get_unique_miller_indices(self):
         sub_sg = SpacegroupAnalyzer(self.substrate)
@@ -98,6 +110,7 @@ class MillerSearch(object):
 
         sorted_unique_sub_inds = unique_sub_inds[sub_sort]
         sorted_unique_film_inds = unique_film_inds[film_sort]
+
 
         return sorted_unique_sub_inds, sorted_unique_film_inds
 
@@ -142,9 +155,9 @@ class MillerSearch(object):
                     angle_diff = interface.angle_diff
                     strains = np.c_[strain, angle_diff]
                     max_misfits = strains[:, np.argmax(np.abs(strains), axis=1)]
-                    #  min_strain = np.min(np.abs(max_misfits))
+                    min_strain = np.min(np.abs(max_misfits))
                     #  min_strain = np.min(np.abs(interface.area_ratio))
-                    min_strain = np.min(np.abs(strain))
+                    #  min_strain = np.min(np.abs(strain))
                     misfits[i,j] = min_strain 
                     areas[i,j] = np.min(interface.substrate_areas)
                     counts[i,j] = len(max_misfits)
@@ -161,8 +174,24 @@ class MillerSearch(object):
         figsize=(5.5,4),
         labelrotation=20,
     ):
-        ylabels = [f'{i}'.replace('[', '(').replace(']', ')') for i in self.film_inds]
+        #  ylabels = [f'{self._cubic_to_hex(i)}'.replace('[', '(').replace(']', ')') for i in self.film_inds]
         xlabels = [f'{i}'.replace('[', '(').replace(']', ')') for i in self.substrate_inds]
+
+        print(self._hex_to_cubic([-1,1,0,0]))
+
+        ylabels = []
+        for i in self.film_inds:
+            i = self._cubic_to_hex(i)
+            neg_inds = i < 0
+            i[neg_inds] *= -1
+            str_array = i.astype(str)
+            str_array = np.array([r'$bar{' + f'{j}' + '}$' if n else j for j, n in zip(i, neg_inds)])
+            str_inds = f'{str_array}'.replace('[', '(').replace(']', ')').replace("'", "")
+            if 'bar' in str_inds:
+                str_inds = str_inds.replace('bar', '\\bar')
+
+            print(str_inds)
+            ylabels.append(str_inds)
 
 
         N = len(self.film_inds)
@@ -171,7 +200,7 @@ class MillerSearch(object):
         s = self.areas
         c = self.misfits* 100
         
-        fig, ax = plt.subplots(figsize=figsize, dpi=400)
+        fig, ax = plt.subplots(figsize=figsize, dpi=600)
         ax_divider = make_axes_locatable(ax)
 
         cax = ax_divider.append_axes(
@@ -221,18 +250,33 @@ class MillerSearch(object):
 
 
 if __name__ == "__main__":
+    import itertools
     ms = MillerSearch(
-        substrate='./poscars/POSCAR_InSb_conv',
-        film='./poscars/POSCAR_EuS_conv',
-        max_film_index=2,
-        max_substrate_index=2,
-        length_tol=0.06,
-        angle_tol=0.06,
-        area_tol=0.06,
-        max_area=400,
+        substrate='./poscars/GaAs.cif',
+        film='./poscars/MnAs.cif',
+        max_film_index=1,
+        max_substrate_index=1,
+        length_tol=0.01,
+        angle_tol=0.01,
+        area_tol=0.01,
+        max_area=500,
     )
+    ms.substrate_inds = np.array([
+        [1,0,0],
+        [1,1,0],
+        [1,1,1],
+        [1,1,3],
+    ])
+    ms.film_inds = np.array([
+        [0,0,1],
+        [1,1,0],
+        [1,-1,0],
+        [1,0,1],
+        [1,1,1],
+        [1,-1,1],
+    ])
     ms.run_scan()
-    ms.plot_misfits(figsize=(6,5))
+    ms.plot_misfits(figsize=(5.4,5), fontsize=16, labelrotation=0)
     
 
 

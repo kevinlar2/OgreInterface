@@ -26,10 +26,10 @@ films = SurfaceGenerator.from_file(
 inter = InterfaceGenerator(
     substrate=subs.slabs[1],
     film=films.slabs[0],
-    length_tol=0.06,
-    angle_tol=0.06,
-    area_tol=0.06,
-    max_area=400,
+    length_tol=0.005,
+    angle_tol=0.005,
+    area_tol=0.005,
+    max_area=3500,
     interfacial_distance=2.2,
     vacuum=50,
 )

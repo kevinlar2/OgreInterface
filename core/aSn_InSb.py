@@ -1,6 +1,8 @@
 from generate import InterfaceGenerator, SurfaceGenerator
 from vaspvis.utils import passivator
+from vaspvis.utils import get_periodic_vacuum
 from pymatgen.io.vasp.inputs import Poscar
+from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
 
 sub_layer = 5
 film_layer = 5
@@ -16,7 +18,7 @@ films = SurfaceGenerator.from_file(
     './poscars/POSCAR_aSn_conv',
     miller_index=[1,1,0],
     layers=film_layer,
-    vacuum=4.58842 / 4,
+    vacuum=20,
 )
 
 #  subs.slabs[3].remove_layers(num_layers=5)
@@ -54,4 +56,16 @@ for i, interface in enumerate(interfaces):
         #  frac_coords=True,
         #  to_unit_cell=True,
     #  )
-    Poscar(interface.interface).write_file(f'./test/aSn_InSb/POSCAR_{i}')
+
+    #  reduced_interface_struc = interface_struc.get_reduced_structure()
+    #  sg = SpacegroupAnalyzer(reduced_interface_struc)
+    #  refined_interface_struc = sg.get_conventional_standard_structure()
+    #  primitive_interface_struc = refined_interface_struc.get_reduced_structure()
+    #  primitive_interface_struc = primitive_interface_struc.get_primitive_structure()
+    aSn_film = get_periodic_vacuum(
+        slab=interface.strained_film.get_primitive_structure(),
+        bulk='./poscars/POSCAR_aSn_conv',
+        vacuum=40,
+        miller_index=[1,1,0],
+    )
+    Poscar(aSn_film).write_file(f'./test/aSn_InSb/POSCAR_{i}')

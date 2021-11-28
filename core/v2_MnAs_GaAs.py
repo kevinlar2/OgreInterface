@@ -75,31 +75,35 @@ sub_layer = 5
 film_layer = 5
 
 subs = SurfaceGenerator.from_file(
-    './poscars/POSCAR_InAs_conv',
-    miller_index=[1,0,0],
+    './poscars/GaAs.cif',
+    miller_index=[1,1,0],
     layers=sub_layer,
     vacuum=5,
 )
 
 films = SurfaceGenerator.from_file(
-    './poscars/POSCAR_Al_conv',
-    miller_index=[1,0,0],
+    './poscars/MnAs.cif',
+    miller_index=[1,-1,0],
     layers=film_layer,
     vacuum=5,
 )
 
+#  films.slabs[0].remove_layers(1)
+
 inter = InterfaceGenerator(
-    substrate=subs.slabs[2],
+    substrate=subs.slabs[0],
     film=films.slabs[0],
     length_tol=0.01,
     angle_tol=0.01,
     area_tol=0.01,
-    max_area=400,
+    max_area=500,
     interfacial_distance=2,
     vacuum=30,
 )
 
-interface = inter.generate_interfaces()[0]
+rs = {'As': 1.19, 'Ga': 1.22, 'Mn': 1.5}
+
+interface = inter.generate_interfaces()[2]
 
 
 struc = interface.interface
@@ -112,13 +116,13 @@ sub_shift_inds = layer_inds[np.max(np.where(heights < interface_height))]
 species = np.array(struc.species, dtype=str)
 film_inds = np.where(struc.frac_coords[:,-1] > interface_height)[0]
 
-rs = {'As': 1.19, 'In': 1.42, 'Al': 1.43}
+#  rs = {'As': 1.19, 'In': 1.42, 'Al': 1.43}
 #  rs = {'In': 1.582, 'As': 1.27, 'Al': 1.43}
 radii = np.array([rs[i] for i in species]) 
 
 grid_a = 200
 grid_b = 200
-shift_dist_a = [-0.5, 0.5]
+shift_dist_a = [-0.07, 0.07]
 shift_dist_b = [-0.5, 0.5]
 
 
@@ -172,7 +176,7 @@ cbar.ax.tick_params(labelsize=12)
 cbar.ax.locator_params(nbins=4)
 cbar.set_label('Score', fontsize=12)
 ax.tick_params(labelsize=12)
-ax.set_xlim(-1.5,1.5)
-ax.set_ylim(-1.5,1.5)
+#  ax.set_xlim(-1.5,1.5)
+#  ax.set_ylim(-1.5,1.5)
 fig.tight_layout()
-fig.savefig('graph.png')
+fig.savefig('graph_MnAs.png')

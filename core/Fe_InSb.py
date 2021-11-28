@@ -7,14 +7,14 @@ film_layer = 5
 
 subs = SurfaceGenerator.from_file(
     './poscars/POSCAR_InSb_conv',
-    miller_index=[2,1,0],
+    miller_index=[0,0,1],
     layers=sub_layer,
     vacuum=5,
 )
 
 films = SurfaceGenerator.from_file(
     './poscars/POSCAR_Fe_conv',
-    miller_index=[2,1,0],
+    miller_index=[0,0,1],
     layers=film_layer,
     vacuum=5,
 )
@@ -28,13 +28,14 @@ inter = InterfaceGenerator(
     length_tol=0.02,
     angle_tol=0.02,
     area_tol=0.02,
-    max_area=500,
+    max_area=200,
     interfacial_distance=2.2,
     #  sub_strain_frac=0,
     vacuum=2,
 )
 
 interfaces = inter.generate_interfaces()
+interfaces[0].run_surface_matching([0,1], [0,1])
 
 for i, interface in enumerate(interfaces):
     #  pas = passivator(

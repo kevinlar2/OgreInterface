@@ -48,13 +48,13 @@ inter = InterfaceGenerator(
     angle_tol=0.01,
     area_tol=0.01,
     max_area=500,
-    interfacial_distance=2,
+    interfacial_distance=1.5,
     vacuum=30,
 )
 
 rs = {'As': 1.19, 'Ga': 1.22, 'Mn': 1.5}
 
-interface = inter.generate_interfaces()[1]
+interface = inter.generate_interfaces()[2]
 Poscar(interface.interface).write_file('POSCAR_test')
 
 
@@ -103,16 +103,16 @@ radii = np.array([rs[i] for i in species])
 
 #  grid_a = 40
 #  grid_b = 10
-grid_a = 250
-grid_b = 250
+grid_a = 150
+grid_b = 150
 #  shift_dist_a = [-0.1, 0.1]
 #  shift_dist_b = [-0.7, 0.7]
 #  shift_dist_b = [-0.001, 0.001]
 #  shift_dist_a = [-0.7, 0.7]
 #  shift_dist_a = [0.04242, 2/15]
 #  shift_dist_b = [0, 1]
-shift_dist_a = [0,1]
-shift_dist_b = [0.3,-0.4]
+shift_dist_a = [-0.2,0.2]
+shift_dist_b = [-0.2, 0.2]
 
 frac_shifts = np.array(list(product(
     np.linspace(shift_dist_a[0], shift_dist_a[1], grid_a),
@@ -168,7 +168,7 @@ cbar.ax.locator_params(nbins=4)
 cbar.set_label('Score', fontsize=12)
 ax.tick_params(labelsize=12)
 fig.tight_layout()
-fig.savefig('graph_low.png')
+fig.savefig('graph_2.png')
 
 
 

@@ -10,7 +10,7 @@ setup(
     long_description=long_description,
     long_description_content_type='text/markdown',
     packages=find_packages(),
-    install_requires = ['pymatgen', 'matplotlib', 'numpy', 'tqdm', 'ase', 'plotly'],
+    install_requires = ['pymatgen>=2022.0.17', 'matplotlib', 'numpy', 'tqdm', 'ase', 'plotly'],
     url='https://github.com/DerekDardzinski/OgreInterfaces',
     authour='Derek Dardzinski',
     authour_email='dardzinski.derek@gmail.com',

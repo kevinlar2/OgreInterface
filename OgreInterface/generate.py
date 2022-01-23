@@ -272,21 +272,23 @@ class InterfaceGenerator:
 
         match_list = list(matches)
 
-        print(match_list)
+        # print(match_list[0])
+        # print(match_list[0].__dict__.keys())
         
         if len(match_list) == 0:
             return None
         else:
-            film_sl_vecs = np.array([match['film_sl_vecs'] for match in match_list])
-            sub_sl_vecs = np.array([match['sub_sl_vecs'] for match in match_list])
-            match_area = np.array([match['match_area'] for match in match_list])
-            film_vecs = np.array([match['film_vecs'] for match in match_list])
-            sub_vecs = np.array([match['sub_vecs'] for match in match_list])
+
+            film_sl_vecs = np.array([match.film_sl_vectors for match in match_list])
+            sub_sl_vecs = np.array([match.substrate_sl_vectors for match in match_list])
+            match_area = np.array([match.match_area for match in match_list])
+            film_vecs = np.array([match.film_vectors for match in match_list])
+            sub_vecs = np.array([match.substrate_vectors for match in match_list])
             film_transformations = np.array(
-                [match['film_transformation'] for match in match_list]
+                [match.film_transformation for match in match_list]
             )
             substrate_transformations = np.array(
-                [match['substrate_transformation'] for match in match_list]
+                [match.substrate_transformation for match in match_list]
             )
 
             film_3x3_transformations = np.array(

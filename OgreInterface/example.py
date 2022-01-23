@@ -19,7 +19,7 @@ films = SurfaceGenerator.from_file(
 )
 
 # Select which Surface you want from the list of Surface's
-sub = subs.slabs[0]
+sub = subs.slabs[2]
 film = films.slabs[0]
 
 # Optional way to remove layers from the substrate or film (Usefull for complete control of termination)
@@ -46,23 +46,25 @@ for i, interface in enumerate(interfaces):
 
     # You can run surface matching
     interface.run_surface_matching(
-        2,
+        scan_size=4,
         output=f'PES_{i}.png',
         grid_density_x=250,
         grid_density_y=250,
         fontsize=20,
     )
+
     # You can passivate the interface with hydrogens
     passivated_interface = passivator(
         struc=interface.interface,
         bot=True,
         top=False,
         symmetrize=False,
-        passivated_struc='./test/Al-InAs111A/CONTCAR'
+        # passivated_struc='CONTCAR' # Uncomment this line if there is a CONTCAR available with relaxed hydrogens
     )
     
     # Write the unpassivated structure
-    Poscar(interface.interface).write_file(f'./test/score/POSCAR_{i}')
+    Poscar(interface.interface).write_file(f'POSCAR_{i}')
 
     # Write the passivated structure
-    Poscar(passivated_interface).write_file(f'./test/score/POSCAR_pas_{i}')
+    Poscar(passivated_interface).write_file(f'POSCAR_pas_{i}')
+

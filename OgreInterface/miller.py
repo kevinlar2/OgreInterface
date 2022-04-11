@@ -10,7 +10,7 @@ import matplotlib.pyplot as plt
 from matplotlib.collections import PatchCollection
 from matplotlib.colors import Normalize
 from mpl_toolkits.axes_grid1.axes_divider import make_axes_locatable
-from mpl_toolkits.axes_grid1.colorbar import colorbar
+# from mpl_toolkits.axes_grid1.colorbar import colorbar
 from functools import reduce
 
 
@@ -174,25 +174,8 @@ class MillerSearch(object):
         figsize=(5.5,4),
         labelrotation=20,
     ):
-        #  ylabels = [f'{self._cubic_to_hex(i)}'.replace('[', '(').replace(']', ')') for i in self.film_inds]
-        xlabels = [f'{i}'.replace('[', '(').replace(']', ')') for i in self.substrate_inds]
-
-        print(self._hex_to_cubic([-1,1,0,0]))
-
-        ylabels = []
-        for i in self.film_inds:
-            i = self._cubic_to_hex(i)
-            neg_inds = i < 0
-            i[neg_inds] *= -1
-            str_array = i.astype(str)
-            str_array = np.array([r'$bar{' + f'{j}' + '}$' if n else j for j, n in zip(i, neg_inds)])
-            str_inds = f'{str_array}'.replace('[', '(').replace(']', ')').replace("'", "")
-            if 'bar' in str_inds:
-                str_inds = str_inds.replace('bar', '\\bar')
-
-            print(str_inds)
-            ylabels.append(str_inds)
-
+        ylabels = [f'{i}'.replace('[', '(').replace(']', ')').replace(' ', '') for i in self.film_inds]
+        xlabels = [f'{i}'.replace('[', '(').replace(']', ')').replace(' ', '') for i in self.substrate_inds]
 
         N = len(self.film_inds)
         M = len(self.substrate_inds)
@@ -250,33 +233,18 @@ class MillerSearch(object):
 
 
 if __name__ == "__main__":
-    import itertools
     ms = MillerSearch(
-        substrate='./poscars/GaAs.cif',
-        film='./poscars/MnAs.cif',
-        max_film_index=1,
-        max_substrate_index=1,
+        substrate='./dd-poscars/POSCAR_InAs_conv',
+        film='./dd-poscars/POSCAR_Al_conv',
+        max_film_index=2,
+        max_substrate_index=2,
         length_tol=0.01,
         angle_tol=0.01,
         area_tol=0.01,
         max_area=500,
     )
-    ms.substrate_inds = np.array([
-        [1,0,0],
-        [1,1,0],
-        [1,1,1],
-        [1,1,3],
-    ])
-    ms.film_inds = np.array([
-        [0,0,1],
-        [1,1,0],
-        [1,-1,0],
-        [1,0,1],
-        [1,1,1],
-        [1,-1,1],
-    ])
     ms.run_scan()
-    ms.plot_misfits(figsize=(5.4,5), fontsize=16, labelrotation=0)
+    ms.plot_misfits(figsize=(6.5,5), fontsize=17, labelrotation=0)
     
 
 

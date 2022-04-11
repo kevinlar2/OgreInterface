@@ -85,16 +85,21 @@ class Surface:
         self.area = np.linalg.norm(np.cross(self.slab_pmg.lattice.matrix[0], self.slab_pmg.lattice.matrix[1]))
 
     def remove_layers(self, num_layers, top=False, atol=None):
-        group_inds, _ = group_layers(structure=self.slab_pmg, atol=atol)
+        group_inds_conv, _ = group_layers(structure=self.slab_pmg, atol=atol)
+        group_inds_prim, _ = group_layers(structure=self.primitive_slab_pmg, atol=atol)
         if top:
-            group_inds = group_inds[::-1]
+            group_inds_conv = group_inds_conv[::-1]
+            group_inds_prim = group_inds_prim[::-1]
         
-        to_delete = []
+        to_delete_conv = []
+        to_delete_prim = []
         for i in range(num_layers):
-            to_delete.extend(group_inds[i])
+            to_delete_conv.extend(group_inds_conv[i])
+            to_delete_prim.extend(group_inds_prim[i])
 
-        self.slab_pmg.remove_sites(to_delete)
-        self.primitive_slab_pmg = self._get_primitive(self.slab_pmg)
+        self.slab_pmg.remove_sites(to_delete_conv)
+        self.primitive_slab_pmg.remove_sites(to_delete_prim)
+        # self.primitive_slab_pmg = self._get_primitive(self.slab_pmg)
 
     def passivate(self, bot=True, top=True, passivated_struc=None):
         primitive_pas = passivator(
@@ -235,6 +240,7 @@ class Interface:
     def write_file(self, output='POSCAR_interface'):
         Poscar(self.interface).write_file(output)
 
+
     def shift_film(self, shift, fractional=False, inplace=False):
         if fractional:
             frac_shift = np.array(shift)
@@ -244,8 +250,7 @@ class Interface:
             if shift[-1] + self.interfacial_distance < 0.5:
                 raise ValueError(f"The film shift results in an interfacial distance of less than 0.5 Angstroms which is non-physical")
             
-            norms = np.linalg.norm(self.interface.lattice.matrix, axis=1)
-            frac_shift = np.divide(shift, norms)
+            frac_shift = self.interface.lattice.get_fractional_coords(shift)
 
         film_ind = np.where((self.interface.frac_coords[:,-1] > self.interface_height) & (self.interface.frac_coords[:,-1] < 0.99))[0]
 
@@ -695,9 +700,6 @@ class Interface:
         Y_mask = np.logical_or((Y <= neg_x_val), (Y >= pos_x_val))
         total_mask = np.logical_or(X_mask, Y_mask)
 
-        print('Total values =', len(X_mask.ravel()))
-        print('NaN values =', total_mask.sum())
-
         #  X[total_mask] = np.nan
         #  Y[total_mask] = np.nan
         Z[total_mask] = np.nan
@@ -755,7 +757,7 @@ class Interface:
 
         mus = cart_shifts[:,:2]
         sigmas = [(nr/3) * np.eye(2) for nr in new_r]
-        vol = 0.75 * np.pi * new_r**3
+        vol = (4/3) * np.pi * new_r**3
         vol /= vol.max()
         x = np.c_[plot_coords[:,0], plot_coords[:,1]]
 
@@ -778,6 +780,7 @@ class Interface:
         grid_density_x=200,
         grid_density_y=200,
         fontsize=18,
+        cmap='jet',
         output='PES.png',
     ):
         """
@@ -836,7 +839,7 @@ class Interface:
             X,
             Y,
             Z,
-            cmap='jet',
+            cmap=cmap,
             shading='gouraud',
             norm=Normalize(vmin=np.nanmin(Z), vmax=np.nanmax(Z)),
         )
@@ -852,91 +855,91 @@ class Interface:
         fig.savefig(output)
 
 
-    def get_ranking_score(self, radius_dict, grid_size=0.05):
-        int_struc_sub_sub, int_struc_film_sub = self._setup_for_surface_matching(
-            layers_sub=4,
-            layers_film=1,
-        )
+    # def get_ranking_score(self, radius_dict, grid_size=0.05):
+    #     int_struc_sub_sub, int_struc_film_sub = self._setup_for_surface_matching(
+    #         layers_sub=4,
+    #         layers_film=1,
+    #     )
 
-        int_struc_sub_film, int_struc_film_film = self._setup_for_surface_matching(
-            layers_sub=1,
-            layers_film=4,
-        )
+    #     int_struc_sub_film, int_struc_film_film = self._setup_for_surface_matching(
+    #         layers_sub=1,
+    #         layers_film=4,
+    #     )
 
-        species = np.unique(
-            np.array(int_struc_sub_sub.species + int_struc_film_film.species, dtype=str)
-        )
+    #     species = np.unique(
+    #         np.array(int_struc_sub_sub.species + int_struc_film_film.species, dtype=str)
+    #     )
 
-        int_sub_sub_unit_cell = smu.generate_unit_cell_tensor(
-            structure=int_struc_sub_sub,
-            grid_size=grid_size,
-            return_plotting_info=False,
-        ) 
-        int_film_sub_unit_cell = np.copy(int_sub_sub_unit_cell) 
+    #     int_sub_sub_unit_cell = smu.generate_unit_cell_tensor(
+    #         structure=int_struc_sub_sub,
+    #         grid_size=grid_size,
+    #         return_plotting_info=False,
+    #     ) 
+    #     int_film_sub_unit_cell = np.copy(int_sub_sub_unit_cell) 
 
-        int_sub_film_unit_cell = smu.generate_unit_cell_tensor(
-            structure=int_struc_sub_film,
-            grid_size=grid_size,
-            return_plotting_info=False,
-        ) 
-        int_film_film_unit_cell = np.copy(int_sub_film_unit_cell) 
+    #     int_sub_film_unit_cell = smu.generate_unit_cell_tensor(
+    #         structure=int_struc_sub_film,
+    #         grid_size=grid_size,
+    #         return_plotting_info=False,
+    #     ) 
+    #     int_film_film_unit_cell = np.copy(int_sub_film_unit_cell) 
 
-        radii_int_sub = {
-            s: smu.get_radii(
-                structure=int_struc_sub_sub,
-                radius=radius_dict[s],
-                grid_size=grid_size
-            ) for s in species
-        }
+    #     radii_int_sub = {
+    #         s: smu.get_radii(
+    #             structure=int_struc_sub_sub,
+    #             radius=radius_dict[s],
+    #             grid_size=grid_size
+    #         ) for s in species
+    #     }
 
-        radii_int_film = {
-            s: smu.get_radii(
-                structure=int_struc_film_film,
-                radius=radius_dict[s],
-                grid_size=grid_size
-            ) for s in species
-        }
+    #     radii_int_film = {
+    #         s: smu.get_radii(
+    #             structure=int_struc_film_film,
+    #             radius=radius_dict[s],
+    #             grid_size=grid_size
+    #         ) for s in species
+    #     }
 
-        ellipsoids_int_sub = {
-            s: smu.generate_ellipsoid(radii_int_sub[s]) for s in species
-        }
+    #     ellipsoids_int_sub = {
+    #         s: smu.generate_ellipsoid(radii_int_sub[s]) for s in species
+    #     }
 
-        ellipsoids_int_film = {
-            s: smu.generate_ellipsoid(radii_int_film[s]) for s in species
-        }
+    #     ellipsoids_int_film = {
+    #         s: smu.generate_ellipsoid(radii_int_film[s]) for s in species
+    #     }
 
-        int_sub_sub_voxel, int_sub_sub_overlap = smu.append_atoms(
-            structure=int_struc_sub_sub,
-            unit_cell=int_sub_sub_unit_cell,
-            ellipsoids=ellipsoids_int_sub
-        )
+    #     int_sub_sub_voxel, int_sub_sub_overlap = smu.append_atoms(
+    #         structure=int_struc_sub_sub,
+    #         unit_cell=int_sub_sub_unit_cell,
+    #         ellipsoids=ellipsoids_int_sub
+    #     )
 
-        int_film_sub_voxel, int_film_sub_overlap = smu.append_atoms(
-            structure=int_struc_film_sub,
-            unit_cell=int_film_sub_unit_cell,
-            ellipsoids=ellipsoids_int_sub
-        )
+    #     int_film_sub_voxel, int_film_sub_overlap = smu.append_atoms(
+    #         structure=int_struc_film_sub,
+    #         unit_cell=int_film_sub_unit_cell,
+    #         ellipsoids=ellipsoids_int_sub
+    #     )
 
-        int_sub_film_voxel, int_sub_film_overlap = smu.append_atoms(
-            structure=int_struc_sub_film,
-            unit_cell=int_sub_film_unit_cell,
-            ellipsoids=ellipsoids_int_film
-        )
+    #     int_sub_film_voxel, int_sub_film_overlap = smu.append_atoms(
+    #         structure=int_struc_sub_film,
+    #         unit_cell=int_sub_film_unit_cell,
+    #         ellipsoids=ellipsoids_int_film
+    #     )
 
-        int_film_film_voxel, int_film_film_overlap = smu.append_atoms(
-            structure=int_struc_film_film,
-            unit_cell=int_film_film_unit_cell,
-            ellipsoids=ellipsoids_int_film
-        )
+    #     int_film_film_voxel, int_film_film_overlap = smu.append_atoms(
+    #         structure=int_struc_film_film,
+    #         unit_cell=int_film_film_unit_cell,
+    #         ellipsoids=ellipsoids_int_film
+    #     )
 
-        O_sub = (int_sub_sub_overlap > 1).sum() / int_sub_sub_voxel.sum()
-        O_film = (int_film_film_overlap > 1).sum() / int_film_film_voxel.sum()
-        O_int_sub = (int_sub_sub_overlap + int_film_sub_overlap > 1).sum() / (int_sub_sub_voxel + int_film_sub_voxel).sum()
-        O_int_film = (int_sub_film_overlap + int_film_film_overlap > 1).sum() / (int_sub_film_voxel + int_film_film_voxel).sum()
+    #     O_sub = (int_sub_sub_overlap > 1).sum() / int_sub_sub_voxel.sum()
+    #     O_film = (int_film_film_overlap > 1).sum() / int_film_film_voxel.sum()
+    #     O_int_sub = (int_sub_sub_overlap + int_film_sub_overlap > 1).sum() / (int_sub_sub_voxel + int_film_sub_voxel).sum()
+    #     O_int_film = (int_sub_film_overlap + int_film_film_overlap > 1).sum() / (int_sub_film_voxel + int_film_film_voxel).sum()
 
-        ranking_score = np.abs(O_int_sub - O_sub) - np.abs(O_int_film - O_film)
+    #     ranking_score = np.abs(O_int_sub - O_sub) - np.abs(O_int_film - O_film)
 
-        return ranking_score
+    #     return ranking_score
 
 
 

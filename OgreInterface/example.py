@@ -1,6 +1,22 @@
 from generate import InterfaceGenerator, SurfaceGenerator
+from miller import MillerSearch
 from vaspvis.utils import passivator
 from pymatgen.io.vasp.inputs import Poscar
+
+
+# A Miller index scan can be performed as follows
+ms = MillerSearch(
+    substrate='./poscars/POSCAR_InAs_conv',
+    film='./poscars/POSCAR_Al_conv',
+    max_film_index=2,
+    max_substrate_index=2,
+    length_tol=0.01,
+    angle_tol=0.01,
+    area_tol=0.01,
+    max_area=500,
+)
+ms.run_scan()
+ms.plot_misfits(figsize=(6.5,5), fontsize=17, labelrotation=0)
 
 # Generate a list of InAs(111) Surface classes with different terminations
 subs = SurfaceGenerator.from_file(

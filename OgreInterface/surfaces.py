@@ -21,6 +21,7 @@ from ase.build import make_supercell, stack
 from ase.spacegroup import get_spacegroup
 from ase.geometry import get_layers
 from ase.build.general_surface import ext_gcd
+from ase.data.colors import jmol_colors
 
 import numpy as np
 from math import gcd
@@ -34,9 +35,11 @@ from multiprocessing import Pool, cpu_count
 from scipy.stats import multivariate_normal
 from scipy.signal import argrelextrema
 from scipy.spatial.distance import cdist
-from sklearn.cluster import AffinityPropagation
+from sklearn.cluster import AffinityPropagation, MeanShift
 import copy
 import time
+from matplotlib.patches import Circle
+from matplotlib.collections import PatchCollection
 
 
 class Surface:
@@ -704,25 +707,39 @@ class Interface:
         #  Y[total_mask] = np.nan
         Z[total_mask] = np.nan
 
-    def _pdf(self, x, v, m, s):
-        return v*multivariate_normal.pdf(x, m, s**2)
+    # def _pdf(self, x, v, m, s):
+    #     return v*multivariate_normal.pdf(x, m, s**2)
 
-    def _norm_overlap(
+    # def _generate_PES(self, x, y, sigmas, mus, scales):
+    #     z = np.zeros(x.shape)
+    #     for sigma, mu, scale in zip(sigmas, mus, scales):
+    #         z += scale * (1 / (2 * np.pi * sigma**2)) * np.exp(-((x - mu[0])**2 + (y - mu[1])**2) / (2 * sigma**2))
+
+    #     return z
+
+    def _generate_PES(self, x, y, sigmas, mus, scales):
+        x = np.expand_dims(x, 0)
+        y = np.expand_dims(y, 0)
+        e = np.exp(-((x - mus[:,0][:,None])**2 + (y - mus[:,1][:,None])**2) / (2 * sigmas[:,None]**2))
+        z = scales[:,None] * (1 / (2 * np.pi * sigmas[:,None]**2)) * e
+        # for sigma, mu, scale in zip(sigmas, mus, scales):
+        #     z += scale * (1 / (2 * np.pi * sigma**2)) * np.exp(-((x - mu[0])**2 + (y - mu[1])**2) / (2 * sigma**2))
+
+        return z.sum(axis=0)
+
+    def _get_score_function_params(
             self,
             si,
             fi, 
             r,
-            grid_density_x,
-            grid_density_y,
-            scaling_matrix
+            # grid_density_x,
+            # grid_density_y,
+            # scaling_matrix,
+            sub_z_shift = 0,
+            film_z_shift = 0,
     ):
         coords = self.interface.frac_coords
         matrix = self.interface.lattice.matrix
-        X, Y = np.meshgrid(
-            np.linspace(0, 1, grid_density_x),
-            np.linspace(0, 1, grid_density_y),
-        )
-        plot_coords = np.c_[X.ravel(), Y.ravel(), np.zeros(len(Y.ravel()))].dot(matrix)
 
         x1 = coords[np.repeat(si, len(fi)), 0]
         x2 = coords[np.tile(fi, len(si)), 0]
@@ -730,8 +747,8 @@ class Interface:
         y1 = coords[np.repeat(si, len(fi)), 1]
         y2 = coords[np.tile(fi, len(si)), 1]
 
-        z1 = coords[np.repeat(si, len(fi)), 2]
-        z2 = coords[np.tile(fi, len(si)), 2]
+        z1 = coords[np.repeat(si, len(fi)), 2] + sub_z_shift
+        z2 = coords[np.tile(fi, len(si)), 2] + film_z_shift
 
         r1 = r[np.repeat(si, len(fi))]
         r2 = r[np.tile(fi, len(si))]
@@ -747,31 +764,167 @@ class Interface:
 
         r1p = np.concatenate([r1 for _ in range(9)])
         r2p = np.concatenate([r2 for _ in range(9)])
-        x_shift = np.concatenate([x_shift-1, x_shift-1, x_shift-1, x_shift, x_shift, x_shift, x_shift+1, x_shift+1, x_shift+1])
-        y_shift = np.concatenate([y_shift-1, y_shift, y_shift+1, y_shift-1, y_shift, y_shift+1, y_shift-1, y_shift, y_shift+1])
+        x_shift = np.concatenate([
+            x_shift-1,
+            x_shift-1,
+            x_shift-1,
+            x_shift,
+            x_shift,
+            x_shift,
+            x_shift+1,
+            x_shift+1,
+            x_shift+1 
+        ])
+        y_shift = np.concatenate([
+            y_shift-1,
+            y_shift,
+            y_shift+1,
+            y_shift-1,
+            y_shift,
+            y_shift+1,
+            y_shift-1,
+            y_shift,
+            y_shift+1
+        ])
         z_shift = np.concatenate([z_shift for _ in range(9)])
 
         frac_shifts = np.c_[x_shift, y_shift, z_shift]
         cart_shifts = frac_shifts.dot(matrix)
-        new_r = np.sqrt((r1p + r2p)**2 - cart_shifts[:,-1]**2)
+        overlap_r = np.sqrt((r1p + r2p)**2 - cart_shifts[:,-1]**2)
 
         mus = cart_shifts[:,:2]
-        sigmas = [(nr/3) * np.eye(2) for nr in new_r]
-        vol = (4/3) * np.pi * new_r**3
-        vol /= vol.max()
-        x = np.c_[plot_coords[:,0], plot_coords[:,1]]
+        sigmas = overlap_r / 3
+        scales = (4/3) * np.pi * overlap_r**3
+        scales /= scales.max()
+        # x, y = plot_coords[:,0], plot_coords[:,1]
 
-        inputs = zip(repeat(x), vol, mus, sigmas)
+        # ns = self._pdf(x=x, y=y, sigmas=sigmas, mus=mus, scales=vol)
 
-        pool = Pool(cpu_count())
-        pdfs = pool.starmap(self._pdf, inputs)
-        pool.close()
-        pool.join()
-        ns = np.array(pdfs).sum(axis=0).reshape(X.shape)
+        # X_new, Y_new, Z_new = self._generate_supercell(X, Y, ns.reshape(X.shape), scaling_matrix) 
 
-        X_new, Y_new, Z_new = self._generate_supercell(X, Y, ns, scaling_matrix) 
+        # return X_new, Y_new, Z_new
+        return mus, sigmas, scales
 
-        return X_new, Y_new, Z_new
+    def _gradient(self, x, y, sigmas, mus, scales):
+        x = np.expand_dims(x, 0)
+        y = np.expand_dims(y, 0)
+        e = np.exp(-((x - mus[:,0][:,None])**2 + (y - mus[:,1][:,None])**2) / (2 * sigmas[:,None]**2))
+        dx = - scales[:,None] * ((x - mus[:,0][:,None]) / (2 * np.pi * sigmas[:,None]**4)) * e
+        dy = - scales[:,None] * ((y - mus[:,1][:,None]) / (2 * np.pi * sigmas[:,None]**4)) * e
+
+        return dx.sum(axis=0), dy.sum(axis=0)
+
+    def _init_gd_positions(self, mus, sigmas):
+        angle = 15 * (np.pi / 180)
+        xs, ys = [], []
+        for mu, sigma in zip(mus, sigmas):
+            long_side = np.cos(angle) * (1 * sigma)
+            short_side = np.sin(angle) * (1 * sigma)
+            xs.extend([
+                mu[0] - long_side,
+                mu[0] + short_side,
+                mu[0] + long_side,
+                mu[0] - short_side
+            ])
+            ys.extend([
+                mu[1] + short_side,
+                mu[1] + long_side,
+                mu[1] - short_side,
+                mu[1] - long_side,
+            ])
+
+        xs = np.array(xs)
+        ys = np.array(ys)
+
+        matrix = self.interface.lattice.matrix
+        inv_matrix = self.interface.lattice.inv_matrix
+        frac_xy = np.c_[xs, ys, np.zeros(xs.shape)].dot(inv_matrix)[:,:2]
+
+        inds_in_cell = ((frac_xy >= 0) & (frac_xy <= 1)).all(axis=1)
+        coords_in_cell = np.c_[frac_xy[inds_in_cell], np.zeros(inds_in_cell.sum())].dot(matrix)
+
+        xs_in_cell = coords_in_cell[:,0]
+        ys_in_cell = coords_in_cell[:,1]
+
+        return xs_in_cell, ys_in_cell
+
+
+    def adam(self, x, y, sigmas, mus, scales, beta1=0.9, beta2=0.999, eta=0.0075, epsilon=1e-7, iterations=2000):
+        opt_x, opt_y = [np.copy(x)], [np.copy(y)]
+        m_x, m_y = np.zeros(x.shape), np.zeros(y.shape)
+        v_x, v_y = np.zeros(x.shape), np.zeros(y.shape)
+
+        for i in range(iterations):
+            # s = time.time()
+            dx, dy = self._gradient(x=opt_x[i], y=opt_y[i], sigmas=sigmas, mus=mus, scales=scales)
+            # print('gradient =', time.time() - s)
+            m_xi = beta1 * m_x + (1 - beta1) * dx
+            m_yi = beta1 * m_y + (1 - beta1) * dy
+            v_xi = beta2 * v_x + (1 - beta2) * dx**2
+            v_yi = beta2 * v_y + (1 - beta2) * dy**2
+            m_x = m_xi
+            m_y = m_yi
+            v_x = v_xi
+            v_y = v_yi
+            m_hat_x = m_xi / (1 - beta1)
+            m_hat_y = m_yi / (1 - beta1)
+            v_hat_x = v_xi / (1 - beta2)
+            v_hat_y = v_yi / (1 - beta2)
+            update_x = m_hat_x / (np.sqrt(v_hat_x) + epsilon)
+            update_y = m_hat_y / (np.sqrt(v_hat_y) + epsilon)
+            opt_x.append(opt_x[i] - eta * update_x)
+            opt_y.append(opt_y[i] - eta * update_y)
+
+        opt_x = np.vstack(opt_x)
+        opt_y = np.vstack(opt_y)
+        
+        matrix = self.interface.lattice.matrix
+        inv_matrix = self.interface.lattice.inv_matrix
+        frac_coords = np.c_[opt_x.ravel(), opt_y.ravel(), np.zeros(len(opt_y.ravel()))].dot(inv_matrix)
+        frac_x = frac_coords[:,0].reshape(opt_x.shape)
+        frac_y = frac_coords[:,1].reshape(opt_y.shape)
+
+        frac_x = np.hstack([
+            frac_x-1,
+            frac_x-1,
+            frac_x-1,
+            frac_x,
+            frac_x,
+            frac_x,
+            frac_x+1,
+            frac_x+1,
+            frac_x+1 
+        ])
+        frac_y = np.hstack([
+            frac_y-1,
+            frac_y,
+            frac_y+1,
+            frac_y-1,
+            frac_y,
+            frac_y+1,
+            frac_y-1,
+            frac_y,
+            frac_y+1
+        ])
+
+        cart_coords = np.c_[frac_x.ravel(), frac_y.ravel(), np.zeros(len(frac_x.ravel()))].dot(matrix)
+        cart_x = cart_coords[:,0].reshape(frac_x.shape)
+        cart_y = cart_coords[:,1].reshape(frac_y.shape)
+        final_xs, final_ys= cart_x[-1], cart_y[-1]
+        clustering = MeanShift(bandwidth=self._get_clustering_bandwidth(mus)).fit(np.c_[final_xs, final_ys])
+        centers = clustering.cluster_centers_
+
+        frac_centers = np.c_[centers, np.zeros(len(centers))].dot(inv_matrix)[:,:2]
+        inds_in_cell = ((frac_centers.round(2) >= 0) & (frac_centers.round(2) < 1)).all(axis=1)
+        centers_in_cell = np.c_[frac_centers[inds_in_cell], np.zeros(inds_in_cell.sum())].dot(matrix)[:,:2]
+
+        return opt_x, opt_y, centers_in_cell
+
+    def _get_clustering_bandwidth(self, mus):
+        dist_mus = cdist(mus, mus)
+        min_dist = np.min(dist_mus[dist_mus != 0])
+
+        return min_dist / 3
 
     def run_surface_matching(
         self,
@@ -782,6 +935,8 @@ class Interface:
         fontsize=18,
         cmap='jet',
         output='PES.png',
+        xlims=None,
+        ylims=None,
     ):
         """
         This function runs a PES scan using the geometry based score function
@@ -805,8 +960,395 @@ class Interface:
         r = np.array([radius_dict[i] for i in species]) 
 
         layer_inds, heights = group_layers(self.interface)
-        fi = layer_inds[np.min(np.where(heights > self.interface_height))]
-        si = layer_inds[np.max(np.where(heights < self.interface_height))]
+        bot_film_ind = np.min(np.where(heights > self.interface_height))
+        top_sub_ind = np.max(np.where(heights < self.interface_height))
+        second_film_ind = bot_film_ind + 1
+        second_sub_ind = top_sub_ind - 1
+
+        fi = layer_inds[bot_film_ind]
+        fi2 = layer_inds[second_film_ind]
+        film_z_shift = heights[bot_film_ind] - heights[second_film_ind]
+        film_dist = self.interface.lattice.get_cartesian_coords([0,0,np.abs(film_z_shift)])[-1]
+
+        si = layer_inds[top_sub_ind]
+        si2 = layer_inds[second_sub_ind]
+        sub_z_shift = heights[top_sub_ind] - heights[second_sub_ind]
+        sub_dist = self.interface.lattice.get_cartesian_coords([0,0,np.abs(sub_z_shift)])[-1]
+
+        scaling_matrix, _ = self._get_scaling_matrix(
+            a=self.interface.lattice.matrix[0, :2], 
+            b=self.interface.lattice.matrix[1, :2], 
+            scan_size=scan_size
+        )
+
+        if scaling_matrix[0] == 1:
+            scaling_matrix[0] = 2
+        if scaling_matrix[1] == 1:
+            scaling_matrix[1] = 2
+
+        X_frac, Y_frac = np.meshgrid(
+            np.linspace(0, 1, grid_density_x),
+            np.linspace(0, 1, grid_density_y),
+        )
+        matrix = self.interface.lattice.matrix
+        a = matrix[0,:2]
+        b = matrix[1,:2]
+        borders = np.vstack([np.zeros(2), a, a + b, b, np.zeros(2)])
+
+        cart_coords = np.c_[
+            X_frac.ravel(),
+            Y_frac.ravel(),
+            np.zeros(len(Y_frac.ravel()))
+        ].dot(matrix)
+        X = cart_coords[:,0].reshape(X_frac.shape)
+        Y = cart_coords[:,1].reshape(Y_frac.shape)
+
+        mus_orig, sigmas_orig, scales_orig = self._get_score_function_params(
+            si=si,
+            fi=fi, 
+            r=r,
+        )
+
+        mus_sub, sigmas_sub, scales_sub = self._get_score_function_params(
+            si=si2,
+            fi=fi, 
+            r=r,
+            sub_z_shift=sub_z_shift,
+        )
+
+        mus_film, sigmas_film, scales_film = self._get_score_function_params(
+            si=si,
+            fi=fi2, 
+            r=r,
+            film_z_shift=film_z_shift,
+        )
+
+        x_init_orig, y_init_orig = self._init_gd_positions(mus=mus_orig, sigmas=sigmas_orig)
+        x_gd_orig, y_gd_orig, centers_orig = self.adam(
+            x_init_orig,
+            y_init_orig,
+            mus=mus_orig,
+            sigmas=sigmas_orig,
+            scales=scales_orig
+        )
+        PES_values_orig = self._generate_PES(
+            centers_orig[:,0],
+            centers_orig[:,1],
+            mus=mus_orig,
+            sigmas=sigmas_orig,
+            scales=scales_orig
+        ).round(4)
+        PES_values_sub = self._generate_PES(
+            centers_orig[:,0],
+            centers_orig[:,1],
+            mus=mus_sub,
+            sigmas=sigmas_sub,
+            scales=scales_sub
+        ).round(4)
+        PES_values_film = self._generate_PES(
+            centers_orig[:,0],
+            centers_orig[:,1],
+            mus=mus_film,
+            sigmas=sigmas_film,
+            scales=scales_film
+        ).round(4)
+
+        print(centers_orig)
+        print(PES_values_orig)
+        print(PES_values_film)
+        print(PES_values_sub)
+        # PES_rank_values = PES_values_orig + np.exp(-np.abs(sub_z_shift)) * PES_values_sub + np.exp(-np.abs(film_z_shift)) * PES_values_film
+        PES_rank_values = PES_values_orig + PES_values_sub + PES_values_film
+        unique_PES_values = np.unique(PES_rank_values)
+        unique_inds = [np.where(PES_rank_values == u)[0] for u in unique_PES_values]
+        print(unique_inds)
+        unique_shift_inds = [u[np.argmin(np.linalg.norm(centers_orig[u], axis=1))] for u in unique_inds]
+        print(unique_shift_inds)
+        # print(PES_rank_values[unique_shift_inds])
+        min_shift_inds = unique_shift_inds[np.argmin(PES_rank_values[unique_shift_inds])]
+        centers_orig = centers_orig[min_shift_inds]
+
+        Z_orig = self._generate_PES(
+            x=X.ravel(),
+            y=Y.ravel(),
+            mus=mus_orig,
+            sigmas=sigmas_orig,
+            scales=scales_orig
+        ).reshape(X.shape)
+        print(sigmas_orig)
+
+        Z_orig -= Z_orig.min()
+        Z_orig /= Z_orig.max()
+
+
+        # x_init_sub, y_init_sub = self._init_gd_positions(mus=mus_sub, sigmas=sigmas_sub)
+        # x_gd_sub, y_gd_sub, centers_sub = self.adam(
+        #     x_init_sub,
+        #     y_init_sub,
+        #     mus=mus_sub,
+        #     sigmas=sigmas_sub,
+        #     scales=scales_sub
+        # )
+
+        Z_sub = self._generate_PES(
+            x=X.ravel(),
+            y=Y.ravel(),
+            mus=mus_sub,
+            sigmas=sigmas_sub,
+            scales=scales_sub,
+        ).reshape(X.shape)
+
+        Z_sub -= Z_sub.min()
+        Z_sub /= Z_sub.max()
+
+
+        # x_init_film, y_init_film = self._init_gd_positions(mus=mus_film, sigmas=sigmas_film)
+        # x_gd_film, y_gd_film , centers_film = self.adam(
+        #     x_init_film,
+        #     y_init_film,
+        #     mus=mus_film,
+        #     sigmas=sigmas_film,
+        #     scales=scales_film
+        # )
+
+        Z_film = self._generate_PES(
+            x=X.ravel(),
+            y=Y.ravel(),
+            mus=mus_film,
+            sigmas=sigmas_film,
+            scales=scales_film,
+        ).reshape(X.shape)
+
+        Z_film -= Z_film.min()
+        Z_film /= Z_film.max()
+
+        x_size = borders[:,0].max() - borders[:,0].min()
+        y_size = borders[:,1].max() - borders[:,1].min()
+        ratio = y_size / x_size
+
+        if ratio < 1:
+            fig_x_size = 4.5 * (1 / ratio)
+            fig_y_size = 4.5
+        else:
+            fig_x_size = 4.5
+            fig_y_size = 4.5 * ratio
+
+        fig, ax = plt.subplots(figsize=(fig_x_size, fig_y_size), dpi=400)
+
+        Zs = [Z_orig, Z_film, Z_sub]
+        # x_gds = [x_gd_orig, x_gd_film, x_gd_sub]
+        # y_gds = [y_gd_orig, y_gd_film, y_gd_sub]
+
+        ax.set_xlabel(r"Shift in $x$ ($\AA$)", fontsize=fontsize)
+        ax.set_ylabel(r"Shift in $y$ ($\AA$)", fontsize=fontsize)
+
+        plot_ind = 0
+
+        im = ax.pcolormesh(
+            X,
+            Y,
+            Zs[plot_ind],
+            cmap=cmap,
+            shading='gouraud',
+            norm=Normalize(vmin=np.nanmin(Zs[plot_ind]), vmax=np.nanmax(Zs[plot_ind])),
+        )
+
+        # if i == 0:
+        #     ax.plot(
+        #         x_gd_orig[:,j],
+        #         y_gd_orig[i][:,j],
+        #         color='white',
+        #     )
+
+        ax.scatter(
+            centers_orig[0],
+            centers_orig[1],
+            color='white',
+            s=100,
+            marker='o'
+        )
+
+        ax.plot(
+            borders[:,0],
+            borders[:,1],
+            color='black',
+            linewidth=2,
+        )
+
+        from mpl_toolkits.axes_grid1 import make_axes_locatable
+        divider = make_axes_locatable(ax)
+        cax = divider.append_axes("top", size="5%", pad=0.1)
+
+        cbar = fig.colorbar(im, cax=cax, orientation='horizontal')
+        cbar.ax.tick_params(labelsize=fontsize)
+        cbar.ax.locator_params(nbins=2)
+        cbar.set_label('Score (Arb. Units)', fontsize=fontsize)
+        cax.xaxis.set_ticks_position("top")
+        cax.xaxis.set_label_position("top")
+        ax.tick_params(labelsize=fontsize)
+
+        ax.set_xlim(borders[:,0].min(), borders[:,0].max())
+        ax.set_ylim(borders[:,1].min(), borders[:,1].max())
+        ax.set_aspect('equal')
+
+        fig.tight_layout()
+        fig.savefig(output, bbox_inches='tight')
+
+        return centers_orig
+
+    def plot_interface(self, layers_from_interface=[2,2], alpha=0.3):
+        layer_inds, heights = group_layers(self.interface)
+        bot_film_ind = np.min(np.where(heights > self.interface_height))
+        top_sub_ind = np.max(np.where(heights < self.interface_height))
+        film_layer_inds = [bot_film_ind + i for i in range(layers_from_interface[1])]
+        sub_layer_inds = [top_sub_ind - i for i in range(layers_from_interface[0])]
+        interface_layer_inds = np.sort(film_layer_inds + sub_layer_inds)
+        interface_atom_inds = [layer_inds[i] for i in interface_layer_inds]
+        frac_coords = self.interface.frac_coords
+
+        matrix = self.interface.lattice.matrix
+        a = matrix[0,:2]
+        b = matrix[1,:2]
+        theta = np.arccos(np.dot(a,[1,0]) / np.linalg.norm(a)) + (np.pi * (matrix[-1,-1] < 0))
+        rot_mat = np.array([ 
+            [np.cos(theta), -np.sin(theta)],
+            [np.sin(theta), np.cos(theta)],
+        ])
+
+        borders = np.vstack([np.zeros(2), a, a + b, b, np.zeros(2)]).dot(rot_mat)
+        x_size = borders[:,0].max() - borders[:,0].min()
+        y_size = borders[:,1].max() - borders[:,1].min()
+        ratio = y_size / x_size
+
+        fig, ax = plt.subplots(figsize=(4,4*ratio), dpi=400)
+
+        supercell_shifts = np.array([ 
+            [0,0,0],
+            [-1,-1,0],
+            [-1,0,0],
+            [0,-1,0],
+            [-1,1,0],
+            [1,-1,0],
+            [0,1,0],
+            [1,0,0],
+            [1,1,0],
+        ])
+
+        for inds in interface_atom_inds:
+            layer_atom_coords = frac_coords[inds]
+            layer_atom_coords = (layer_atom_coords - supercell_shifts[:,None]).reshape(-1,3)
+            inds_in_cell = ((layer_atom_coords[:,:2].round(2) >= 0) & (layer_atom_coords[:,:2].round(2) <= 1)).all(axis=1)
+            layer_atom_coords = layer_atom_coords[inds_in_cell].dot(matrix)
+            layer_atom_coords = layer_atom_coords[:,:2].dot(rot_mat)
+            layer_atom_symbols = np.array(self.interface.species, dtype='str')[inds]
+            layer_atom_symbols = np.concatenate([layer_atom_symbols for _ in range(9)])[inds_in_cell]
+            layer_atom_species = np.zeros(layer_atom_symbols.shape, dtype=int)
+            layer_atom_sizes = np.zeros(layer_atom_symbols.shape, dtype=float)
+            unique_species = np.unique(layer_atom_symbols)
+            unique_elements = [Element(i) for i in unique_species]
+
+            for i, z in enumerate(unique_elements):
+                layer_atom_species[np.isin(layer_atom_symbols, unique_species[i])] = z.Z
+                layer_atom_sizes[np.isin(layer_atom_symbols, unique_species[i])] = z.atomic_radius
+
+            vesta_data = np.loadtxt('./vesta_colors.csv', delimiter=',')
+            vesta_colors = vesta_data[:,:3]
+            vesta_radii = vesta_data[:,-1]
+
+            colors = np.c_[vesta_colors[layer_atom_species], np.ones(len(layer_atom_species)) * alpha]
+            layer_atom_sizes = vesta_radii[layer_atom_species] * 0.4
+            # colors = jmol_colors[layer_atom_species]
+
+            for xy, r, c in zip(layer_atom_coords, layer_atom_sizes, colors):
+                ax.add_patch(Circle(xy, radius=r, ec=c[:3], fc=c, linewidth=1.5, clip_on=False))
+            # collection = PatchCollection(circles)
+            # ax.add_collection(collection)
+
+            # ax.scatter(
+            #     layer_atom_coords[:,0],
+            #     layer_atom_coords[:,1],
+            #     fc=np.c_[colors, alpha*np.ones(len(colors))],
+            #     ec=colors,
+            #     s=200*layer_atom_sizes,
+            #     linewidths=1,
+            #     clip_on=False,
+            # )
+
+        ax.plot(
+            borders[:,0],
+            borders[:,1],
+            color='black',
+            linewidth=2,
+            solid_capstyle='round'
+        )
+        # x_min = borders[:,0].min()
+        # x_max = borders[:,0].max()
+        # y_min = borders[:,1].min()
+        # y_max = borders[:,1].max()
+        # ax.set_xlim(x_min - 0.1 * x_size, x_max + 0.1 * x_size)
+        # ax.set_ylim(y_min - 0.1 * y_size, y_max + 0.1 * y_size)
+        ax.set_aspect('equal')
+        ax.axis('off')
+        fig.tight_layout(pad=0.4)
+        fig.savefig('dd-int.png', transparent=False)
+
+        # fi = layer_inds[bot_film_ind]
+        # fi2 = layer_inds[second_film_ind]
+        # film_z_shift = heights[bot_film_ind] - heights[second_film_ind]
+        # film_dist = self.interface.lattice.get_cartesian_coords([0,0,np.abs(film_z_shift)])[-1]
+
+        # si = layer_inds[top_sub_ind]
+        # si2 = layer_inds[second_sub_ind]
+
+
+    def run_surface_matching_old(
+        self,
+        scan_size,
+        custom_radius_dict=None,
+        grid_density_x=200,
+        grid_density_y=200,
+        fontsize=18,
+        cmap='jet',
+        output='PES.png',
+        xlims=None,
+        ylims=None,
+    ):
+        """
+        This function runs a PES scan using the geometry based score function
+
+        Parameters:
+            x_range (list): The x-range to show in the PES scan in fractional coordinates
+            y_range (list): The y-range to show in the PES scan in fractional coordinates
+            z_range (list or None): The range to show in the PES scan in fractional coordinates
+                given interface structure
+            grid_density_x (int): Number of grid points to sample in the x-direction
+            grid_density_y (int): Number of grid points to sample in the y-direction
+            output (str): File name to save the image
+        """
+        if custom_radius_dict is None:
+            radius_dict = self._get_radii()
+        else:
+            if type(custom_radius_dict) == dict:
+                radius_dict = custom_radius_dict
+
+        species = np.array(self.interface.species, dtype=str)
+        r = np.array([radius_dict[i] for i in species]) 
+
+        layer_inds, heights = group_layers(self.interface)
+        bot_film_ind = np.min(np.where(heights > self.interface_height))
+        top_sub_ind = np.max(np.where(heights < self.interface_height))
+        second_film_ind = bot_film_ind + 1
+        second_sub_ind = top_sub_ind - 1
+
+        fi = layer_inds[bot_film_ind]
+        fi2 = layer_inds[second_film_ind]
+        film_z_shift = heights[bot_film_ind] - heights[second_film_ind]
+        film_dist = self.interface.lattice.get_cartesian_coords([0,0,np.abs(film_z_shift)])[-1]
+
+        si = layer_inds[top_sub_ind]
+        si2 = layer_inds[second_sub_ind]
+        sub_z_shift = heights[top_sub_ind] - heights[second_sub_ind]
+        sub_dist = self.interface.lattice.get_cartesian_coords([0,0,np.abs(sub_z_shift)])[-1]
 
         scaling_matrix, _ = self._get_scaling_matrix(
             a=self.interface.lattice.matrix[0, :2], 
@@ -819,7 +1361,7 @@ class Interface:
         if scaling_matrix[1] == 1:
             scaling_matrix[1] = 2
 
-        X, Y, Z = self._norm_overlap(
+        X, Y, Z_orig = self._norm_overlap(
             si=si,
             fi=fi, 
             r=r,
@@ -828,31 +1370,128 @@ class Interface:
             scaling_matrix=scaling_matrix,
         )
 
-        Z -= Z.min()
-        Z /= Z.max()
+        Z_orig -= Z_orig.min()
+        Z_orig /= Z_orig.max()
 
-        fig, ax = plt.subplots(figsize=(4.5, 5), dpi=400)
-        ax.set_xlabel(r"Shift in $x$ Direction", fontsize=20)
-        ax.set_ylabel(r"Shift in $y$ Direction", fontsize=20)
-
-        im = ax.pcolormesh(
-            X,
-            Y,
-            Z,
-            cmap=cmap,
-            shading='gouraud',
-            norm=Normalize(vmin=np.nanmin(Z), vmax=np.nanmax(Z)),
+        _, _, Z_sub = self._norm_overlap(
+            si=si2,
+            fi=fi, 
+            r=r,
+            grid_density_x=grid_density_x,
+            grid_density_y=grid_density_y,
+            scaling_matrix=scaling_matrix,
+            sub_z_shift=sub_z_shift,
         )
 
-        cbar = fig.colorbar(im, ax=ax, orientation='horizontal', pad=0.2)
-        cbar.ax.tick_params(labelsize=fontsize)
-        cbar.ax.locator_params(nbins=4)
-        cbar.set_label('Score', fontsize=fontsize)
-        ax.tick_params(labelsize=fontsize)
-        ax.set_xlim(-scan_size/2, scan_size/2)
-        ax.set_ylim(-scan_size/2, scan_size/2)
+        Z_sub -= Z_sub.min()
+        Z_sub /= Z_sub.max()
+
+        # Z_sub -= 0.5
+        # Z_sub[Z_sub < 0] = 0
+
+        # Z_sub -= Z_sub.min()
+        # Z_sub /= Z_sub.max()
+
+        _, _, Z_film = self._norm_overlap(
+            si=si,
+            fi=fi2, 
+            r=r,
+            grid_density_x=grid_density_x,
+            grid_density_y=grid_density_y,
+            scaling_matrix=scaling_matrix,
+            film_z_shift=film_z_shift,
+        )
+
+        Z_film -= Z_film.min()
+        Z_film /= Z_film.max()
+
+        # Z_film -= 0.5
+        # Z_film[Z_film < 0] = 0
+
+        # Z_film -= Z_film.min()
+        # Z_film /= Z_film.max()
+
+        # inv = np.divide(1,1 + y2, out=np.zeros_like(y2), where=(y2 > 0.01))
+
+        second_layers = np.exp(-np.abs(film_dist)) * Z_film + np.exp(-np.abs(film_dist)) * Z_sub
+        inv = 1 / (1 + second_layers)
+
+        # Z = Z_orig +np.exp(-np.abs(sub_dist + self.interfacial_distance)) (1 / (1 + sub_dist)) * Z_sub + (1 / (1 + film_dist)) * Z_film
+        # print(sub_dist)
+        # print(np.exp(-(np.abs(sub_dist) + self.interfacial_distance)**2))
+        # print(np.exp(-(np.abs(sub_dist) + self.interfacial_distance)))
+        # Z = Z_orig + \
+        #     np.exp(-(np.abs(sub_dist) + self.interfacial_distance)) * Z_sub + \
+        #     np.exp(-(np.abs(film_dist) + self.interfacial_distance)) * Z_film
+
+        # Z = - Z_orig + \
+        #     np.exp(-np.abs(sub_dist)) * Z_sub + \
+        #     np.exp(-np.abs(film_dist)) * Z_film
+        # Z = Z_orig
+        # Z = second_layers
+        Z = Z_orig - inv
+        # Z = Z_orig - inv 
+        # Z = Z_film + Z_sub
+        # Z -= Z.min()
+        # Z /= Z.max()
+
+        X_ravel = X.ravel()
+        Y_ravel = Y.ravel()
+        Z_ravel = Z.ravel()
+
+        if xlims is None:
+            X_in_range = np.logical_and(X_ravel >= -scan_size / 2, X_ravel <= scan_size / 2)
+        else:
+            X_in_range = np.logical_and(X_ravel >= xlims[0], X_ravel <= xlims[1])
+
+        if ylims is None:
+            Y_in_range = np.logical_and(Y_ravel >= -scan_size / 2, Y_ravel <= scan_size / 2)
+        else:
+            Y_in_range = np.logical_and(Y_ravel >= ylims[0], Y_ravel <= ylims[1])
+
+        Z_ravel[np.logical_not(np.logical_and(Y_in_range, X_in_range))] = np.nan
+        opt_ind = np.nanargmin(Z_ravel)
+        opt_X = X_ravel[opt_ind]
+        opt_Y = Y_ravel[opt_ind]
+
+
+        fig, axs = plt.subplots(figsize=(3 * 4.5, 5), dpi=400, ncols=3)
+
+        Zs = [Z_orig, Z_film, Z_sub]
+        for i, ax in enumerate(axs):
+            ax.set_xlabel(r"Shift in $x$ Direction", fontsize=20)
+            ax.set_ylabel(r"Shift in $y$ Direction", fontsize=20)
+
+            im = ax.pcolormesh(
+                X,
+                Y,
+                Zs[i],
+                cmap=cmap,
+                shading='gouraud',
+                norm=Normalize(vmin=np.nanmin(Zs[i]), vmax=np.nanmax(Zs[i])),
+            )
+
+            cbar = fig.colorbar(im, ax=ax, orientation='horizontal', pad=0.2)
+            cbar.ax.tick_params(labelsize=fontsize)
+            cbar.ax.locator_params(nbins=4)
+            cbar.set_label('Score', fontsize=fontsize)
+            ax.tick_params(labelsize=fontsize)
+
+            if xlims is None:
+                ax.set_xlim(-scan_size/2, scan_size/2)
+            else:
+                ax.set_xlim(xlims[0], xlims[1])
+
+            if ylims is None:
+                ax.set_ylim(-scan_size/2, scan_size/2)
+            else:
+                ax.set_ylim(ylims[0], ylims[1])
+        # ax.set_xlim(0, scan_size/2)
+        # ax.set_ylim(0, scan_size/2)
         fig.tight_layout()
         fig.savefig(output)
+
+        return (opt_X, opt_Y)
 
 
     # def get_ranking_score(self, radius_dict, grid_size=0.05):

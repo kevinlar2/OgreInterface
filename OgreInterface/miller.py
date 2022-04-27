@@ -182,6 +182,7 @@ class MillerSearch(object):
         x, y = np.meshgrid(np.arange(M), np.arange(N))
         s = self.areas
         c = self.misfits* 100
+        print(s)
         
         fig, ax = plt.subplots(figsize=figsize, dpi=600)
         ax_divider = make_axes_locatable(ax)

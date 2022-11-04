@@ -12,9 +12,13 @@ from pymatgen.analysis.interfaces.zsl import ZSLGenerator, reduce_vectors
 from pymatgen.analysis.interfaces.substrate_analyzer import SubstrateAnalyzer
 from pymatgen.core.surface import get_slab_regions
 from pymatgen.core.periodic_table import Element
+from pymatgen.analysis.ewald import EwaldSummation
+from pymatgen.transformations.standard_transformations import RotationTransformation
+
 from ase import Atoms
 from ase.io import read
 from ase.build.surfaces_with_termination import surfaces_with_termination 
+from ase.build.general_surface import surface
 from ase.spacegroup import get_spacegroup
 from ase.geometry import get_layers
 from ase.build.general_surface import ext_gcd
@@ -45,17 +49,23 @@ class SurfaceGenerator:
         miller_index,
         layers,
         vacuum,
+        generate_all=True,
+        filter_ionic_slabs=False,
     ):
         if type(structure) == Atoms:
             self.structure = structure
+            self.pmg_structure = AseAtomsAdaptor.get_structure(structure)
         elif type(structure) == Structure:
             self.structure = AseAtomsAdaptor.get_atoms(structure)
+            self.pmg_structure = structure
         else:
             raise TypeError(f"structure accepts 'pymatgen.core.structure.Structure' or 'ase.Atoms' not '{type(structure).__name__}'")
 
         self.miller_index = miller_index
         self.layers = layers
         self.vacuum = vacuum
+        self.generate_all = generate_all
+        self.filter_ionic_slabs = filter_ionic_slabs
         self.slabs = self._generate_slabs()
 
     @classmethod
@@ -65,29 +75,122 @@ class SurfaceGenerator:
         miller_index,
         layers,
         vacuum,
+        generate_all=True,
+        filter_ionic_slabs=False,
     ):
         structure = Structure.from_file(filename=filename)
 
-        return cls(structure, miller_index, layers, vacuum)
+        return cls(structure, miller_index, layers, vacuum, generate_all, filter_ionic_slabs)
+
+
+    def _get_ewald_energy(self, slab):
+        slab = copy.deepcopy(slab)
+        bulk = copy.deepcopy(self.pmg_structure)
+        slab.add_oxidation_state_by_guess()
+        bulk.add_oxidation_state_by_guess()
+        E_slab = EwaldSummation(slab).total_energy
+        E_bulk = EwaldSummation(bulk).total_energy
+
+        return E_slab, E_bulk
+
+    def _is_equal(self, structure1, structure2):
+        structure_matcher = StructureMatcher(
+            ltol=0.001,
+            stol=0.001,
+            angle_tol=0.001,
+            primitive_cell=False,
+            scale=False,
+        )
+        #  is_fit = structure_matcher.fit(structure1, structure2)
+        match = structure_matcher._match(structure1, structure2, 1)
+        if match is None:
+            is_fit =  False
+        else:
+            is_fit = match[0] <= 0.001
+
+        return is_fit
+
+    def _is_equal_fast(self, structure1, structure2):
+        if len(structure1) != len(structure2):
+            return False
+        else:
+            coords1 = np.round(structure1.frac_coords, 4)
+            coords1[:,-1] = coords1[:,-1] - np.min(coords1[:,-1])
+            coords1.dtype = [('a', 'float64'), ('b', 'float64'), ('c', 'float64')]
+            coords1_inds = np.squeeze(np.argsort(coords1, axis=0, order=('c', 'b', 'a')))
+            coords1.dtype = 'float64'
+
+            coords2 = np.round(structure2.frac_coords, 4)
+            coords2[:,-1] = coords2[:,-1] - np.min(coords2[:,-1])
+            coords2.dtype = [('a', 'float64'), ('b', 'float64'), ('c', 'float64')]
+            coords2_inds = np.squeeze(np.argsort(coords2, axis=0, order=('c', 'b', 'a')))
+            coords2.dtype = 'float64'
+
+            coords1_sorted = coords1[coords1_inds]
+            coords2_sorted = coords2[coords2_inds]
+            species1_sorted = np.array(structure1.species).astype(str)[coords1_inds]
+            species2_sorted = np.array(structure2.species).astype(str)[coords2_inds]
+
+            coords = np.isclose(coords1_sorted, coords2_sorted, rtol=1e-2, atol=1e-2).all()
+            species = (species1_sorted == species2_sorted).all()
+
+            if coords and species:
+                return True 
+            else:
+                return False
 
     def _generate_slabs(self):
-        slabs = surfaces_with_termination(
-            self.structure,
-            self.miller_index,
-            self.layers,
-            vacuum=self.vacuum,
-            return_all=True,
-            verbose=False
-        )
+        if self.generate_all:
+            slabs = surfaces_with_termination(
+                self.structure,
+                self.miller_index,
+                self.layers,
+                vacuum=self.vacuum,
+                return_all=True,
+                verbose=False
+            )
+
+        else:
+            slab = surface(
+                self.structure,
+                self.miller_index,
+                self.layers,
+                vacuum=self.vacuum
+            )
+            slabs = [slab]
 
 
         pmg_slabs = [AseAtomsAdaptor.get_structure(slab) for slab in slabs]
 
+        if self.filter_ionic_slabs and self.generate_all:
+            diffs = []
+            for pmg_slab in pmg_slabs:
+                s = time.time()
+                E_vac, E_bulk = self._get_ewald_energy(pmg_slab)
+                print(time.time() - s)
+                diffs.append(E_vac - (self.layers * E_bulk))
+
+            diffs = np.array(diffs)
+            stable_inds = np.where(np.isclose(diffs, diffs.min()))[0]
+            pmg_slabs = [pmg_slabs[i] for i in stable_inds]
+
         combos = combinations(range(len(pmg_slabs)), 2)
         same_slab_indices = []
+        # rot = lambda x, a: RotationTransformation(axis=[0,0,1], angle=a).apply_transformation(x)
         for combo in combos:
+            # if self._is_equal(pmg_slabs[combo[0]], pmg_slabs[combo[1]]):
+            #     same_slab_indices.append(combo)
+
             if pmg_slabs[combo[0]] == pmg_slabs[combo[1]]:
                 same_slab_indices.append(combo)
+            # if pmg_slabs[combo[0]] == rot(pmg_slabs[combo[1]], 90):
+            #     same = True
+            # if pmg_slabs[combo[0]] == rot(pmg_slabs[combo[1]], 180):
+            #     same = True
+            # if pmg_slabs[combo[0]] == rot(pmg_slabs[combo[1]], 270):
+            #     same = True
+            # if same:
+            #     same_slab_indices.append(combo)
 
         to_delete = [np.min(same_slab_index) for same_slab_index in same_slab_indices]
         unique_slab_indices = [i for i in range(len(pmg_slabs)) if i not in to_delete]
@@ -97,14 +200,14 @@ class SurfaceGenerator:
 
         surfaces = []
         for slab in unique_pmg_slabs:
-            surface = Surface(
+            unique_surface = Surface(
                 slab=slab,
                 bulk=self.structure,
                 miller_index=self.miller_index,
                 layers=self.layers,
                 vacuum=self.vacuum,
             )
-            surfaces.append(surface)
+            surfaces.append(unique_surface)
 
 
         return surfaces
@@ -127,6 +230,7 @@ class InterfaceGenerator:
             interfacial_distance=2,
             sub_strain_frac=0,
             vacuum=40,
+            center=False,
     ):
         if type(substrate) == Surface:
             self.substrate = substrate
@@ -138,6 +242,7 @@ class InterfaceGenerator:
         else:
             raise TypeError(f"InterfaceGenerator accepts 'ogre.core.Surface' not '{type(film).__name__}'")
 
+        self.center = center
         self.area_tol = area_tol
         self.angle_tol = angle_tol
         self.length_tol = length_tol
@@ -401,6 +506,7 @@ class InterfaceGenerator:
                 sub_strain_frac=self.sub_strain_frac,
                 interfacial_distance=self.interfacial_distance,
                 vacuum=self.vacuum,
+                center=self.center,
             )
             #  interface.shift_film([0.3, 0.6, 0])
             interfaces.append(interface)

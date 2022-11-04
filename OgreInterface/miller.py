@@ -124,6 +124,7 @@ class MillerSearch(object):
                 miller_index=inds,
                 layers=3,
                 vacuum=20,
+                generate_all=False,
             )
             substrates.append(substrate.slabs[0])
 
@@ -133,6 +134,7 @@ class MillerSearch(object):
                 miller_index=inds,
                 layers=3,
                 vacuum=20,
+                generate_all=False,
             )
             films.append(film.slabs[0])
 
@@ -173,9 +175,22 @@ class MillerSearch(object):
         fontsize=12,
         figsize=(5.5,4),
         labelrotation=20,
+        substrate_label=None,
+        film_label=None,
     ):
-        ylabels = [f'{i}'.replace('[', '(').replace(']', ')').replace(' ', '') for i in self.film_inds]
-        xlabels = [f'{i}'.replace('[', '(').replace(']', ')').replace(' ', '') for i in self.substrate_inds]
+        ylabels = []
+        for ylabel in self.film_inds:
+            tmp_label = [str(i) if i >= 0 else '$\\overline{' + str(-i) + '}$' for i in ylabel]
+            ylabels.append(f'({"".join(tmp_label)})')
+            # ylabels.append(str(tmp_label).replace('[', '(').replace(']', ')').replace(' ', ''))
+
+        xlabels = []
+        for xlabel in self.substrate_inds:
+            tmp_label = [str(i) if i >= 0 else '$\\overline{' + str(-i) + '}$' for i in xlabel]
+            xlabels.append(f'({"".join(tmp_label)})')
+
+        # ylabels = [f'{i}'.replace('[', '(').replace(']', ')').replace(' ', '') for i in self.film_inds]
+        # xlabels = [f'{i}'.replace('[', '(').replace(']', ')').replace(' ', '') for i in self.substrate_inds]
 
         N = len(self.film_inds)
         M = len(self.substrate_inds)
@@ -193,8 +208,15 @@ class MillerSearch(object):
             pad=np.min(figsize)*0.01,
         )
 
-        ax.set_ylabel('Film Miller Index', fontsize=fontsize)
-        ax.set_xlabel('Substrate Miller Index', fontsize=fontsize)
+        if film_label is None:
+            ax.set_ylabel('Film Miller Index', fontsize=fontsize)
+        else:
+            ax.set_ylabel(film_label + ' Miller Index', fontsize=fontsize)
+
+        if substrate_label is None:
+            ax.set_xlabel('Substrate Miller Index', fontsize=fontsize)
+        else:
+            ax.set_xlabel(substrate_label + ' Miller Index', fontsize=fontsize)
 
         R = 0.9 * s/np.nanmax(s)/2
         circles = [plt.Circle((i,j), radius=r, edgecolor='black', lw=3) for r, i, j in zip(R.flat, x.flat, y.flat)]

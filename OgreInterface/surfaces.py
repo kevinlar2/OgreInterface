@@ -13,6 +13,7 @@ from pymatgen.analysis.interfaces.zsl import ZSLGenerator, reduce_vectors
 from pymatgen.analysis.interfaces.substrate_analyzer import SubstrateAnalyzer
 from pymatgen.symmetry.analyzer import SymmOp
 from pymatgen.analysis.molecule_structure_comparator import CovalentRadius
+from pymatgen.analysis.ewald import EwaldSummation
 
 from ase import Atoms
 from ase.io import read
@@ -31,9 +32,11 @@ from vaspvis.utils import group_layers, passivator
 import surface_matching_utils as smu 
 import matplotlib.pyplot as plt
 from matplotlib.colors import Normalize
+from mpl_toolkits.axes_grid1 import make_axes_locatable
 from multiprocessing import Pool, cpu_count
 from scipy.stats import multivariate_normal
 from scipy.signal import argrelextrema
+from scipy.interpolate import RectBivariateSpline
 from scipy.spatial.distance import cdist
 from sklearn.cluster import AffinityPropagation, MeanShift
 import copy
@@ -103,6 +106,17 @@ class Surface:
         self.slab_pmg.remove_sites(to_delete_conv)
         self.primitive_slab_pmg.remove_sites(to_delete_prim)
         # self.primitive_slab_pmg = self._get_primitive(self.slab_pmg)
+
+
+    def _get_ewald_energy(self):
+        slab = copy.deepcopy(self.slab_pmg)
+        bulk = copy.deepcopy(self.bulk_pmg)
+        slab.add_oxidation_state_by_guess()
+        bulk.add_oxidation_state_by_guess()
+        E_slab = EwaldSummation(slab).total_energy
+        E_bulk = EwaldSummation(bulk).total_energy
+
+        return E_slab, E_bulk
 
     def passivate(self, bot=True, top=True, passivated_struc=None):
         primitive_pas = passivator(
@@ -216,7 +230,9 @@ class Interface:
         sub_strain_frac,
         interfacial_distance,
         vacuum,
+        center=False,
     ):
+        self.center = center
         self.substrate = substrate
         self.film = film
         self.film_transformation = film_transformation
@@ -238,7 +254,7 @@ class Interface:
         self.interface_height = None
         self.strained_sub = self._strain_and_orient_sub()
         self.strained_film = self._strain_and_orient_film()
-        self.interface = self._stack_interface()
+        self.interface, self.sub_part, self.film_part = self._stack_interface()
 
     def write_file(self, output='POSCAR_interface'):
         Poscar(self.interface).write_file(output)
@@ -271,10 +287,12 @@ class Interface:
                 film_ind,
                 frac_shift,
             )
-            self.interface_height += frac_shift[-1] / 2
-            self.interfacial_distance += shift[-1]
+            # self.interface_height += frac_shift[-1] / 2
+            # self.interfacial_distance += shift[-1]
 
             return shifted_interface
+
+
 
     def _get_supercell(self, slab, matrix):
         new_slab = copy.copy(slab)
@@ -494,6 +512,8 @@ class Interface:
         refined_interface_struc = sg.get_conventional_standard_structure()
         primitive_interface_struc = refined_interface_struc.get_reduced_structure()
         primitive_interface_struc = primitive_interface_struc.get_primitive_structure()
+        # print('REMINDER: line 498 surfaces.py')
+        # primitive_interface_struc = refined_interface_struc
 
         substrate_species, film_species, species_in_both = self._get_unique_species()
 
@@ -519,7 +539,23 @@ class Interface:
         else:
             pass
 
-        return primitive_interface_struc 
+        if self.center:
+            primitive_interface_struc.translate_sites(
+                    indices=range(len(primitive_interface_struc)),
+                    vector=[0,0,0.5 - self.interface_height],
+                    )
+            self.interface_height = 0.5
+
+        primitive_film = copy.deepcopy(primitive_interface_struc)
+        primitive_sub = copy.deepcopy(primitive_interface_struc)
+
+        film_sites = np.where(primitive_film.frac_coords[:,-1] > self.interface_height)[0]
+        sub_sites = np.where(primitive_sub.frac_coords[:,-1] < self.interface_height)[0]
+
+        primitive_film.remove_sites(sub_sites)
+        primitive_sub.remove_sites(film_sites)
+
+        return primitive_interface_struc , primitive_sub, primitive_film
 
     def _setup_for_surface_matching(self, layers_sub=2, layers_film=2):
         interface = self.interface
@@ -725,16 +761,15 @@ class Interface:
         # for sigma, mu, scale in zip(sigmas, mus, scales):
         #     z += scale * (1 / (2 * np.pi * sigma**2)) * np.exp(-((x - mu[0])**2 + (y - mu[1])**2) / (2 * sigma**2))
 
-        return z.sum(axis=0)
+        # return z.sum(axis=0)
+        return z
+
 
     def _get_score_function_params(
             self,
             si,
             fi, 
             r,
-            # grid_density_x,
-            # grid_density_y,
-            # scaling_matrix,
             sub_z_shift = 0,
             film_z_shift = 0,
     ):
@@ -796,6 +831,85 @@ class Interface:
         sigmas = overlap_r / 3
         scales = (4/3) * np.pi * overlap_r**3
         scales /= scales.max()
+
+        return mus, sigmas, scales
+
+    def _get_score_function_params_old(
+            self,
+            si,
+            fi, 
+            r,
+            sub_z_shift = 0,
+            film_z_shift = 0,
+    ):
+        coords = self.interface.frac_coords
+        matrix = self.interface.lattice.matrix
+
+        x1 = coords[np.repeat(si, len(fi)), 0]
+        x2 = coords[np.tile(fi, len(si)), 0]
+
+        y1 = coords[np.repeat(si, len(fi)), 1]
+        y2 = coords[np.tile(fi, len(si)), 1]
+
+        z1 = coords[np.repeat(si, len(fi)), 2] + sub_z_shift
+        z2 = coords[np.tile(fi, len(si)), 2] + film_z_shift
+
+        r1 = r[np.repeat(si, len(fi))]
+        r2 = r[np.tile(fi, len(si))]
+
+        x_shift = x1 - x2
+        y_shift = y1 - y2
+        z_shift = z1 - z2
+
+        x_shift[x_shift < 0] += 1
+        x_shift[x_shift > 1] -= 1
+        y_shift[y_shift < 0] += 1
+        y_shift[y_shift > 1] -= 1
+
+        r1p = np.concatenate([r1 for _ in range(9)])
+        r2p = np.concatenate([r2 for _ in range(9)])
+        x_shift = np.concatenate([
+            x_shift-1,
+            x_shift-1,
+            x_shift-1,
+            x_shift,
+            x_shift,
+            x_shift,
+            x_shift+1,
+            x_shift+1,
+            x_shift+1 
+        ])
+        y_shift = np.concatenate([
+            y_shift-1,
+            y_shift,
+            y_shift+1,
+            y_shift-1,
+            y_shift,
+            y_shift+1,
+            y_shift-1,
+            y_shift,
+            y_shift+1
+        ])
+        z_shift = np.concatenate([z_shift for _ in range(9)])
+
+        frac_shifts = np.c_[x_shift, y_shift, z_shift]
+        cart_shifts = frac_shifts.dot(matrix)
+        overlap_r = np.sqrt((r1p + r2p)**2 - cart_shifts[:,-1]**2)
+
+        mus = cart_shifts[:,:2]
+        sigmas = overlap_r / 3
+
+        d = np.abs(cart_shifts[:,-1])
+        volume = np.divide(
+            np.pi * (r1p + r2p - d)**2 * (d**2 + (2*d*r1p) + (2*d*r2p) + (6*r1p*r2p) - (3*(r1p**2)) - (3*(r2p**2))),
+            (12 * d),
+            out=np.zeros_like(d),
+            where=(d != 0)
+        )
+        max_pes = (1 / (2 * np.pi * sigmas**2))
+        scales = volume / max_pes
+        # scales = (4/3) * np.pi * overlap_r**3
+        # scales /= scales.max()
         # x, y = plot_coords[:,0], plot_coords[:,1]
 
         # ns = self._pdf(x=x, y=y, sigmas=sigmas, mus=mus, scales=vol)
@@ -876,7 +990,7 @@ class Interface:
 
         opt_x = np.vstack(opt_x)
         opt_y = np.vstack(opt_y)
-        
+
         matrix = self.interface.lattice.matrix
         inv_matrix = self.interface.lattice.inv_matrix
         frac_coords = np.c_[opt_x.ravel(), opt_y.ravel(), np.zeros(len(opt_y.ravel()))].dot(inv_matrix)
@@ -925,6 +1039,430 @@ class Interface:
 
         return min_dist / 3
 
+    def overlap_film_sub_single(self, X, Y, sub_coords, film_coords, sub_r, film_r):
+        d = np.sqrt(((film_coords[0] + X) - sub_coords[0])**2 + ((film_coords[1] + Y) - sub_coords[1])**2 + (film_coords[2] - sub_coords[2])**2)
+        r1 = sub_r
+        r2 = film_r
+        d[d <= np.abs(r1 - r2)] = np.abs(r1 - r2)
+        d[d - r1 - r2 > 0] = 0
+        volume = np.divide(
+            np.pi * (r1 + r2 - d)**2 * (d**2 + (2*d*r1) + (2*d*r2) + (6*r1*r2) - (3*(r1**2)) - (3*(r2**2))),
+            (12 * d),
+            out=np.zeros_like(d),
+            where=(d != 0)
+        )
+
+        return volume
+
+
+    def overlap_film_sub(self, X, Y, coords, rs, fi, si):
+        inds = np.c_[np.repeat(si, len(fi)), np.tile(fi, len(si))]
+        volume = []
+        for i in inds:
+            volume.append(self.overlap_film_sub_single(X, Y, sub_coords=coords[i[0]], film_coords=coords[i[1]], sub_r=rs[i[0]], film_r=rs[i[1]]))
+
+        volume = np.array(volume)
+        return volume
+
+    # def overlap_film_sub(self, X, Y, coords, rs, fi, si):
+    #     inds = np.c_[np.repeat(si, len(fi)), np.tile(fi, len(si))]
+    #     volume = np.zeros(X.shape)
+    #     for i in inds:
+    #         volume += self.overlap_film_sub_single(X, Y, sub_coords=coords[i[0]], film_coords=coords[i[1]], sub_r=rs[i[0]], film_r=rs[i[1]])
+
+    #     return volume
+
+    def run_surface_matching_paper(
+        self,
+        scan_size,
+        custom_radius_dict=None,
+        grid_density_x=200,
+        grid_density_y=200,
+        fontsize=18,
+        cmap='jet',
+        output='PES.png',
+        output2='cross_sec.png',
+        atol=None,
+    ):
+        """
+        This function runs a PES scan using the geometry based score function
+
+        Parameters:
+            x_range (list): The x-range to show in the PES scan in fractional coordinates
+            y_range (list): The y-range to show in the PES scan in fractional coordinates
+            z_range (list or None): The range to show in the PES scan in fractional coordinates
+                given interface structure
+            grid_density_x (int): Number of grid points to sample in the x-direction
+            grid_density_y (int): Number of grid points to sample in the y-direction
+            output (str): File name to save the image
+        """
+        if custom_radius_dict is None:
+            radius_dict = self._get_radii()
+        else:
+            if type(custom_radius_dict) == dict:
+                radius_dict = custom_radius_dict
+
+        species = np.array(self.interface.species, dtype=str)
+        r = np.array([radius_dict[i] for i in species])
+
+        layer_inds, heights = group_layers(self.interface, atol=atol)
+        bot_film_ind = np.min(np.where(heights > self.interface_height))
+        top_sub_ind = np.max(np.where(heights < self.interface_height))
+        second_film_ind = bot_film_ind + 1
+        second_sub_ind = top_sub_ind - 1
+
+        fi = layer_inds[bot_film_ind]
+        fi2 = layer_inds[second_film_ind]
+        # fi = np.concatenate([fi, fi2])
+
+        si = layer_inds[top_sub_ind]
+        si2 = layer_inds[second_sub_ind]
+        # si = np.concatenate([si, si2])
+
+        matrix = self.interface.lattice.matrix
+        a = matrix[0,:2]
+        b = matrix[1,:2]
+        borders = np.vstack([np.zeros(2), a, a + b, b, np.zeros(2)])
+
+        film_coords = self.interface.frac_coords[fi]
+        periodic_shifts = np.array([ 
+            [0,0,0],
+            [1,1,0],
+            [1,0,0],
+            [0,1,0],
+            [-1,0,0],
+            [0,-1,0],
+            [-1,1,0],
+            [1,-1,0],
+            [-1,-1,0],
+            [2,0,0],
+            [0,2,0],
+            [-2,0,0],
+            [0,-2,0],
+            [2,1,0],
+            [1,2,0],
+            [-2,1,0],
+            [1,-2,0],
+            [2,-1,0],
+            [-1,2,0],
+            [-2,-1,0],
+            [-1,-2,0],
+            [-2,-2,0],
+            [2,2,0],
+            [2,-2,0],
+            [-2,2,0],
+        ])
+        film_coords = np.vstack([film_coords + shift for shift in periodic_shifts]).dot(matrix)
+        film_rs = np.tile(r[fi], 25)
+
+        sub_coords = self.interface.frac_coords[si].dot(matrix)
+        sub_rs = r[si]
+
+        coords = np.r_[film_coords, sub_coords]
+        rs = np.concatenate([film_rs, sub_rs])
+        film_inds = np.arange(len(film_rs))
+        sub_inds = np.arange(len(film_rs), len(film_rs) + len(sub_rs))
+
+        X_frac, Y_frac = np.meshgrid(
+            np.linspace(0, 1, grid_density_x),
+            np.linspace(0, 1, grid_density_y),
+        )
+
+        cart_coords = np.c_[
+            X_frac.ravel(),
+            Y_frac.ravel(),
+            np.zeros(len(Y_frac.ravel()))
+        ].dot(matrix)
+        X = cart_coords[:,0].reshape(X_frac.shape)
+        Y = cart_coords[:,1].reshape(Y_frac.shape)
+        Z = self.overlap_film_sub(X=X, Y=Y, coords=coords, rs=rs, fi=film_inds, si=sub_inds)
+        Z = Z.sum(axis=0)
+        atom_volume = (4/3) * np.pi * np.concatenate([r[si], r[fi]])**3
+        O_bar = Z / atom_volume.sum()
+        film_z_coords = self.interface.frac_coords[fi,-1]
+        sub_z_coords = self.interface.frac_coords[si,-1]
+        max_film_ind = film_z_coords.argmax()
+        min_sub_ind = sub_z_coords.argmin()
+        max_z = film_z_coords[max_film_ind]  
+        min_z = sub_z_coords[min_sub_ind] 
+        z_cart = np.abs(np.array([0,0,max_z - min_z]).dot(matrix))
+        z_cart[-1] += r[si][min_sub_ind] + r[fi][max_film_ind]
+        vol_mat = np.copy(matrix)
+        vol_mat[-1] = z_cart
+        V_cell = np.abs(np.linalg.det(vol_mat))
+        V_E = V_cell - atom_volume.sum() + Z
+        E_bar = V_E / V_cell
+
+        c = 1
+        # Z_plot = (1 + O_bar)**2 + (c * E_bar)
+        Z_plot = (c * E_bar)
+        # Z_plot = (1 + O_bar)**2 
+        Z_plot -= Z_plot.min()
+        Z_plot /= Z_plot.max()
+
+        x_size = borders[:,0].max() - borders[:,0].min()
+        y_size = borders[:,1].max() - borders[:,1].min()
+        ratio = y_size / x_size
+
+        if ratio < 1:
+            fig_x_size = 4.5 * (1 / ratio)
+            fig_y_size = 4.5
+        else:
+            fig_x_size = 4.5
+            fig_y_size = 4.5 * ratio
+
+        fig, ax = plt.subplots(figsize=(fig_x_size, fig_y_size), dpi=400)
+        ax.set_xlabel(r"Shift in $x$ ($\AA$)", fontsize=fontsize)
+        ax.set_ylabel(r"Shift in $y$ ($\AA$)", fontsize=fontsize)
+
+
+        im = ax.pcolormesh(
+            X,
+            Y,
+            Z_plot,
+            cmap=cmap,
+            shading='gouraud',
+            norm=Normalize(vmin=np.nanmin(Z_plot), vmax=np.nanmax(Z_plot)),
+        )
+
+        ax.plot(
+            borders[:,0],
+            borders[:,1],
+            color='black',
+            linewidth=2,
+        )
+
+        divider = make_axes_locatable(ax)
+        cax = divider.append_axes("top", size="5%", pad=0.1)
+
+        cbar = fig.colorbar(im, cax=cax, orientation='horizontal')
+        cbar.ax.tick_params(labelsize=fontsize)
+        cbar.ax.locator_params(nbins=2)
+        cbar.set_label('Score (Arb. Units)', fontsize=fontsize)
+        cax.xaxis.set_ticks_position("top")
+        cax.xaxis.set_label_position("top")
+        ax.tick_params(labelsize=fontsize)
+
+        ax.set_xlim(borders[:,0].min(), borders[:,0].max())
+        ax.set_ylim(borders[:,1].min(), borders[:,1].max())
+        ax.set_aspect('equal')
+
+        fig.tight_layout()
+        fig.savefig(output, bbox_inches='tight')
+
+        return None, None
+
+    def run_surface_matching_volume(
+        self,
+        scan_size,
+        custom_radius_dict=None,
+        grid_density_x=200,
+        grid_density_y=200,
+        fontsize=18,
+        cmap='jet',
+        output='PES.png',
+        output2='cross_sec.png',
+        atol=None,
+    ):
+        """
+        This function runs a PES scan using the geometry based score function
+
+        Parameters:
+            x_range (list): The x-range to show in the PES scan in fractional coordinates
+            y_range (list): The y-range to show in the PES scan in fractional coordinates
+            z_range (list or None): The range to show in the PES scan in fractional coordinates
+                given interface structure
+            grid_density_x (int): Number of grid points to sample in the x-direction
+            grid_density_y (int): Number of grid points to sample in the y-direction
+            output (str): File name to save the image
+        """
+        if custom_radius_dict is None:
+            radius_dict = self._get_radii()
+        else:
+            if type(custom_radius_dict) == dict:
+                radius_dict = custom_radius_dict
+
+        species = np.array(self.interface.species, dtype=str)
+        r = np.array([radius_dict[i] for i in species])
+
+        layer_inds, heights = group_layers(self.interface, atol=atol)
+        bot_film_ind = np.min(np.where(heights > self.interface_height))
+        top_sub_ind = np.max(np.where(heights < self.interface_height))
+        second_film_ind = bot_film_ind + 1
+        second_sub_ind = top_sub_ind - 1
+
+        fi = layer_inds[bot_film_ind]
+        fi2 = layer_inds[second_film_ind]
+        # fi = np.concatenate([fi, fi2])
+
+        si = layer_inds[top_sub_ind]
+        si2 = layer_inds[second_sub_ind]
+        # si = np.concatenate([si, si2])
+
+        matrix = self.interface.lattice.matrix
+        a = matrix[0,:2]
+        b = matrix[1,:2]
+        borders = np.vstack([np.zeros(2), a, a + b, b, np.zeros(2)])
+
+        film_coords = self.interface.frac_coords[fi]
+        periodic_shifts = np.array([ 
+            [0,0,0],
+            [1,1,0],
+            [1,0,0],
+            [0,1,0],
+            [-1,0,0],
+            [0,-1,0],
+            [-1,1,0],
+            [1,-1,0],
+            [-1,-1,0],
+            [2,0,0],
+            [0,2,0],
+            [-2,0,0],
+            [0,-2,0],
+            [2,1,0],
+            [1,2,0],
+            [-2,1,0],
+            [1,-2,0],
+            [2,-1,0],
+            [-1,2,0],
+            [-2,-1,0],
+            [-1,-2,0],
+            [-2,-2,0],
+            [2,2,0],
+            [2,-2,0],
+            [-2,2,0],
+        ])
+        film_coords = np.vstack([film_coords + shift for shift in periodic_shifts]).dot(matrix)
+        film_rs = np.tile(r[fi], 25)
+
+        sub_coords = self.interface.frac_coords[si].dot(matrix)
+        sub_rs = r[si]
+
+        coords = np.r_[film_coords, sub_coords]
+        rs = np.concatenate([film_rs, sub_rs])
+        film_inds = np.arange(len(film_rs))
+        sub_inds = np.arange(len(film_rs), len(film_rs) + len(sub_rs))
+
+        X_frac, Y_frac = np.meshgrid(
+            np.linspace(0, 1, grid_density_x),
+            np.linspace(0, 1, grid_density_y),
+        )
+
+        cart_coords = np.c_[
+            X_frac.ravel(),
+            Y_frac.ravel(),
+            np.zeros(len(Y_frac.ravel()))
+        ].dot(matrix)
+        X = cart_coords[:,0].reshape(X_frac.shape)
+        Y = cart_coords[:,1].reshape(Y_frac.shape)
+        Z = self.overlap_film_sub(X=X, Y=Y, coords=coords, rs=rs, fi=film_inds, si=sub_inds)
+        Z_components = np.copy(Z)[:,0]
+        # Z_components = Z_components[np.logical_not(np.isclose(Z_components, 0, atol=0.01).all(axis=1))]
+        # Z_components = Z_components[np.argsort(np.argmax(Z_components, axis=1))]
+        # selected_inds = [0, 4, 11, 16, 5, 10, 3, 13, 9, 17, 7, 12, 1, 6, 14, 18, 15, 8, 2]
+        # Z_components = Z_components[selected_inds]
+        Z = Z.sum(axis=0)
+        # Z -= Z.min()
+        # Z /= Z.max()
+
+        x_size = borders[:,0].max() - borders[:,0].min()
+        y_size = borders[:,1].max() - borders[:,1].min()
+        ratio = y_size / x_size
+
+        if ratio < 1:
+            fig_x_size = 4.5 * (1 / ratio)
+            fig_y_size = 4.5
+        else:
+            fig_x_size = 4.5
+            fig_y_size = 4.5 * ratio
+
+        print(fig_x_size, fig_y_size)
+        fig, ax = plt.subplots(figsize=(fig_x_size, fig_y_size), dpi=400)
+        ax.set_xlabel(r"Shift in $x$ ($\AA$)", fontsize=fontsize)
+        ax.set_ylabel(r"Shift in $y$ ($\AA$)", fontsize=fontsize)
+
+        Z_plot = np.copy(Z)
+        Z_plot -= Z_plot.min()
+        Z_plot /= Z_plot.max()
+
+        im = ax.pcolormesh(
+            X,
+            Y,
+            Z_plot,
+            cmap=cmap,
+            shading='gouraud',
+            norm=Normalize(vmin=np.nanmin(Z_plot), vmax=np.nanmax(Z_plot)),
+        )
+
+        fig2, ax2 = plt.subplots(figsize=(fig_x_size,fig_y_size), dpi=400, sharex=True)
+        ax2.set_xlabel('Shift along $\\vec{a}$ ($\\AA$)', fontsize=fontsize)
+        ax2.set_ylabel('Score (Arb. Units)', fontsize=fontsize)
+        ax2.tick_params(labelsize=fontsize, left=False, labelleft=False)
+        x0 = X[0]
+        y0 = Y[0]
+        line_x = np.linalg.norm(np.c_[x0, y0], axis=1)
+        line_y = Z[0]
+
+
+        ax2.plot(
+            line_x,
+            line_y,
+            color='black',
+        )
+        for comp in Z_components:
+            ax2.fill_between(
+                line_x,
+                comp,
+                alpha=0.1,
+                color='blue',
+            )
+            ax2.plot(
+                line_x,
+                comp,
+                color='blue',
+            )
+
+        ax2.set_xlim(line_x.min(), line_x.max())
+        ax2.set_ylim(0, None)
+        fig2.tight_layout(pad=0.4)
+        fig2.subplots_adjust(left=0.175, top=0.8655, right=0.95, bottom=0.092)
+        fig2.savefig(output2)
+
+        ax.plot(
+            borders[:,0],
+            borders[:,1],
+            color='black',
+            linewidth=2,
+        )
+
+        divider = make_axes_locatable(ax)
+        cax = divider.append_axes("top", size="5%", pad=0.1)
+
+        cbar = fig.colorbar(im, cax=cax, orientation='horizontal')
+        cbar.ax.tick_params(labelsize=fontsize)
+        cbar.ax.locator_params(nbins=2)
+        cbar.set_label('Score (Arb. Units)', fontsize=fontsize)
+        cax.xaxis.set_ticks_position("top")
+        cax.xaxis.set_label_position("top")
+        ax.tick_params(labelsize=fontsize)
+
+        ax.set_xlim(borders[:,0].min(), borders[:,0].max())
+        ax.set_ylim(borders[:,1].min(), borders[:,1].max())
+        ax.set_aspect('equal')
+
+        ax.annotate(
+            '$d_{int}$ = ' + f'{np.round(self.interfacial_distance, 3)}',
+            xy=(0.03,0.03),
+            xycoords='axes fraction',
+            fontsize=14,
+        )
+
+        fig.tight_layout()
+        fig.savefig(output, bbox_inches='tight')
+
+        return None, None
+
+
     def run_surface_matching(
         self,
         scan_size,
@@ -934,6 +1472,7 @@ class Interface:
         fontsize=18,
         cmap='jet',
         output='PES.png',
+        output2='cross_sec.png',
         xlims=None,
         ylims=None,
         atol=None,
@@ -960,6 +1499,8 @@ class Interface:
         r = np.array([radius_dict[i] for i in species]) 
 
         layer_inds, heights = group_layers(self.interface, atol=atol)
+        print(heights)
+        print(self.interface_height)
         bot_film_ind = np.min(np.where(heights > self.interface_height))
         top_sub_ind = np.max(np.where(heights < self.interface_height))
         second_film_ind = bot_film_ind + 1
@@ -1003,20 +1544,20 @@ class Interface:
         X = cart_coords[:,0].reshape(X_frac.shape)
         Y = cart_coords[:,1].reshape(Y_frac.shape)
 
-        mus_orig, sigmas_orig, scales_orig = self._get_score_function_params(
+        mus_orig, sigmas_orig, scales_orig = self._get_score_function_params_old(
             si=si,
             fi=fi, 
             r=r,
         )
 
-        mus_sub, sigmas_sub, scales_sub = self._get_score_function_params(
+        mus_sub, sigmas_sub, scales_sub = self._get_score_function_params_old(
             si=si2,
             fi=fi, 
             r=r,
             sub_z_shift=sub_z_shift,
         )
 
-        mus_film, sigmas_film, scales_film = self._get_score_function_params(
+        mus_film, sigmas_film, scales_film = self._get_score_function_params_old(
             si=si,
             fi=fi2, 
             r=r,
@@ -1037,36 +1578,37 @@ class Interface:
             mus=mus_orig,
             sigmas=sigmas_orig,
             scales=scales_orig
-        ).round(4)
+        ).round(4).sum(axis=0)
         PES_values_sub = self._generate_PES(
             all_centers_orig[:,0],
             all_centers_orig[:,1],
             mus=mus_sub,
             sigmas=sigmas_sub,
             scales=scales_sub
-        ).round(4)
+        ).round(4).sum(axis=0)
         PES_values_film = self._generate_PES(
             all_centers_orig[:,0],
             all_centers_orig[:,1],
             mus=mus_film,
             sigmas=sigmas_film,
             scales=scales_film
-        ).round(4)
+        ).round(4).sum(axis=0)
 
         # PES_rank_values = PES_values_orig + np.exp(-np.abs(sub_z_shift)) * PES_values_sub + np.exp(-np.abs(film_z_shift)) * PES_values_film
 
-        PES_rank_values_1 = PES_values_orig
+        PES_rank_values_1 = np.round(PES_values_orig, 4)
         unique_PES_values_1 = np.unique(PES_rank_values_1)
         degenerate_min_inds = (PES_rank_values_1 == unique_PES_values_1[0])
         PES_values_orig = PES_values_orig[degenerate_min_inds]
         PES_values_sub = PES_values_sub[degenerate_min_inds]
         PES_values_film = PES_values_film[degenerate_min_inds]
-        PES_rank_values_2 = PES_values_orig + PES_values_sub + PES_values_film
+        min_centers_orig = all_centers_orig[degenerate_min_inds]
+        PES_rank_values_2 = np.round(PES_values_orig + PES_values_sub + PES_values_film, 4)
         unique_PES_values_2 = np.unique(PES_rank_values_2)
         unique_inds = [np.where(PES_rank_values_2 == u)[0] for u in unique_PES_values_2]
-        unique_shift_inds = [u[np.argmin(np.linalg.norm(all_centers_orig[u], axis=1))] for u in unique_inds]
-        min_shift_inds = unique_shift_inds[np.argmin(PES_rank_values_2[unique_shift_inds])]
-        min_centers_orig = all_centers_orig[degenerate_min_inds]
+        unique_shift_inds = [u[np.argmin(np.linalg.norm(min_centers_orig[u], axis=1))] for u in unique_inds]
+        # min_shift_inds = unique_shift_inds[np.argmin(PES_rank_values_2[unique_shift_inds])]
+        min_shift_inds = unique_shift_inds[np.argmax(PES_rank_values_2[unique_shift_inds])]
         min_center_orig = min_centers_orig[min_shift_inds]
 
         Z_orig = self._generate_PES(
@@ -1075,10 +1617,10 @@ class Interface:
             mus=mus_orig,
             sigmas=sigmas_orig,
             scales=scales_orig
-        ).reshape(X.shape)
+        ).reshape((-1,)+X.shape)
 
-        Z_orig -= Z_orig.min()
-        Z_orig /= Z_orig.max()
+        # Z_orig -= Z_orig.min()
+        # Z_orig /= Z_orig.max()
 
 
         # x_init_sub, y_init_sub = self._init_gd_positions(mus=mus_sub, sigmas=sigmas_sub)
@@ -1096,10 +1638,10 @@ class Interface:
             mus=mus_sub,
             sigmas=sigmas_sub,
             scales=scales_sub,
-        ).reshape(X.shape)
+        ).reshape((-1,) + X.shape)
 
-        Z_sub -= Z_sub.min()
-        Z_sub /= Z_sub.max()
+        # Z_sub -= Z_sub.min()
+        # Z_sub /= Z_sub.max()
 
 
         # x_init_film, y_init_film = self._init_gd_positions(mus=mus_film, sigmas=sigmas_film)
@@ -1117,10 +1659,10 @@ class Interface:
             mus=mus_film,
             sigmas=sigmas_film,
             scales=scales_film,
-        ).reshape(X.shape)
+        ).reshape((-1,) + X.shape)
 
-        Z_film -= Z_film.min()
-        Z_film /= Z_film.max()
+        # Z_film -= Z_film.min()
+        # Z_film /= Z_film.max()
 
         x_size = borders[:,0].max() - borders[:,0].min()
         y_size = borders[:,1].max() - borders[:,1].min()
@@ -1133,9 +1675,10 @@ class Interface:
             fig_x_size = 4.5
             fig_y_size = 4.5 * ratio
 
+        print(fig_x_size, fig_y_size)
         fig, ax = plt.subplots(figsize=(fig_x_size, fig_y_size), dpi=400)
 
-        Zs = [Z_orig, Z_film, Z_sub]
+        Zs = [Z_orig.sum(axis=0), Z_film.sum(axis=0), Z_sub.sum(axis=0)]
         # x_gds = [x_gd_orig, x_gd_film, x_gd_sub]
         # y_gds = [y_gd_orig, y_gd_film, y_gd_sub]
 
@@ -1144,14 +1687,57 @@ class Interface:
 
         plot_ind = 0
 
+        Z_plot = Zs[plot_ind]
+        Z_plot -= Z_plot.min()
+        Z_plot /= Z_plot.max()
+
         im = ax.pcolormesh(
             X,
             Y,
-            Zs[plot_ind],
+            Z_plot,
             cmap=cmap,
             shading='gouraud',
-            norm=Normalize(vmin=np.nanmin(Zs[plot_ind]), vmax=np.nanmax(Zs[plot_ind])),
+            norm=Normalize(vmin=np.nanmin(Z_plot), vmax=np.nanmax(Z_plot)),
         )
+
+        fig2, ax2 = plt.subplots(figsize=(fig_x_size,fig_y_size), dpi=400)
+        ax2.set_xlabel('Shift along $\\vec{a}$ ($\\AA$)', fontsize=fontsize)
+        ax2.set_ylabel('Score (Arb. Units)', fontsize=fontsize)
+        ax2.tick_params(labelsize=fontsize, left=False, labelleft=False)
+        x0 = X[0]
+        y0 = Y[0]
+        line_x = np.linalg.norm(np.c_[x0, y0], axis=1)
+        line_y = Z_orig.sum(axis=0)[0]
+        Z_components = Z_orig[:,0]
+        # Z_components = Z_components[np.logical_not(np.isclose(Z_components, 0, atol=0.01).all(axis=1))]
+        # selected_inds = [7, 0, 12, 15, 3, 11, 8, 2, 13, 16, 9, 4, 6, 14, 1, 17, 5, 10, 18]
+        # # Z_components = Z_components[np.argsort(np.argmax(Z_components, axis=1))]
+        # Z_components = Z_components[selected_inds]
+
+        ax2.plot(
+            line_x,
+            line_y,
+            color='black',
+        )
+
+        for comp in Z_components:
+            ax2.fill_between(
+                line_x,
+                comp,
+                alpha=0.1,
+                color='blue',
+            )
+            ax2.plot(
+                line_x,
+                comp,
+                color='blue',
+            )
+
+        ax2.set_xlim(line_x.min(), line_x.max())
+        ax2.set_ylim(0, None)
+        fig2.tight_layout(pad=0.4)
+        fig2.subplots_adjust(left=0.175, top=0.8655, right=0.95, bottom=0.092)
+        fig2.savefig(output2)
 
         # for j in range(x_gd_orig.shape[1]):
         #     ax.plot(
@@ -1160,8 +1746,8 @@ class Interface:
         #         color='white',
         #     )
         ax.scatter(
-            all_centers_orig[:,0],
-            all_centers_orig[:,1],
+            min_centers_orig[:,0],
+            min_centers_orig[:,1],
             color='red',
             marker='o',
             s=50,
@@ -1198,12 +1784,201 @@ class Interface:
         ax.set_ylim(borders[:,1].min(), borders[:,1].max())
         ax.set_aspect('equal')
 
+        ax.annotate(
+            '$d_{int}$ = ' + f'{np.round(self.interfacial_distance, 3)}',
+            xy=(0.03,0.03),
+            xycoords='axes fraction',
+            fontsize=14,
+        )
+
         fig.tight_layout()
         fig.savefig(output, bbox_inches='tight')
 
         return min_center_orig
 
-    def plot_interface_top(self, output='interface_view.png', layers_from_interface=[2,2], alpha=0.5, legend_fontsize=16, transparent=False, atol=None):
+
+    def get_ewald_energy(self):
+        interface = copy.deepcopy(self.interface)
+        interface.add_oxidation_state_by_guess()
+
+        film_inds = np.where(interface.frac_coords[:,-1] > self.interface_height)[0]
+        sub_inds = np.where(interface.frac_coords[:,-1] < self.interface_height)[0]
+
+        film = copy.deepcopy(interface)
+        film.remove_sites(sub_inds)
+
+        substrate = copy.deepcopy(interface)
+        substrate.remove_sites(film_inds)
+
+        interface_E = EwaldSummation(interface).total_energy
+        film_E = EwaldSummation(film).total_energy
+        substrate_E = EwaldSummation(substrate).total_energy
+
+        return (film_E + substrate_E) - interface_E
+
+    def get_dispersion(self, calc_type='d3'):
+        # from ase.calculators.dftd3 import DFTD3
+        from dftd4.ase import DFTD4
+
+        interface = copy.deepcopy(self.interface)
+
+        film_inds = np.where(interface.frac_coords[:,-1] > self.interface_height)[0]
+        sub_inds = np.where(interface.frac_coords[:,-1] < self.interface_height)[0]
+
+        film = copy.deepcopy(interface)
+        film.remove_sites(sub_inds)
+
+        substrate = copy.deepcopy(interface)
+        substrate.remove_sites(film_inds)
+
+        interface_atoms = AseAtomsAdaptor().get_atoms(interface)
+        sub_atoms = AseAtomsAdaptor().get_atoms(substrate)
+        film_atoms = AseAtomsAdaptor().get_atoms(film)
+
+
+        interface_atoms.set_calculator(DFTD4(method='PBE'))
+        sub_atoms.set_calculator(DFTD4(method='PBE'))
+        film_atoms.set_calculator(DFTD4(method='PBE'))
+
+        # interface_atoms.set_calculator(DFTD3(xc='PBE'))
+        # sub_atoms.set_calculator(DFTD3(xc='PBE'))
+        # film_atoms.set_calculator(DFTD3(xc='PBE'))
+
+        interface_E = interface_atoms.get_potential_energy()
+        substrate_E = sub_atoms.get_potential_energy()
+        film_E = film_atoms.get_potential_energy()
+
+        return (film_E + substrate_E) - interface_E
+
+
+    def _ewald_sum(self, structure, shift, film_inds):
+        structure.translate_sites(indices=film_inds, vector=shift)
+        E = EwaldSummation(structure).total_energy
+        structure.translate_sites(indices=film_inds, vector=-shift)
+
+        return E
+
+
+    def run_surface_matching_ewald(
+        self,
+        grid_density_x=15,
+        grid_density_y=15,
+        fontsize=16,
+        cmap='jet',
+        output='PES.png',
+        shift=True,
+    ):
+        #TODO
+
+        interface = copy.deepcopy(self.interface)
+        interface.add_oxidation_state_by_guess()
+
+        film_inds = np.where(interface.frac_coords[:,-1] > self.interface_height)[0]
+        sub_inds = np.where(interface.frac_coords[:,-1] < self.interface_height)[0]
+
+        film = copy.deepcopy(interface)
+        film.remove_sites(sub_inds)
+
+        sub = copy.deepcopy(interface)
+        sub.remove_sites(film_inds)
+
+        film_E = EwaldSummation(film).total_energy
+        sub_E = EwaldSummation(sub).total_energy
+
+        matrix = self.interface.lattice.matrix
+        a = matrix[0,:2]
+        b = matrix[1,:2]
+        x_grid = np.linspace(0,1,grid_density_x)
+        y_grid = np.linspace(0,1,grid_density_y)
+        X, Y = np.meshgrid(
+            x_grid,
+            y_grid,
+        )
+        frac_shifts = np.c_[X.ravel(), Y.ravel(), 0 * Y.ravel()]
+        cart_shifts = frac_shifts.dot(matrix)
+        X_cart = cart_shifts[:,0].reshape(X.shape)
+        Y_cart = cart_shifts[:,1].reshape(Y.shape)
+
+        inputs = zip(repeat(interface), frac_shifts, repeat(film_inds))
+        with Pool(cpu_count()) as p:
+            Z = p.starmap(self._ewald_sum, inputs)
+
+        Z = (film_E + sub_E) - np.array(Z).reshape(X.shape)
+
+        Z_spline = RectBivariateSpline(y_grid, x_grid, Z)
+        x_grid_interp = np.linspace(0,1,401)
+        y_grid_interp = np.linspace(0,1,401)
+        X_interp, Y_interp = np.meshgrid(x_grid_interp, y_grid_interp)
+        Z_interp = Z_spline.ev(Y_interp, X_interp)
+        cart_shifts_interp = np.c_[X_interp.ravel(), Y_interp.ravel(), 0 * Y_interp.ravel()].dot(matrix)
+        X_cart_interp = cart_shifts_interp[:,0].reshape(X_interp.shape) 
+        Y_cart_interp = cart_shifts_interp[:,1].reshape(Y_interp.shape) 
+
+        borders = np.vstack([np.zeros(2), a, a + b, b, np.zeros(2)])
+        x_size = borders[:,0].max() - borders[:,0].min()
+        y_size = borders[:,1].max() - borders[:,1].min()
+        ratio = y_size / x_size
+
+        fig, ax = plt.subplots(figsize=(5,5*ratio), dpi=400)
+        ax.set_xlabel(r"Shift in $x$ ($\AA$)", fontsize=fontsize)
+        ax.set_ylabel(r"Shift in $y$ ($\AA$)", fontsize=fontsize)
+
+        max_inds = np.where(Z_interp == Z_interp.max())
+
+        x_opt = X_cart_interp[max_inds]
+        y_opt = Y_cart_interp[max_inds]
+
+        if shift:
+            self.shift_film(shift=[x_opt[0], y_opt[0], 0], fractional=False, inplace=True)
+
+
+        im = ax.pcolormesh(
+            X_cart_interp,
+            Y_cart_interp,
+            Z_interp,
+            cmap=cmap,
+            shading='gouraud',
+            norm=Normalize(vmin=np.nanmin(Z), vmax=np.nanmax(Z)),
+        )
+
+        ax.plot(
+            borders[:,0],
+            borders[:,1],
+            color='black',
+            linewidth=2,
+        )
+
+        ax.scatter(
+            x_opt,
+            y_opt,
+            color='white',
+            s=100,
+            marker='X'
+        )
+
+        from mpl_toolkits.axes_grid1 import make_axes_locatable
+        divider = make_axes_locatable(ax)
+        cax = divider.append_axes("top", size="5%", pad=0.1)
+
+        cbar = fig.colorbar(im, cax=cax, orientation='horizontal')
+        cbar.ax.tick_params(labelsize=fontsize)
+        cbar.ax.locator_params(nbins=2)
+        cbar.set_label('$E_{adh}$ (eV)', fontsize=fontsize)
+        cax.xaxis.set_ticks_position("top")
+        cax.xaxis.set_label_position("top")
+        ax.tick_params(labelsize=fontsize)
+
+        ax.set_xlim(borders[:,0].min(), borders[:,0].max())
+        ax.set_ylim(borders[:,1].min(), borders[:,1].max())
+        ax.set_aspect('equal')
+
+        fig.tight_layout()
+        fig.savefig(output, bbox_inches='tight')
+        plt.close(fig)
+
+        return Z_interp.max()
+
+    def plot_interface(self, output='interface_view.png', layers_from_interface=[2,2], alpha=0.5, legend_fontsize=16, transparent=False, atol=None):
         layer_inds, heights = group_layers(self.interface, atol=atol)
         bot_film_ind = np.min(np.where(heights > self.interface_height))
         top_sub_ind = np.max(np.where(heights < self.interface_height))
@@ -1373,7 +2148,7 @@ class Interface:
             layer_atom_coords = (layer_atom_coords - supercell_shifts[:,None]).reshape(-1,3)
             inds_in_cell = ((layer_atom_coords[:,:2].round(2) >= 0) & (layer_atom_coords[:,:2].round(2) <= 1)).all(axis=1)
             layer_atom_coords = layer_atom_coords[inds_in_cell].dot(matrix).dot(rot_mat)
-            layer_atom_coords = layer_atom_coords - 
+            # layer_atom_coords = layer_atom_coords - 
             layer_atom_symbols = np.array(self.interface.species, dtype='str')[inds]
             layer_atom_symbols = np.concatenate([layer_atom_symbols for _ in range(9)])[inds_in_cell]
             layer_atom_species = np.zeros(layer_atom_symbols.shape, dtype=int)

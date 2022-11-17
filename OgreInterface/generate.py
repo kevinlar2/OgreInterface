@@ -25,6 +25,9 @@ from ase.geometry import get_layers
 from ase.build.general_surface import ext_gcd
 from ase.build.supercells import make_supercell
 from ase.neighborlist import neighbor_list
+from ase.data import atomic_numbers, covalent_radii
+from ase.ga.utilities import closest_distances_generator, CellBounds
+from ase.ga.startgenerator import StartGenerator
 
 from pyxtal.tolerance import Tol_matrix
 from pyxtal.symmetry import Group
@@ -1024,3 +1027,52 @@ class RandomSurfaceGenerator:
             slab = pertub.apply_transformation(slab)
 
         return slab
+
+
+class RandomBulkGenerator:
+    """
+    This class will be used to build interfaces between a given film/substate and a random crystal structure.
+    """
+    def __init__(
+            self,
+            random_comp,
+            natoms=40,
+            cell_size=11,
+    ):
+        self.random_comp = random_comp
+        self.natoms = natoms
+        self.cell_size = cell_size
+
+    def _get_composition(self, natoms):
+        elements = self.random_comp
+
+        compositions = list(combinations_with_replacement(elements, natoms))
+        compositions = [comp for comp in compositions if all(e in comp for e in elements)]
+
+        ind = random.randint(0, len(compositions) - 1)
+        composition = compositions[ind]
+
+        return composition
+
+    def generate_structure(self):
+        blocks = self._get_composition(self.natoms)
+        unique_e, counts = np.unique(blocks, return_counts=True) 
+
+        blmin = closest_distances_generator(
+            atom_numbers=[atomic_numbers[i] for i in unique_e],
+            ratio_of_covalent_radii=0.9,
+        )
+
+        cell = Atoms(cell=np.eye(3)*self.cell_size, pbc=True)
+
+        sg = StartGenerator(
+            cell,
+            blocks,
+            blmin,
+            number_of_variable_cell_vectors=0,
+        )
+
+        a = sg.get_new_candidate()
+        s = AseAtomsAdaptor().get_structure(a)
+
+        return s

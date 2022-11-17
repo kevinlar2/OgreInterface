@@ -9,6 +9,7 @@ from pymatgen.io.vasp.inputs import Poscar
 from pymatgen.io.ase import AseAtomsAdaptor
 from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
 from pymatgen.symmetry.structure import SymmetrizedStructure
+from pymatgen.transformations.standard_transformations import PerturbStructureTransformation
 from pymatgen.analysis.interfaces.zsl import ZSLGenerator, reduce_vectors
 from pymatgen.analysis.interfaces.substrate_analyzer import SubstrateAnalyzer
 from pymatgen.symmetry.analyzer import SymmOp
@@ -23,6 +24,10 @@ from ase.spacegroup import get_spacegroup
 from ase.geometry import get_layers
 from ase.build.general_surface import ext_gcd
 from ase.data.colors import jmol_colors
+from ase.data import atomic_numbers
+from ase.ga.utilities import closest_distances_generator, CellBounds
+from ase.ga.startgenerator import StartGenerator
+from ase.ga.data import PrepareDB
 
 import numpy as np
 from math import gcd
@@ -2220,3 +2225,124 @@ class Interface:
         fig.tight_layout(pad=0.4)
         fig.savefig(output, transparent=transparent)
 
+    
+    def create_ga_candidate(
+        self,
+        film_random_layers,
+        sub_random_layers,
+        film_shift_layers,
+        sub_shift_layers,
+        scaling_matrix=[1,1,1],
+        atol=None,
+    ):
+        interface = self.interface
+        
+        if np.sum(scaling_matrix) > 3:
+            interface.make_supercell(scaling_matrix=scaling_matrix)
+
+        species = np.array(interface.species, dtype=str)
+
+        layer_inds, heights = group_layers(interface, atol=atol)
+        bot_film_ind = np.min(np.where(heights > self.interface_height))
+        top_sub_ind = np.max(np.where(heights < self.interface_height))
+        film_random_layer_inds = [bot_film_ind + i for i in range(film_random_layers)]
+        sub_random_layer_inds = [top_sub_ind - i for i in range(sub_random_layers)]
+        film_shift_layer_inds = [bot_film_ind + (i + film_random_layers) for i in range(film_shift_layers)]
+        sub_shift_layer_inds = [top_sub_ind - (i + sub_random_layers) for i in range(film_shift_layers)]
+
+        film_random_inds = np.concatenate(
+            [layer_inds[i] for i in film_random_layer_inds]
+        )
+        sub_random_inds = np.concatenate(
+            [layer_inds[i] for i in sub_random_layer_inds]
+        )
+
+        film_shift_inds = np.concatenate(
+            [layer_inds[i] for i in film_shift_layer_inds]
+        )
+
+        sub_shift_inds = np.concatenate(
+            [layer_inds[i] for i in sub_shift_layer_inds]
+        )
+
+        film_max_shifts = 0.2 * np.concatenate([
+            [1 / (j + 1)] * len(layer_inds[i]) for j, i in enumerate(film_shift_layer_inds)
+        ])
+
+        sub_max_shifts = 0.2 * np.concatenate([
+            [1 / (j + 1)] * len(layer_inds[i]) for j, i in enumerate(sub_shift_layer_inds)
+        ])
+
+        random_max = np.max(interface.frac_coords[film_random_inds,-1])
+        random_min = np.min(interface.frac_coords[sub_random_inds,-1])
+
+        # random_unit_cell = interface.lattice.matrix.dot(np.array([1,1,(random_max - random_min)]) * np.eye(3))
+        random_unit_cell = (np.array([1,1,(random_max - random_min)]) * np.eye(3)).dot(interface.lattice.matrix)
+
+        all_random_inds = np.concatenate([film_random_inds, sub_random_inds])
+
+        blocks = species[all_random_inds]
+
+        unique_e, counts = np.unique(blocks, return_counts=True)
+
+        # Generate a dictionary with the closest allowed interatomic distances
+        blmin = closest_distances_generator(
+            atom_numbers=[atomic_numbers[i] for i in unique_e],
+            ratio_of_covalent_radii=0.75,
+        )
+        print(blmin)
+
+        slab = Atoms(cell=random_unit_cell, pbc=True)
+
+        # Initialize the random structure generator
+        sg = StartGenerator(
+            slab,
+            blocks,
+            blmin,
+            number_of_variable_cell_vectors=0,
+        )
+
+        random_atoms = sg.get_new_candidate()
+        random_structure = AseAtomsAdaptor().get_structure(random_atoms)
+
+        initial_atoms_ind = np.ones(len(interface), dtype=bool)
+        initial_atoms_ind[all_random_inds] = False
+
+        new_species = species[initial_atoms_ind]
+
+        new_frac_coords = copy.deepcopy(interface.frac_coords)
+        film_shifts = np.vstack([
+            np.random.uniform(low=-i, high=i, size=(1,3)) for i in film_max_shifts
+        ]).dot(interface.lattice.inv_matrix)
+
+        sub_shifts = np.vstack([
+            np.random.uniform(low=-i, high=i, size=(1,3)) for i in sub_max_shifts
+        ]).dot(interface.lattice.inv_matrix)
+        new_frac_coords[film_shift_inds] += film_shifts
+        new_frac_coords[sub_shift_inds] += sub_shifts
+
+        new_frac_coords = new_frac_coords[initial_atoms_ind]
+
+        new_species = np.concatenate([
+            new_species,
+            np.array(random_structure.species, dtype=str)
+        ])
+        random_frac_coords = random_structure.frac_coords
+        full_c = np.linalg.norm(interface.lattice.matrix[2])
+        small_c = np.linalg.norm(random_structure.lattice.matrix[2])
+        random_frac_coords[:, -1] *= (small_c / full_c)
+        random_frac_coords[:,-1] += random_min 
+        new_frac_coords = np.vstack([
+            new_frac_coords,
+            random_frac_coords
+        ])
+
+        new_structure = Structure(
+            lattice=interface.lattice,
+            species=new_species,
+            coords=new_frac_coords,
+            coords_are_cartesian=False,
+            to_unit_cell=True,
+        )
+
+        return new_structure, random_structure

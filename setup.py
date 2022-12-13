@@ -19,7 +19,8 @@ setup(
         # 'torch',
         # 'pytorch-lightning',
         # 'hydra-core',
-        'schnetpack',
+        # 'schnetpack',
+        'schnetpack @ git+https://github.com/atomistic-machine-learning/schnetpack.git'
     ],
     url='https://github.com/DerekDardzinski/OgreInterfaces',
     authour='Derek Dardzinski',

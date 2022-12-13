@@ -1387,7 +1387,7 @@ class Interface:
             fig_x_size = 4.5
             fig_y_size = 4.5 * ratio
 
-        print(fig_x_size, fig_y_size)
+        # print(fig_x_size, fig_y_size)
         fig, ax = plt.subplots(figsize=(fig_x_size, fig_y_size), dpi=400)
         ax.set_xlabel(r"Shift in $x$ ($\AA$)", fontsize=fontsize)
         ax.set_ylabel(r"Shift in $y$ ($\AA$)", fontsize=fontsize)
@@ -1510,8 +1510,8 @@ class Interface:
         r = np.array([radius_dict[i] for i in species]) 
 
         layer_inds, heights = group_layers(self.interface, atol=atol)
-        print(heights)
-        print(self.interface_height)
+        # print(heights)
+        # print(self.interface_height)
         bot_film_ind = np.min(np.where(heights > self.interface_height))
         top_sub_ind = np.max(np.where(heights < self.interface_height))
         second_film_ind = bot_film_ind + 1
@@ -1686,7 +1686,7 @@ class Interface:
             fig_x_size = 4.5
             fig_y_size = 4.5 * ratio
 
-        print(fig_x_size, fig_y_size)
+        # print(fig_x_size, fig_y_size)
         fig, ax = plt.subplots(figsize=(fig_x_size, fig_y_size), dpi=400)
 
         Zs = [Z_orig.sum(axis=0), Z_film.sum(axis=0), Z_sub.sum(axis=0)]
@@ -2015,6 +2015,7 @@ class Interface:
         grid_density_x=15,
         grid_density_y=15,
         fontsize=16,
+        dpi=400,
         cmap='jet',
         output='PES.png',
         shift=True,
@@ -2083,7 +2084,7 @@ class Interface:
         y_size = borders[:,1].max() - borders[:,1].min()
         ratio = y_size / x_size
 
-        fig, ax = plt.subplots(figsize=(5,5*ratio), dpi=400)
+        fig, ax = plt.subplots(figsize=(5,5*ratio), dpi=dpi)
         ax.set_xlabel(r"Shift in $x$ ($\AA$)", fontsize=fontsize)
         ax.set_ylabel(r"Shift in $y$ ($\AA$)", fontsize=fontsize)
 
@@ -2449,7 +2450,7 @@ class Interface:
             atom_numbers=[atomic_numbers[i] for i in unique_e],
             ratio_of_covalent_radii=0.75,
         )
-        print(blmin)
+        # print(blmin)
 
         slab = Atoms(cell=random_unit_cell, pbc=True)
 

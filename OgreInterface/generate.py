@@ -178,7 +178,7 @@ class SurfaceGenerator:
             for pmg_slab in pmg_slabs:
                 s = time.time()
                 E_vac, E_bulk = self._get_ewald_energy(pmg_slab)
-                print(time.time() - s)
+                # print(time.time() - s)
                 diffs.append(E_vac - (self.layers * E_bulk))
 
             diffs = np.array(diffs)

@@ -173,6 +173,7 @@ class MillerSearch(object):
     def plot_misfits(
         self,
         cmap='rainbow',
+        dpi=400,
         output='misfit_plot.png',
         fontsize=12,
         figsize=(5.5,4),
@@ -199,9 +200,8 @@ class MillerSearch(object):
         x, y = np.meshgrid(np.arange(M), np.arange(N))
         s = self.areas
         c = self.misfits* 100
-        print(s)
         
-        fig, ax = plt.subplots(figsize=figsize, dpi=600)
+        fig, ax = plt.subplots(figsize=figsize, dpi=dpi)
         ax_divider = make_axes_locatable(ax)
 
         cax = ax_divider.append_axes(

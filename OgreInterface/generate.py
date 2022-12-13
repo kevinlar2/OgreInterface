@@ -7,7 +7,6 @@ from pymatgen.core.lattice import Lattice
 from pymatgen.io.vasp.inputs import Poscar
 from pymatgen.io.ase import AseAtomsAdaptor
 from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
-# from pymatgen.analysis.substrate_analyzer import ZSLGenerator, SubstrateAnalyzer, reduce_vectors
 from pymatgen.analysis.interfaces.zsl import ZSLGenerator, reduce_vectors
 from pymatgen.analysis.interfaces.substrate_analyzer import SubstrateAnalyzer
 from pymatgen.core.surface import get_slab_regions
@@ -28,22 +27,19 @@ from ase.neighborlist import neighbor_list
 from ase.data import atomic_numbers, covalent_radii
 from ase.ga.utilities import closest_distances_generator, CellBounds
 from ase.ga.startgenerator import StartGenerator
-
-from pyxtal.tolerance import Tol_matrix
-from pyxtal.symmetry import Group
-from pyxtal import pyxtal
-from pyxtal.lattice import Lattice as pyxtal_Lattice
 from ase.build import surface as build_surface
-import random
 
-import numpy as np
-from math import gcd
+
+from OgreInterface.surfaces import Surface, Interface
+
 from itertools import combinations, combinations_with_replacement
-from surfaces import Surface, Interface
 from tqdm import tqdm
+from math import gcd
+import numpy as np
+import random
 import time
-import copy
 from copy import deepcopy
+import copy
 
 class SurfaceGenerator:
     """
@@ -570,107 +566,6 @@ class InterfaceGenerator:
         return sorted_unique_interfaces
 
 
-
-if __name__ == "__main__":
-    sub_layer = 31
-    film_layer = 13
-
-    #  sub_layer = 13
-    #  film_layer = 8
-
-    subs = SurfaceGenerator.from_file(
-        #  './poscars/POSCAR_InSb_conv',
-        './poscars/POSCAR_InAs_conv',
-        miller_index=[1,1,1],
-        layers=sub_layer,
-        vacuum=5,
-    )
-
-    films = SurfaceGenerator.from_file(
-        #  './poscars/POSCAR_Fe_conv',
-        './poscars/POSCAR_Al_conv',
-        miller_index=[1,1,1],
-        layers=film_layer,
-        vacuum=5,
-    )
-
-    #  subs.slabs[3].remove_layers(num_layers=5)
-    #  films.slabs[0].remove_layers(num_layers=1, top=True)
-
-    inter = InterfaceGenerator(
-        #  substrate=films.slabs[0],
-        #  film=subs.slabs[1],
-        substrate=subs.slabs[2],
-        film=films.slabs[0],
-        length_tol=0.01,
-        angle_tol=0.01,
-        area_tol=0.01,
-        max_area=400,
-        interfacial_distance=2.2,
-        sub_strain_frac=1,
-        vacuum=80,
-    )
-
-    #  inter = InterfaceGenerator(
-        #  substrate=subs.slabs[3],
-        #  film=films.slabs[0],
-        #  length_tol=0.05,
-        #  angle_tol=0.05,
-        #  area_tol=0.05,
-        #  max_area=700,
-        #  interfacial_distance=2.2,
-        #  sub_strain_frac=0,
-        #  #  vacuum=2.2,
-        #  vacuum=30,
-    #  )
-
-    r = {'In': 1.37, 'Sb': 1.33, 'Fe': 1.235}
-    r3 = {'In': 1.582, 'As': 1.27, 'Al': 1.43}
-
-    from pymatgen.analysis.molecule_structure_comparator import CovalentRadius
-    r2 = {
-        'In': CovalentRadius.radius['In'],
-        'Sb': CovalentRadius.radius['Sb'],
-        'As': CovalentRadius.radius['As'],
-        'Fe': Element('Fe').metallic_radius,
-        'Al': Element('Al').metallic_radius,
-    }
-
-    interfaces = inter.generate_interfaces()
-    range_a = [-1, 1]
-    range_b = [-1, 1]
-    grid_size = 0.05
-    grid_density = 15
-    
-    from vaspvis.utils import passivator
-
-    for i, interface in enumerate(interfaces):
-        pas = passivator(
-            struc=interface.interface,
-            #  top=True,
-            #  bot=False,
-            bot=True,
-            top=False,
-            symmetrize=False,
-            passivated_struc='./test/Al-InAs111A/CONTCAR'
-        )
-        coords = pas.frac_coords
-        shift_val = (coords[:,-1].max() - coords[:,-1].min()) / 2
-        pas.translate_sites(
-            indices=range(len(pas)),
-            vector=[0,0,shift_val],
-            frac_coords=True,
-            to_unit_cell=True,
-        )
-        Poscar(pas).write_file(f'./test/Al-InAs111A/larger/POSCAR_{i}')
-        #  Poscar(pas).write_file(f'./test/Al-InAs111B/POSCAR_{i}')
-        #  ranking_score = interface.get_ranking_score(
-            #  radius_dict=r,
-        #  )
-        #  print(ranking_score)
-
-            
-
 class RandomInterfaceGenerator:
     """
     This class will be used to build interfaces between a given film/substate and a random crystal structure.
@@ -687,6 +582,15 @@ class RandomInterfaceGenerator:
             vacuum=40,
             center=True,
     ):
+        try:
+            from pyxtal.tolerance import Tol_matrix
+            from pyxtal.symmetry import Group
+            from pyxtal import pyxtal
+            from pyxtal.lattice import Lattice as pyxtal_Lattice
+        except ImportError:
+            raise ImportError('pyxtal must be installed for the RandomInterfaceGenerator')
+
+
         if type(surface_generator) == SurfaceGenerator:
             self.surface_generator = surface_generator
         else:
@@ -920,6 +824,14 @@ class RandomSurfaceGenerator:
             center=True,
             rattle=True,
     ):
+        try:
+            from pyxtal.tolerance import Tol_matrix
+            from pyxtal.symmetry import Group
+            from pyxtal import pyxtal
+            from pyxtal.lattice import Lattice as pyxtal_Lattice
+        except ImportError:
+            raise ImportError('pyxtal must be installed for the RandomInterfaceGenerator')
+
         self.random_comp = random_comp
         self.natoms_per_layer = natoms_per_layer
         self.layers = layers

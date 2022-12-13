@@ -3,15 +3,17 @@ from pymatgen.core.surface import get_symmetrically_distinct_miller_indices
 from pymatgen.core.structure import Structure
 from pymatgen.io.ase import AseAtomsAdaptor
 from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
-from itertools import combinations_with_replacement
+
 from ase import Atoms
 import numpy as np
+
 import matplotlib.pyplot as plt
 from matplotlib.collections import PatchCollection
 from matplotlib.colors import Normalize
 from mpl_toolkits.axes_grid1.axes_divider import make_axes_locatable
-# from mpl_toolkits.axes_grid1.colorbar import colorbar
+
 from functools import reduce
+from itertools import combinations_with_replacement
 
 
 

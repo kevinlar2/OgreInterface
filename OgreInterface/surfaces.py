@@ -2064,9 +2064,9 @@ class Interface:
             charge_dict=charge_dict
         )
 
-        # Z = (film_E[0] + sub_E[0]) - np.array(int_E).reshape(X.shape)
+        Z = (film_E[0] + sub_E[0]) - np.array(int_E).reshape(X.shape)
         # Z = (film_ewald_E[0] + sub_ewald_E[0]) - np.array(int_ewald_E).reshape(X.shape)
-        Z = (film_zbl_E[0] + sub_zbl_E[0]) - np.array(int_zbl_E).reshape(X.shape)
+        # Z = (film_zbl_E[0] + sub_zbl_E[0]) - np.array(int_zbl_E).reshape(X.shape)
         # Z = np.array(int_E).reshape(X.shape)
 
         Z_spline = RectBivariateSpline(y_grid, x_grid, Z)
@@ -2140,7 +2140,7 @@ class Interface:
 
         fig.tight_layout()
         fig.savefig(output, bbox_inches='tight')
-        plt.close(fig)
+        # plt.close()
 
         return Z_interp.max()
 

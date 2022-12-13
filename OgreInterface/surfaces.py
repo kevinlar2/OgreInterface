@@ -2116,7 +2116,8 @@ class Interface:
         ax.scatter(
             x_opt,
             y_opt,
-            color='white',
+            fc='white',
+            ec='black',
             s=100,
             marker='X'
         )

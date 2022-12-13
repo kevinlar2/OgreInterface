@@ -255,6 +255,7 @@ class MillerSearch(object):
 
         fig.tight_layout(pad=0.4)
         fig.savefig(output)
+        plt.close(fig)
 
 
 if __name__ == "__main__":

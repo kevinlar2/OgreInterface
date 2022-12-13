@@ -1,4 +1,4 @@
-from generate import InterfaceGenerator, SurfaceGenerator
+from OgreInterface.generate import InterfaceGenerator, SurfaceGenerator
 from pymatgen.core.surface import get_symmetrically_distinct_miller_indices
 from pymatgen.core.structure import Structure
 from pymatgen.io.ase import AseAtomsAdaptor

@@ -1,4 +1,5 @@
 import numpy as np
+import copy
 
 def group_layers(structure, atol=None):
     """

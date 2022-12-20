@@ -31,6 +31,8 @@ from ase.ga.data import PrepareDB
 
 from OgreInterface.utils import group_layers
 from OgreInterface.ewald import ionic_score_function
+from OgreInterface.zbl import zbl_score_function
+from OgreInterface.born import born_score_function
 
 import matplotlib.pyplot as plt
 from matplotlib.patches import Circle
@@ -1911,6 +1913,7 @@ class Interface:
         Y_cart = cart_shifts[:,1].reshape(Y.shape)
 
         inputs = zip(repeat(interface), frac_shifts, repeat(film_inds))
+
         with Pool(cpu_count()) as p:
             Z = p.starmap(self._ewald_sum, inputs)
 
@@ -2010,7 +2013,7 @@ class Interface:
         return atoms
 
 
-    def run_surface_matching_ionic(
+    def run_surface_matching_pmg_zbl(
         self,
         grid_density_x=15,
         grid_density_y=15,
@@ -2032,6 +2035,146 @@ class Interface:
         film = copy.deepcopy(self.film_part)
         sub = copy.deepcopy(self.sub_part)
 
+        interface.add_oxidation_state_by_guess()
+        film.add_oxidation_state_by_guess()
+        sub.add_oxidation_state_by_guess()
+
+        film_zbl_E = zbl_score_function(
+            atoms=[AseAtomsAdaptor.get_atoms(film)],
+        )[0] 
+        sub_zbl_E = zbl_score_function(
+            atoms=[AseAtomsAdaptor.get_atoms(sub)],
+        )[0] 
+
+        film_ewald_E = EwaldSummation(film).total_energy
+        sub_ewald_E = EwaldSummation(sub).total_energy
+
+        matrix = self.interface.lattice.matrix
+        a = matrix[0,:2]
+        b = matrix[1,:2]
+        x_grid = np.linspace(0,1,grid_density_x)
+        y_grid = np.linspace(0,1,grid_density_y)
+        X, Y = np.meshgrid(
+            x_grid,
+            y_grid,
+        )
+        frac_shifts = np.c_[X.ravel(), Y.ravel(), 0 * Y.ravel()]
+        cart_shifts = frac_shifts.dot(matrix)
+        X_cart = cart_shifts[:,0].reshape(X.shape)
+        Y_cart = cart_shifts[:,1].reshape(Y.shape)
+
+        inputs = zip(repeat(film_inds), frac_shifts)
+        with Pool(cpu_count()) as p:
+            atoms_list = p.starmap(self._get_shifted_atoms, inputs)
+
+        ewald_inputs = zip(repeat(interface), frac_shifts, repeat(film_inds))
+        with Pool(cpu_count()) as p:
+            int_ewald_E = p.starmap(self._ewald_sum, ewald_inputs)
+
+        int_zbl_E = zbl_score_function(atoms=atoms_list)
+
+        Z_zbl = (film_zbl_E + sub_zbl_E) - int_zbl_E.reshape(X.shape)
+        Z_ewald = (film_ewald_E + sub_ewald_E) - np.array(int_ewald_E).reshape(X.shape)
+        Z = Z_zbl + Z_ewald
+
+        Z_spline = RectBivariateSpline(y_grid, x_grid, Z)
+        x_grid_interp = np.linspace(0,1,401)
+        y_grid_interp = np.linspace(0,1,401)
+        X_interp, Y_interp = np.meshgrid(x_grid_interp, y_grid_interp)
+        Z_interp = Z_spline.ev(Y_interp, X_interp)
+        Z_interp -= Z_interp.min()
+        cart_shifts_interp = np.c_[X_interp.ravel(), Y_interp.ravel(), 0 * Y_interp.ravel()].dot(matrix)
+        X_cart_interp = cart_shifts_interp[:,0].reshape(X_interp.shape) 
+        Y_cart_interp = cart_shifts_interp[:,1].reshape(Y_interp.shape) 
+
+        borders = np.vstack([np.zeros(2), a, a + b, b, np.zeros(2)])
+        x_size = borders[:,0].max() - borders[:,0].min()
+        y_size = borders[:,1].max() - borders[:,1].min()
+        ratio = y_size / x_size
+
+        fig, ax = plt.subplots(figsize=(5,5*ratio), dpi=dpi)
+        ax.set_xlabel(r"Shift in $x$ ($\AA$)", fontsize=fontsize)
+        ax.set_ylabel(r"Shift in $y$ ($\AA$)", fontsize=fontsize)
+
+        max_inds = np.where(Z_interp == Z_interp.max())
+
+        x_opt = X_cart_interp[max_inds]
+        y_opt = Y_cart_interp[max_inds]
+
+        if shift:
+            self.shift_film(shift=[x_opt[0], y_opt[0], 0], fractional=False, inplace=True)
+
+        im = ax.contourf(
+            X_cart_interp,
+            Y_cart_interp,
+            Z_interp,
+            cmap=cmap,
+            levels=200,
+            # shading='gouraud',
+            norm=Normalize(vmin=np.nanmin(Z_interp), vmax=np.nanmax(Z_interp)),
+        )
+
+        ax.plot(
+            borders[:,0],
+            borders[:,1],
+            color='black',
+            linewidth=2,
+        )
+
+        ax.scatter(
+            x_opt,
+            y_opt,
+            fc='white',
+            ec='black',
+            s=100,
+            marker='X'
+        )
+
+        from mpl_toolkits.axes_grid1 import make_axes_locatable
+        divider = make_axes_locatable(ax)
+        cax = divider.append_axes("top", size="5%", pad=0.1)
+
+        cbar = fig.colorbar(im, cax=cax, orientation='horizontal')
+        cbar.ax.tick_params(labelsize=fontsize)
+        cbar.ax.locator_params(nbins=2)
+        cbar.set_label('$E_{adh}$ (eV)', fontsize=fontsize)
+        cax.xaxis.set_ticks_position("top")
+        cax.xaxis.set_label_position("top")
+        ax.tick_params(labelsize=fontsize)
+
+        ax.set_xlim(borders[:,0].min(), borders[:,0].max())
+        ax.set_ylim(borders[:,1].min(), borders[:,1].max())
+        ax.set_aspect('equal')
+
+        fig.tight_layout()
+        fig.savefig(output, bbox_inches='tight')
+        # plt.close()
+
+        return Z_interp.max()
+
+    def run_surface_matching_ionic(
+        self,
+        grid_density_x=15,
+        grid_density_y=15,
+        fontsize=16,
+        dpi=400,
+        cmap='jet',
+        output='PES.png',
+        shift=True,
+        charge_dict=None,
+        radius_dict=None,
+    ):
+        interface = copy.deepcopy(self.interface)
+
+        if charge_dict is None:
+            charge_dict = interface.composition.oxi_state_guesses()[0]
+
+        film_inds = np.where(interface.frac_coords[:,-1] > self.interface_height)[0]
+        sub_inds = np.where(interface.frac_coords[:,-1] < self.interface_height)[0]
+
+        film = copy.deepcopy(self.film_part)
+        sub = copy.deepcopy(self.sub_part)
+
         film_E, film_ewald_E, film_zbl_E = ionic_score_function(
             atoms=[AseAtomsAdaptor.get_atoms(film)],
             charge_dict=charge_dict,
@@ -2040,6 +2183,19 @@ class Interface:
             atoms=[AseAtomsAdaptor.get_atoms(sub)],
             charge_dict=charge_dict,
         ) 
+
+        film_born_E = born_score_function(
+            atoms=[AseAtomsAdaptor.get_atoms(film)],
+            charge_dict=charge_dict,
+            radius_dict=radius_dict,
+            cutoff=36.0,
+        )
+        sub_born_E = born_score_function(
+            atoms=[AseAtomsAdaptor.get_atoms(sub)],
+            charge_dict=charge_dict,
+            radius_dict=radius_dict,
+            cutoff=36.0,
+        )
 
         matrix = self.interface.lattice.matrix
         a = matrix[0,:2]
@@ -2061,12 +2217,24 @@ class Interface:
 
         int_E, int_ewald_E, int_zbl_E = ionic_score_function(
             atoms=atoms_list,
-            charge_dict=charge_dict
+            charge_dict=charge_dict,
+            alpha=0.02,
+            cutoff=36.0,
+            k_max=20,
         )
 
-        Z = (film_E[0] + sub_E[0]) - np.array(int_E).reshape(X.shape)
-        # Z = (film_ewald_E[0] + sub_ewald_E[0]) - np.array(int_ewald_E).reshape(X.shape)
-        # Z = (film_zbl_E[0] + sub_zbl_E[0]) - np.array(int_zbl_E).reshape(X.shape)
+        int_born_E = born_score_function(
+            atoms=atoms_list,
+            charge_dict=charge_dict,
+            radius_dict=radius_dict,
+            cutoff=36.0,
+        )
+
+        # Z = (film_E[0] + sub_E[0]) - np.array(int_E).reshape(X.shape)
+        Z_ew = (film_ewald_E[0] + sub_ewald_E[0]) - np.array(int_ewald_E).reshape(X.shape)
+        # Z_zb = (film_zbl_E[0] + sub_zbl_E[0]) - np.array(int_zbl_E).reshape(X.shape)
+        Z_born = (film_born_E[0] + sub_born_E[0]) - np.array(int_born_E).reshape(X.shape)
+        Z = Z_ew + Z_born
         # Z = np.array(int_E).reshape(X.shape)
 
         Z_spline = RectBivariateSpline(y_grid, x_grid, Z)

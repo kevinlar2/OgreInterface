@@ -138,6 +138,7 @@ class Surface:
         )
 
         if np.linalg.det(ortho_basis) < 0:
+            print("left handed")
             ortho_basis[1] *= -1
 
         op = SymmOp.from_rotation_and_translation(
@@ -214,6 +215,21 @@ class Interface:
         self.strained_sub = self._strain_and_orient_sub()
         self.strained_film = self._strain_and_orient_film()
         self.interface, self.sub_part, self.film_part = self._stack_interface()
+        self.area = np.linalg.norm(
+            np.cross(self.interface.lattice.matrix[0], self.interface.lattice.matrix[1])
+        )
+
+    def __str__(self):
+        film_str = "Al(111)"
+        sub_str = "InAs(111)"
+        return_str = f"""
+        Film: {film_str}
+        Substrate: {sub_str}
+        Epitaxial Match (film || sub): ([1 0 0] || [1 0 0]) & ([0 1 0] || [0 1 0])
+        Cross Section Area (Ang^2): {self.area}
+        """
+
+        return return_str
 
     def write_file(self, output="POSCAR_interface"):
         Poscar(self.interface).write_file(output)

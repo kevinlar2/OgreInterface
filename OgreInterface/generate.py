@@ -12,6 +12,7 @@ from pymatgen.analysis.interfaces.zsl import ZSLGenerator, reduce_vectors
 from pymatgen.analysis.interfaces.substrate_analyzer import SubstrateAnalyzer
 from pymatgen.core.surface import get_slab_regions
 from pymatgen.core.periodic_table import Element
+from pymatgen.core.operations import SymmOp
 from pymatgen.analysis.ewald import EwaldSummation
 from pymatgen.transformations.standard_transformations import RotationTransformation
 from pymatgen.transformations.standard_transformations import (
@@ -118,7 +119,7 @@ class SurfaceGenerator:
             a, b = b, a % b
         return a
 
-    def _generate_slabs(self):
+    def _generate_slabs2(self):
         sg = SlabGenerator(
             initial_structure=self.pmg_structure,
             miller_index=self.miller_index,
@@ -157,6 +158,102 @@ class SurfaceGenerator:
                 basis[i] /= np.abs(reduce(self._float_gcd, basis[i]))
 
             # TODO: if slab is left handed switch a and b vectors
+
+            if (
+                basis[-1]
+                == -miller_index / np.min(np.abs(miller_index[miller_index != 0]))
+            ).all():
+                operation = SymmOp.from_origin_axis_angle(
+                    origin=[0.5, 0.5, 0.5],
+                    axis=[1, 1, 0],
+                    angle=180,
+                )
+                slab.apply_operation(operation, fractional=True)
+
+            new_a, new_b = reduce_vectors(
+                slab.lattice.matrix[0], slab.lattice.matrix[1]
+            )
+
+            final_struc = Structure(
+                lattice=Lattice(
+                    matrix=np.hstack([new_a, new_b, slab.lattice.matrix[-1]])
+                ),
+                species=slab.species,
+                coords=slab.cart_coords,
+                to_unit_cell=True,
+                coords_are_cartesian=True,
+                site_properties=slab.site_properties,
+            )
+            final_struc.sort()
+
+            if np.linalg.det(final_struc.lattice.matrix) < 0:
+                print("switch")
+                final_struc.make_supercell(np.array([[0, 1, 0], [1, 0, 0], [0, 0, 1]]))
+
+            new_a, new_b = reduce_vectors(
+                final_struc.lattice.matrix[0], final_struc.lattice.matrix[1]
+            )
+
+            print(np.vstack([new_a, new_b]))
+
+            basis = deepcopy(final_struc.lattice.matrix)
+            print(basis)
+            basis /= np.linalg.norm(basis, axis=1)[:, None]
+
+            for i, b in enumerate(basis):
+                abs_b = np.abs(b)
+                basis[i] /= abs_b[abs_b > 0.001].min()
+                basis[i] /= np.abs(reduce(self._float_gcd, basis[i]))
+
+            surface = Surface(
+                slab=final_struc,
+                bulk=self.pmg_structure,
+                miller_index=self.miller_index,
+                layers=self.layers,
+                vacuum=self.vacuum,
+                uvw_basis=basis.astype(int),
+            )
+            surfaces.append(surface)
+
+        return surfaces
+
+    def _generate_slabs(self):
+        sg = SlabGenerator(
+            initial_structure=self.pmg_structure,
+            miller_index=self.miller_index,
+            min_slab_size=self.layers,
+            min_vacuum_size=self.vacuum,
+            in_unit_planes=True,
+            primitive=True,
+            lll_reduce=False,
+            reorient_lattice=False,
+            max_normal_search=int(max(np.abs(self.miller_index))),
+            center_slab=True,
+        )
+        miller_index = np.array(self.miller_index)
+
+        if np.isclose(
+            sg.slab_scale_factor[-1],
+            -miller_index / np.min(np.abs(miller_index[miller_index != 0])),
+        ).all():
+            print("neg")
+            sg.slab_scale_factor *= -1
+            single = self.pmg_structure.copy()
+            single.make_supercell(sg.slab_scale_factor)
+            sg.oriented_unit_cell = Structure.from_sites(single, to_unit_cell=True)
+
+        slabs = sg.get_slabs(tol=0.25)
+
+        surfaces = []
+
+        for slab in slabs:
+            basis = deepcopy(slab.lattice.matrix)
+            basis /= np.linalg.norm(basis, axis=1)[:, None]
+
+            for i, b in enumerate(basis):
+                abs_b = np.abs(b)
+                basis[i] /= abs_b[abs_b > 0.001].min()
+                basis[i] /= np.abs(reduce(self._float_gcd, basis[i]))
 
             if (
                 basis[-1]

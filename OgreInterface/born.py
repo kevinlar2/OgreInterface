@@ -20,7 +20,8 @@ class BornRepulsion(CutoffInteraction):
         self.B = self._calc_B()
 
     def __call__(self, r, qi, qj):
-        return np.abs(self.B * qi * qj) / r ** (self.n)
+        # return np.abs(self.B * qi * qj) / r ** (self.n)
+        return np.abs(self.B) / r ** (self.n)
 
     def first_derivative(self, r, qi, qj):
         return -np.abs(self.B * qi * qj) / r ** (self.n + 1)
@@ -67,9 +68,10 @@ class BornRepulsionCalculator(PairPotential):
         unique_numbers = np.unique(atoms.numbers)
         pairs = list(combinations_with_replacement(unique_numbers, 2))
         r0s = [(self.r0_dict[pair[0]] + self.r0_dict[pair[1]]) / 2 for pair in pairs]
+        # r0s = [np.sqrt(self.r0_dict[pair[0]] * self.r0_dict[pair[1]]) for pair in pairs]
         ns = [(self.n_dict[pair[0]] + self.n_dict[pair[1]]) / 2 for pair in pairs]
         f_dict = {
-            pair: self.get_potentials(r0, 5) for pair, r0, n in zip(pairs, r0s, ns)
+            pair: self.get_potentials(r0, 6) for pair, r0, n in zip(pairs, r0s, ns)
         }
 
         super().__init__(f_dict)

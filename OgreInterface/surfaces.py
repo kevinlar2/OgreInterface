@@ -2410,7 +2410,7 @@ class Interface:
         y_size = borders[:, 1].max() - borders[:, 1].min()
         ratio = y_size / x_size
 
-        fig, axs = plt.subplots(figsize=(3 * 5, 5 * ratio), dpi=dpi, ncols=3)
+        fig, axs = plt.subplots(figsize=(5, 3 * 5 * ratio), dpi=dpi, nrows=3)
 
         for ax, Z in zip(axs, Zs):
             Z_spline = RectBivariateSpline(y_grid, x_grid, Z)
@@ -2560,7 +2560,7 @@ class Interface:
 
         Z_ewald = (film_ewald_E + sub_ewald_E) - int_ewald_E.reshape(X.shape)
         Z_born = (film_born_E + sub_born_E) - int_born_E.reshape(X.shape)
-        Z = scale * Z_ewald + Z_born
+        Z = (1 / self.interfacial_distance**2) * Z_ewald + Z_born
 
         x_opt, y_opt, Z_opt = self._plot_surface_matching(
             x_grid=x_grid,

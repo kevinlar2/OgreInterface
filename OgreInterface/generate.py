@@ -133,10 +133,11 @@ class SurfaceGenerator:
         )
         miller_index = np.array(self.miller_index)
 
-        if (
-            sg.slab_scale_factor[-1]
-            == -miller_index / np.min(np.abs(miller_index[miller_index != 0]))
+        if np.isclose(
+            sg.slab_scale_factor[-1],
+            -miller_index / np.min(np.abs(miller_index[miller_index != 0])),
         ).all():
+            print("neg")
             sg.slab_scale_factor *= -1
             single = self.pmg_structure.copy()
             single.make_supercell(sg.slab_scale_factor)
@@ -155,10 +156,13 @@ class SurfaceGenerator:
                 basis[i] /= abs_b[abs_b > 0.001].min()
                 basis[i] /= np.abs(reduce(self._float_gcd, basis[i]))
 
+            # TODO: if slab is left handed switch a and b vectors
+
             if (
                 basis[-1]
                 == -miller_index / np.min(np.abs(miller_index[miller_index != 0]))
             ).all():
+                print("flip")
                 operation = SymmOp.from_origin_axis_angle(
                     origin=[0.5, 0.5, 0.5],
                     axis=[1, 1, 0],

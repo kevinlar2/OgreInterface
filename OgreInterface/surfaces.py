@@ -200,11 +200,13 @@ class Interface:
         self.angle_diff = angle_diff
         self.sub_strain_frac = sub_strain_frac
         self.vacuum = vacuum
-        self.substrate_supercell = self._prepare_slab(
-            self.substrate.slab_pmg_zup, self.sub_sl_vecs
+        self.substrate_supercell, self.substrate_supercell_uvw = self._prepare_slab(
+            self.substrate.slab_pmg_zup, self.sub_sl_vecs, self.substrate.uvw_basis
         )
-        self.film_supercell = self._prepare_slab(
-            self.film.slab_pmg_zup, self.film_sl_vecs
+        self.film_supercell, self.film_supercell_uvw = self._prepare_slab(
+            self.film.slab_pmg_zup,
+            self.film_sl_vecs,
+            self.film.uvw_basis,
         )
         self.interface_sl_vectors = self._get_interface_sl_vecs()
         self.interfacial_distance = interfacial_distance
@@ -257,15 +259,24 @@ class Interface:
 
             return shifted_interface
 
-    def _prepare_slab(self, slab, sl_vec):
+    def _float_gcd(self, a, b, rtol=1e-05, atol=1e-08):
+        t = min(abs(a), abs(b))
+        while abs(b) > rtol * t + atol:
+            a, b = b, a % b
+        return a
+
+    def _prepare_slab(self, slab, sl_vec, uvw):
         matrix = np.round(
             from_2d_to_3d(get_2d_transform(slab.lattice.matrix[:2], sl_vec))
         ).astype(int)
-        print(matrix)
         supercell_slab = copy.copy(slab)
         supercell_slab.make_supercell(scaling_matrix=matrix)
 
-        return supercell_slab
+        uvw_supercell = matrix @ uvw
+        for i, b in enumerate(uvw_supercell):
+            uvw_supercell[i] = uvw_supercell[i] / np.abs(reduce(self._float_gcd, b))
+
+        return supercell_slab, uvw_supercell
 
     def _get_angle(self, a, b):
         a_norm = np.linalg.norm(a)

@@ -85,7 +85,7 @@ class SurfaceGenerator:
         self.vacuum = vacuum
         self.generate_all = generate_all
         self.filter_ionic_slabs = filter_ionic_slabs
-        self.slabs = self._generate_slabs()
+        self.slabs = self._generate_slabs_fast()
 
     @classmethod
     def from_file(
@@ -243,6 +243,96 @@ class SurfaceGenerator:
             sg.oriented_unit_cell = Structure.from_sites(single, to_unit_cell=True)
 
         slabs = sg.get_slabs(tol=0.25)
+
+        surfaces = []
+
+        for slab in slabs:
+            basis = deepcopy(slab.lattice.matrix)
+            basis /= np.linalg.norm(basis, axis=1)[:, None]
+
+            for i, b in enumerate(basis):
+                abs_b = np.abs(b)
+                basis[i] /= abs_b[abs_b > 0.001].min()
+                basis[i] /= np.abs(reduce(self._float_gcd, basis[i]))
+
+            if (
+                basis[-1]
+                == -miller_index / np.min(np.abs(miller_index[miller_index != 0]))
+            ).all():
+                print("flip")
+                operation = SymmOp.from_origin_axis_angle(
+                    origin=[0.5, 0.5, 0.5],
+                    axis=[1, 1, 0],
+                    angle=180,
+                )
+                slab.apply_operation(operation, fractional=True)
+
+            new_a, new_b = reduce_vectors(
+                slab.lattice.matrix[0], slab.lattice.matrix[1]
+            )
+
+            final_struc = Structure(
+                lattice=Lattice(
+                    matrix=np.hstack([new_a, new_b, slab.lattice.matrix[-1]])
+                ),
+                species=slab.species,
+                coords=slab.cart_coords,
+                to_unit_cell=True,
+                coords_are_cartesian=True,
+                site_properties=slab.site_properties,
+            )
+            final_struc.sort()
+
+            basis = deepcopy(final_struc.lattice.matrix)
+            basis /= np.linalg.norm(basis, axis=1)[:, None]
+
+            for i, b in enumerate(basis):
+                abs_b = np.abs(b)
+                basis[i] /= abs_b[abs_b > 0.001].min()
+                basis[i] /= np.abs(reduce(self._float_gcd, basis[i]))
+
+            surface = Surface(
+                slab=final_struc,
+                bulk=self.pmg_structure,
+                miller_index=self.miller_index,
+                layers=self.layers,
+                vacuum=self.vacuum,
+                uvw_basis=basis.astype(int),
+            )
+            surfaces.append(surface)
+
+        return surfaces
+
+    def _generate_slabs_fast(self):
+        sg = SlabGenerator(
+            initial_structure=self.pmg_structure,
+            miller_index=self.miller_index,
+            min_slab_size=self.layers,
+            min_vacuum_size=self.vacuum,
+            in_unit_planes=True,
+            primitive=True,
+            lll_reduce=False,
+            reorient_lattice=False,
+            max_normal_search=int(max(np.abs(self.miller_index))),
+            center_slab=True,
+        )
+        miller_index = np.array(self.miller_index)
+
+        if np.isclose(
+            sg.slab_scale_factor[-1],
+            -miller_index / np.min(np.abs(miller_index[miller_index != 0])),
+        ).all():
+            print("neg")
+            sg.slab_scale_factor *= -1
+            single = self.pmg_structure.copy()
+            single.make_supercell(sg.slab_scale_factor)
+            sg.oriented_unit_cell = Structure.from_sites(single, to_unit_cell=True)
+
+        if self.generate_all:
+            slabs = sg.get_slabs(tol=0.25)
+        else:
+            possible_shifts = sg._calculate_possible_shifts()
+            slabs = [sg.get_slab(shift=possible_shifts[0])]
 
         surfaces = []
 

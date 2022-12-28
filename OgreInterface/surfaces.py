@@ -102,6 +102,7 @@ class Surface:
                 f"structure accepts 'pymatgen.core.structure.Structure' or 'ase.Atoms' not '{type(bulk).__name__}'"
             )
 
+        self.reduced_formula = self.bulk_pmg.composition.reduced_formula
         self.miller_index = miller_index
         self.layers = layers
         self.vacuum = vacuum
@@ -126,19 +127,44 @@ class Surface:
 
         self.slab_pmg.remove_sites(to_delete_conv)
 
+    def _rotate_vecs(self, a, b):
+        orig_vecs = np.vstack([a, b])
+        a_norm = a / np.linalg.norm(a)
+        b_norm = b / np.linalg.norm(b)
+
+        a_to_i = np.array([[a_norm[0], -a_norm[1]], [a_norm[1], a_norm[0]]])
+        ai_vecs = orig_vecs.dot(a_to_i)
+        new_a = ai_vecs[0]
+        new_b = ai_vecs[1]
+        b_norm = b_norm.dot(a_to_i)
+
+        if self._angle_between(new_a, new_b) > 180:
+            rot_mat = np.array([[b_norm[0], -b_norm[1]], [b_norm[1], b_norm[0]]])
+            new_matrix = ai_vecs.dot(rot_mat)
+
+            return np.c_[new_matrix, np.zeros(2)]
+        else:
+            return np.c_[ai_vecs, np.zeros(2)]
+
+    def _angle_between(self, p1, p2):
+        ang1 = np.arctan2(*p1[::-1])
+        ang2 = np.arctan2(*p2[::-1])
+
+        return np.rad2deg((ang2 - ang1) % (2 * np.pi))
+
     def _make_planar(self):
         matrix = deepcopy(self.slab_pmg.lattice.matrix)
         cross = np.cross(matrix[0], matrix[2])
         ortho_basis = np.vstack(
             [
                 matrix[0] / np.linalg.norm(matrix[0]),
-                -cross / np.linalg.norm(cross),
+                cross / np.linalg.norm(cross),
                 matrix[2] / np.linalg.norm(matrix[2]),
             ]
         )
 
         if np.linalg.det(ortho_basis) < 0:
-            print("left handed")
+            # print("left handed")
             ortho_basis[1] *= -1
 
         op = SymmOp.from_rotation_and_translation(
@@ -149,9 +175,21 @@ class Surface:
         planar_slab.apply_operation(op)
 
         planar_matrix = deepcopy(planar_slab.lattice.matrix)
-        inplane_vectors = [planar_matrix[0], planar_matrix[1]]
 
-        return planar_slab, inplane_vectors
+        new_inplane_vectors = self._rotate_vecs(
+            planar_matrix[0, :2], planar_matrix[1, :2]
+        )
+
+        planar_slab = Structure(
+            lattice=Lattice(matrix=np.vstack([new_inplane_vectors, planar_matrix[-1]])),
+            species=planar_slab.species,
+            coords=planar_slab.cart_coords,
+            coords_are_cartesian=True,
+            to_unit_cell=True,
+            site_properties=planar_slab.site_properties,
+        )
+
+        return planar_slab, new_inplane_vectors
 
     def _get_ewald_energy(self):
         slab = copy.deepcopy(self.slab_pmg)
@@ -201,10 +239,22 @@ class Interface:
         self.angle_diff = angle_diff
         self.sub_strain_frac = sub_strain_frac
         self.vacuum = vacuum
-        self.substrate_supercell, self.substrate_supercell_uvw = self._prepare_slab(
+        (
+            self.substrate_supercell,
+            self.substrate_matrix,
+            self.substrate_rot_sl_vecs,
+            self.substrate_supercell_uvw,
+            self.substrate_supercell_scale_factors,
+        ) = self._prepare_slab(
             self.substrate.slab_pmg_zup, self.sub_sl_vecs, self.substrate.uvw_basis
         )
-        self.film_supercell, self.film_supercell_uvw = self._prepare_slab(
+        (
+            self.film_supercell,
+            self.film_matrix,
+            self.film_rot_sl_vecs,
+            self.film_supercell_uvw,
+            self.film_supercell_scale_factors,
+        ) = self._prepare_slab(
             self.film.slab_pmg_zup,
             self.film_sl_vecs,
             self.film.uvw_basis,
@@ -220,14 +270,31 @@ class Interface:
         )
 
     def __str__(self):
-        film_str = "Al(111)"
-        sub_str = "InAs(111)"
-        return_str = f"""
-        Film: {film_str}
-        Substrate: {sub_str}
-        Epitaxial Match (film || sub): ([1 0 0] || [1 0 0]) & ([0 1 0] || [0 1 0])
-        Cross Section Area (Ang^2): {self.area}
-        """
+        fm = self.film.miller_index
+        sm = self.substrate.miller_index
+        film_str = f"{self.film.reduced_formula}({fm[0]} {fm[1]} {fm[2]})"
+        sub_str = f"{self.substrate.reduced_formula}({sm[0]} {sm[1]} {sm[2]})"
+        s_uvw = self.substrate_supercell_uvw
+        s_sf = self.substrate_supercell_scale_factors
+        f_uvw = self.film_supercell_uvw
+        f_sf = self.film_supercell_scale_factors
+        match_a_film = f"{f_sf[0]}*[{f_uvw[0][0]} {f_uvw[0][1]} {f_uvw[0][1]}]"
+        match_a_sub = f"{s_sf[0]}*[{s_uvw[0][0]} {s_uvw[0][1]} {s_uvw[0][1]}]"
+        match_b_film = f"{f_sf[1]}*[{f_uvw[1][0]} {f_uvw[1][1]} {f_uvw[1][1]}]"
+        match_b_sub = f"{s_sf[1]}*[{s_uvw[1][0]} {s_uvw[1][1]} {s_uvw[1][1]}]"
+        return_info = [
+            "Film: " + film_str,
+            "Substrate: " + sub_str,
+            "Epitaxial Match Along \\vec{a} (film || sub): "
+            + f"{match_a_film} || {match_a_sub}",
+            "Epitaxial Match Along \\vec{b} (film || sub): "
+            + f"{match_b_film} || {match_b_sub}",
+            "Strain Along \\vec{a} (%): " + f"{100*self.strain[0]:.3f}",
+            "Strain Along \\vec{b} (%): " + f"{100*self.strain[1]:.3f}",
+            "In-plane Angle Mismatch (%): " + f"{100*self.angle_diff:.3f}",
+            "Cross Section Area (Ang^2): " + f"{self.area:.3f}",
+        ]
+        return_str = "\n".join(return_info)
 
         return return_str
 
@@ -281,7 +348,43 @@ class Interface:
             a, b = b, a % b
         return a
 
+    def _rotate_vecs(self, a, b):
+        orig_vecs = np.vstack([a, b])
+        a_norm = a / np.linalg.norm(a)
+        b_norm = b / np.linalg.norm(b)
+
+        a_to_i = np.array([[a_norm[0], -a_norm[1]], [a_norm[1], a_norm[0]]])
+        ai_vecs = orig_vecs.dot(a_to_i)
+        new_a = ai_vecs[0]
+        new_b = ai_vecs[1]
+        b_norm = b_norm.dot(a_to_i)
+
+        if self._angle_between(new_a, new_b) > 180:
+            rot_mat = np.array([[b_norm[0], -b_norm[1]], [b_norm[1], b_norm[0]]])
+            new_matrix = ai_vecs.dot(rot_mat)
+
+            return np.c_[new_matrix, np.zeros(2)]
+        else:
+            return np.c_[ai_vecs, np.zeros(2)]
+
+    def _angle_between(self, p1, p2):
+        ang1 = np.arctan2(*p1[::-1])
+        ang2 = np.arctan2(*p2[::-1])
+
+        return np.rad2deg((ang2 - ang1) % (2 * np.pi))
+
     def _prepare_slab(self, slab, sl_vec, uvw):
+        # rot_sl_vec = self._rotate_vecs(sl_vec[0, :2], sl_vec[1, :2])
+
+        # print(np.round(rot_sl_vec, 3))
+        # print(np.round(slab.lattice.matrix[:2], 3))
+        # print("")
+
+        # print(
+        #     np.round(
+        #         from_2d_to_3d(get_2d_transform(slab.lattice.matrix[:2], sl_vec)), 3
+        #     )
+        # )
         matrix = np.round(
             from_2d_to_3d(get_2d_transform(slab.lattice.matrix[:2], sl_vec))
         ).astype(int)
@@ -289,10 +392,13 @@ class Interface:
         supercell_slab.make_supercell(scaling_matrix=matrix)
 
         uvw_supercell = matrix @ uvw
+        scale_factors = []
         for i, b in enumerate(uvw_supercell):
-            uvw_supercell[i] = uvw_supercell[i] / np.abs(reduce(self._float_gcd, b))
+            scale = np.abs(reduce(self._float_gcd, b))
+            uvw_supercell[i] = uvw_supercell[i] / scale
+            scale_factors.append(scale)
 
-        return supercell_slab, uvw_supercell
+        return supercell_slab, matrix, sl_vec, uvw_supercell, scale_factors
 
     def _get_angle(self, a, b):
         a_norm = np.linalg.norm(a)
@@ -313,6 +419,27 @@ class Interface:
         new_vec = np.matmul(rot_mat, vec.reshape(-1, 1))
 
         return new_vec
+
+    def _get_interface_sl_vecs(self):
+        sub_sl_vecs = copy.copy(self.substrate_supercell.lattice.matrix[:2, :])
+        if self.sub_strain_frac == 0:
+            new_sl_vecs = sub_sl_vecs
+
+            return new_sl_vecs
+        else:
+            a_strain = self.strain[0]
+            b_strain = self.strain[1]
+            a_norm = np.linalg.norm(sub_sl_vecs[0])
+            b_norm = np.linalg.norm(sub_sl_vecs[1])
+            sub_angle = self._get_angle(sub_sl_vecs[0], sub_sl_vecs[1])
+            new_angle = sub_angle * (1 + (self.sub_strain_frac * self.angle_diff))
+            new_a = sub_sl_vecs[0] * (1 + (self.sub_strain_frac * a_strain))
+            new_b = self._rotate(sub_sl_vecs[0] * (b_norm / a_norm), new_angle) * (
+                1 + (self.sub_strain_frac * b_strain)
+            )
+            new_sl_vecs = np.array([new_a, np.squeeze(new_b)])
+
+            return new_sl_vecs
 
     def _get_interface_sl_vecs(self):
         sub_sl_vecs = copy.copy(self.substrate_supercell.lattice.matrix[:2, :])
@@ -2638,6 +2765,141 @@ class Interface:
         return Z_interp.max()
 
     def plot_interface(
+        self,
+        output="interface_view.png",
+        film_color="red",
+        substrate_color="blue",
+        supercell_color="black",
+    ):
+        sub_matrix = deepcopy(self.substrate.slab_pmg_zup.lattice.matrix)
+        film_matrix = deepcopy(self.film.slab_pmg_zup.lattice.matrix)
+        sub_sc_matrix = deepcopy(self.substrate_supercell.lattice.matrix)
+        film_sc_matrix = deepcopy(self.film_supercell.lattice.matrix)
+        int_matrix = deepcopy(self.interface.lattice.matrix)
+
+        coords = np.array(
+            [
+                [0, 0, 0],
+                [1, 0, 0],
+                [1, 1, 0],
+                [0, 1, 0],
+                [0, 0, 0],
+            ]
+        )
+
+        shifts = np.array(
+            [
+                [0, 0, 0],
+                [1, 0, 0],
+                [0, 1, 0],
+                [-1, 0, 0],
+                [0, -1, 0],
+                [1, 1, 0],
+                [-1, -1, 0],
+            ]
+        )
+
+        coords_3x3 = [coords + shift for shift in shifts]
+
+        sub_coords = [c.dot(sub_matrix) for c in coords_3x3]
+        film_coords = [c.dot(film_matrix) for c in coords_3x3]
+        int_coords = coords.dot(int_matrix)
+        film_sl = coords.dot(film_sc_matrix)
+        sub_sl = coords.dot(sub_sc_matrix)
+
+        f_mat = self.film_matrix
+        s_mat = self.substrate_matrix
+
+        sub_struc = Structure(
+            lattice=self.substrate.slab_pmg_zup.lattice,
+            species=["H"],
+            coords=np.zeros((1, 3)),
+            to_unit_cell=True,
+            coords_are_cartesian=True,
+        )
+        sub_struc.make_supercell(s_mat)
+        sub_inv_matrix = deepcopy(sub_struc.lattice.inv_matrix)
+
+        film_struc = Structure(
+            lattice=self.film.slab_pmg_zup.lattice,
+            species=["H"],
+            coords=np.zeros((1, 3)),
+            to_unit_cell=True,
+            coords_are_cartesian=True,
+        )
+        film_struc.make_supercell(f_mat)
+        film_inv_matrix = deepcopy(film_struc.lattice.inv_matrix)
+
+        fig, ax = plt.subplots(figsize=(4, 4), dpi=400)
+        ax.plot(
+            int_coords[:, 0],
+            int_coords[:, 1],
+            color=supercell_color,
+            marker="o",
+        )
+
+        for c in sub_struc.cart_coords:
+            for c_3x3 in sub_coords:
+                cart_coords = c_3x3 + c
+                fc = cart_coords.dot(sub_inv_matrix)
+                if not (
+                    (fc[:, 0] <= 0).all()
+                    or (fc[:, 0] >= 1).all()
+                    or (fc[:, 1] <= 0).all()
+                    or (fc[:, 1] >= 1).all()
+                ):
+                    # if (
+                    #     np.logical_or(fc[:, 0] > 0, fc[:, 0] < 1).any()
+                    #     and np.logical_or(fc[:, 1] > 0, fc[:, 1] < 1).any()
+                    # ):
+                    ax.plot(
+                        cart_coords[:, 0],
+                        cart_coords[:, 1],
+                        color=substrate_color,
+                        marker="o",
+                    )
+
+        for c in film_struc.cart_coords:
+            for c_3x3 in film_coords:
+                cart_coords = c_3x3 + c
+                fc = cart_coords.dot(film_inv_matrix)
+                if (
+                    np.logical_or(fc[:, 0] > 0, fc[:, 0] < 1).any()
+                    and np.logical_or(fc[:, 1] > 0, fc[:, 1] < 1).any()
+                ):
+                    ax.plot(
+                        cart_coords[:, 0],
+                        cart_coords[:, 1],
+                        color=film_color,
+                        marker="o",
+                    )
+
+        # for c in film_struc.cart_coords:
+        #     ax.plot(
+        #         c[0] + film_coords[:, 0],
+        #         c[1] + film_coords[:, 1],
+        #         color=film_color,
+        #         marker=".",
+        #     )
+
+        ax.plot(
+            sub_sl[:, 0],
+            sub_sl[:, 1],
+            color="purple",
+            marker="o",
+        )
+        ax.plot(
+            film_sl[:, 0],
+            film_sl[:, 1],
+            color="green",
+            marker="o",
+        )
+
+        ax.set_aspect("equal")
+        fig.tight_layout(pad=0.4)
+        fig.savefig(output)
+
+    def plot_interface_old(
         self,
         output="interface_view.png",
         layers_from_interface=[2, 2],

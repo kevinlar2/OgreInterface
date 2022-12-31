@@ -1,6 +1,8 @@
 """
 This module will be used to construct the surfaces and interfaces used in this package.
 """
+from OgreInterface.surfaces import Surface, Interface
+
 from pymatgen.core.structure import Structure
 from pymatgen.analysis.structure_matcher import StructureMatcher
 from pymatgen.core.lattice import Lattice
@@ -10,29 +12,18 @@ from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
 from pymatgen.analysis.interfaces.zsl import ZSLGenerator, reduce_vectors
 from pymatgen.core.operations import SymmOp
 from pymatgen.analysis.ewald import EwaldSummation
-from pymatgen.transformations.standard_transformations import (
-    PerturbStructureTransformation,
-)
 
-from ase import Atoms
-from ase.build.surfaces_with_termination import surfaces_with_termination
-from ase.build.general_surface import surface
-from ase.build.supercells import make_supercell
-from ase.neighborlist import neighbor_list
-from ase.ga.startgenerator import StartGenerator
-
-
-from OgreInterface.surfaces import Surface, Interface
-
-from itertools import combinations, combinations_with_replacement
 from tqdm import tqdm
 import numpy as np
-import random
-import time
 from copy import deepcopy
-import copy
 from functools import reduce
 from typing import Union, List, Optional
+from itertools import combinations
+from ase import Atoms
+
+
+class TolarenceError(RuntimeError):
+    pass
 
 
 class SurfaceGenerator:
@@ -66,7 +57,7 @@ class SurfaceGenerator:
         self.vacuum = vacuum
         self.generate_all = generate_all
         self.filter_ionic_slabs = filter_ionic_slabs
-        self.slabs = self._generate_slabs_fast()
+        self.slabs = self._generate_slabs()
 
     @classmethod
     def from_file(
@@ -89,11 +80,11 @@ class SurfaceGenerator:
             filter_ionic_slabs,
         )
 
-    def _get_bulk(atoms_or_struc):
+    def _get_bulk(self, atoms_or_struc):
         if type(atoms_or_struc) == Atoms:
             init_structure = AseAtomsAdaptor.get_structure(atoms_or_struc)
         elif type(atoms_or_struc) == Structure:
-            init_structure = AseAtomsAdaptor.get_atoms(atoms_or_struc)
+            init_structure = atoms_or_struc
         else:
             raise TypeError(
                 f"structure accepts 'pymatgen.core.structure.Structure' or 'ase.Atoms' not '{type(atoms_or_struc).__name__}'"
@@ -105,15 +96,14 @@ class SurfaceGenerator:
 
         return conventional_structure, conventional_atoms
 
-    def _get_ewald_energy(self, slab):
-        slab = copy.deepcopy(slab)
-        bulk = copy.deepcopy(self.pmg_structure)
-        slab.add_oxidation_state_by_guess()
-        bulk.add_oxidation_state_by_guess()
-        E_slab = EwaldSummation(slab).total_energy
-        E_bulk = EwaldSummation(bulk).total_energy
-
-        return E_slab, E_bulk
+    # def _get_ewald_energy(self, slab):
+    #     slab = deepcopy(slab)
+    #     bulk = deepcopy(self.pmg_structure)
+    #     slab.add_oxidation_state_by_guess()
+    #     bulk.add_oxidation_state_by_guess()
+    #     E_slab = EwaldSummation(slab).total_energy
+    #     E_bulk = EwaldSummation(bulk).total_energy
+    #     return E_slab, E_bulk
 
     def _float_gcd(self, a, b, rtol=1e-05, atol=1e-08):
         t = min(abs(a), abs(b))
@@ -150,7 +140,21 @@ class SurfaceGenerator:
 
         return slab_generator
 
-    def _get_reduced_basis(self, basis):
+    def _get_reduced_basis(self, basis: np.ndarray):
+        """
+        This function is used to find the miller indices of the slab structure
+        basis vectors in their most reduced form. i.e.
+
+        |  2  4  0 |     | 1  2  0 |
+        |  0 -2  4 | ==> | 0 -1  2 |
+        | 10 10 10 |     | 1  1  1 |
+
+        Parameters:
+            basis (np.ndarray): 3x3 matrix defining the lattice vectors
+
+        Returns:
+            Reduced integer basis in the form of miller indices
+        """
         basis /= np.linalg.norm(basis, axis=1)[:, None]
 
         for i, b in enumerate(basis):
@@ -192,6 +196,13 @@ class SurfaceGenerator:
         return slab
 
     def _generate_slabs(self):
+        """
+        This function is used to generate slab structures with all unique
+        surface terminations.
+
+        Returns:
+            A list of Surface classes
+        """
         # Initialize the SlabGenerator
         sg = SlabGenerator(
             initial_structure=self.bulk_structure,
@@ -225,20 +236,25 @@ class SurfaceGenerator:
         # Loop through slabs to ensure that they are all properly oriented and reduced
         # Return Surface objects
         for slab in slabs:
+            # Get the inital miller-indices of the lattice
             basis = self._get_reduced_basis(
                 basis=deepcopy(slab.lattice.matrix)
             )
 
+            # Ensure that the slab is properly oriented w.r.t the given surface normal
             slab = self._get_properly_oriented_slab(
                 basis=basis, miller_index=miller_index, slab=slab
             )
 
+            # Reduce the vectors according to the Zur and McGill algorithm
             new_a, new_b = reduce_vectors(
                 slab.lattice.matrix[0], slab.lattice.matrix[1]
             )
 
+            # This is the lattice of the reduced surface
             reduced_matrix = np.hstack([new_a, new_b, slab.lattice.matrix[-1]])
 
+            # Create the pymatgen structure of the reduced surface
             reduced_struc = Structure(
                 lattice=Lattice(matrix=reduced_matrix),
                 species=slab.species,
@@ -249,10 +265,12 @@ class SurfaceGenerator:
             )
             reduced_struc.sort()
 
+            # Get the final reduced miller-indices of the lattice
             reduced_basis = self._get_reduced_basis(
                 basis=deepcopy(reduced_struc.lattice.matrix)
             )
 
+            # Create the Surface object
             surface = Surface(
                 slab=reduced_struc,
                 bulk=self.bulk_structure,
@@ -265,6 +283,23 @@ class SurfaceGenerator:
 
         return surfaces
 
+    def __len__(self):
+        return len(self.slabs)
+
+    @property
+    def nslabs(self):
+        """
+        Return the number of slabs generated by the SurfaceGenerator
+        """
+        return self.__len__()
+
+    @property
+    def terminations(self):
+        """
+        Return the terminations of each slab generated by the SurfaceGenerator
+        """
+        raise NotImplementedError
+
 
 class InterfaceGenerator:
     """
@@ -274,16 +309,16 @@ class InterfaceGenerator:
 
     def __init__(
         self,
-        substrate,
-        film,
-        area_tol=0.01,
-        angle_tol=0.01,
-        length_tol=0.01,
-        max_area=500,
-        interfacial_distance=2,
-        sub_strain_frac=0,
-        vacuum=40,
-        center=False,
+        substrate: Surface,
+        film: Surface,
+        area_tol: float = 0.01,
+        angle_tol: float = 0.01,
+        length_tol: float = 0.01,
+        max_area: float = 500.0,
+        interfacial_distance: float = 2.0,
+        sub_strain_frac: float = 0.0,
+        vacuum: float = 40.0,
+        center: bool = False,
     ):
         if type(substrate) == Surface:
             self.substrate = substrate
@@ -307,34 +342,29 @@ class InterfaceGenerator:
         self.interfacial_distance = interfacial_distance
         self.sub_strain_frac = sub_strain_frac
         self.vacuum = vacuum
-        self.interface_output = self._generate_interface_props()
+        # try:
+        (
+            self.film_sl_vecs,
+            self.sub_sl_vecs,
+            self.match_area,
+            self.film_vecs,
+            self.sub_vecs,
+            self.film_transformations,
+            self.substrate_transformations,
+        ) = self._generate_interface_props()
+        # except TolarenceError:
+        # print("No interfaces were found, please increase the tolarences.")
 
-        if self.interface_output is None:
-            pass
-        else:
-            [
-                self.film_sl_vecs,
-                self.sub_sl_vecs,
-                self.match_area,
-                self.film_vecs,
-                self.sub_vecs,
-                self.film_transformations,
-                self.substrate_transformations,
-            ] = self.interface_output
-            self._film_norms = self._get_norm(
-                self.film_sl_vecs, ein="ijk,ijk->ij"
-            )
-            self._sub_norms = self._get_norm(
-                self.sub_sl_vecs, ein="ijk,ijk->ij"
-            )
-            self.strain = self._get_strain()
-            self.angle_diff = self._get_angle_diff()
-            self.area_diff = self._get_area_diff()
-            self.area_ratio = self._get_area_ratios()
-            self.substrate_areas = self._get_area(
-                self.sub_sl_vecs[:, 0], self.sub_sl_vecs[:, 1]
-            )
-            self.rotation_mat = self._get_rotation_mat()
+        self._film_norms = self._get_norm(self.film_sl_vecs, ein="ijk,ijk->ij")
+        self._sub_norms = self._get_norm(self.sub_sl_vecs, ein="ijk,ijk->ij")
+        self.strain = self._get_strain()
+        self.angle_diff = self._get_angle_diff()
+        self.area_diff = self._get_area_diff()
+        self.area_ratio = self._get_area_ratios()
+        self.substrate_areas = self._get_area(
+            self.sub_sl_vecs[:, 0], self.sub_sl_vecs[:, 1]
+        )
+        self.rotation_mat = self._get_rotation_mat()
 
     def _get_norm(self, a, ein):
         a_norm = np.sqrt(np.einsum(ein, a, a))
@@ -437,7 +467,9 @@ class InterfaceGenerator:
         match_list = list(matches)
 
         if len(match_list) == 0:
-            return None
+            raise TolarenceError(
+                "No interfaces were found, please increase the tolarences."
+            )
         else:
             film_sl_vecs = np.array(
                 [match.film_sl_vectors for match in match_list]
@@ -606,7 +638,6 @@ class InterfaceGenerator:
             interfaces.append(interface)
 
         interfaces = np.array(interfaces)
-        all_int = interfaces
 
         interface_sizes = np.array(
             [len(interfaces[i].interface) for i in range(len(interfaces))]
@@ -655,492 +686,3 @@ class InterfaceGenerator:
         # sorted_unique_interfaces = [interfaces[i] for i in sort]
 
         return sorted_unique_interfaces
-
-
-class RandomInterfaceGenerator:
-    """
-    This class will be used to build interfaces between a given film/substate and a random crystal structure.
-    """
-
-    def __init__(
-        self,
-        surface_generator,
-        random_comp,
-        layers=2,
-        natoms=24,
-        supercell=[2, 2],
-        strain_range=[-0.05, 0.05],
-        interfacial_distance_range=[2, 3],
-        vacuum=40,
-        center=True,
-    ):
-        try:
-            from pyxtal.tolerance import Tol_matrix
-            from pyxtal.symmetry import Group
-            from pyxtal import pyxtal
-            from pyxtal.lattice import Lattice as pyxtal_Lattice
-        except ImportError:
-            raise ImportError(
-                "pyxtal must be installed for the RandomInterfaceGenerator"
-            )
-
-        if type(surface_generator) == SurfaceGenerator:
-            self.surface_generator = surface_generator
-        else:
-            raise TypeError(
-                f"RandomInterfaceGenerator accepts 'ogre.generate.SurfaceGenerator' not '{type(surface_generator).__name__}'"
-            )
-
-        self.bulk = self.surface_generator.slabs[0].bulk_pmg
-        self.natoms = natoms
-        self.layers = layers
-        self.random_comp = random_comp
-        self.supercell = supercell
-        self.strain_range = strain_range
-        self.interfacial_distance_range = interfacial_distance_range
-        self.vacuum = vacuum
-        self.center = center
-
-        self.crystal_system_map = {
-            "triclinic": [1, 2],
-            "monoclinic": [3, 15],
-            "orthorhombic": [16, 74],
-            "tetragonal": [75, 142],
-            "trigonal": [143, 167],
-            "hexagonal": [168, 194],
-            "cubic": [195, 230],
-        }
-
-    def _check_possible_comp(self, group, natoms):
-        elements = self.random_comp
-
-        compositions = list(combinations_with_replacement(elements, natoms))
-        compositions = [
-            comp for comp in compositions if all(e in comp for e in elements)
-        ]
-
-        possible_comps = []
-
-        for combo in compositions:
-            unique_vals, counts = np.unique(combo, return_counts=True)
-            passed, freedom = group.check_compatible(counts)
-            if passed:
-                possible_comps.append((unique_vals.tolist(), counts.tolist()))
-
-        return possible_comps
-
-    def _stack_interface(self, slab, random_structure):
-        layers = self.layers
-
-        interfacial_distance = random.uniform(
-            self.interfacial_distance_range[0],
-            self.interfacial_distance_range[1],
-        )
-
-        random_ase_slab = surface(
-            random_structure,
-            layers=layers,
-            indices=(0, 0, 1),
-            vacuum=self.vacuum,
-        )
-        random_slab = AseAtomsAdaptor().get_structure(random_ase_slab)
-
-        slab_species = slab.species
-        random_species = random_slab.species
-
-        slab_frac_coords = deepcopy(slab.frac_coords)
-        random_frac_coords = deepcopy(random_slab.frac_coords)
-
-        slab_cart_coords = slab_frac_coords.dot(slab.lattice.matrix)
-        random_cart_coords = random_frac_coords.dot(random_slab.lattice.matrix)
-
-        old_matrix = deepcopy(slab.lattice.matrix)
-        c = old_matrix[-1]
-        c_len = np.linalg.norm(c)
-
-        min_slab_coords = np.min(slab_frac_coords[:, -1])
-        max_slab_coords = np.max(slab_frac_coords[:, -1])
-        min_random_coords = np.min(random_frac_coords[:, -1])
-        max_random_coords = np.max(random_frac_coords[:, -1])
-
-        interface_c_len = np.sum(
-            [
-                (max_slab_coords - min_slab_coords) * c_len,
-                (max_random_coords - min_random_coords) * c_len,
-                self.vacuum,
-                interfacial_distance,
-            ]
-        )
-
-        new_c = interface_c_len * (c / c_len)
-
-        new_matrix = np.vstack([old_matrix[:2], new_c])
-        new_lattice = Lattice(matrix=new_matrix)
-
-        slab_frac_coords = slab_cart_coords.dot(new_lattice.inv_matrix)
-        slab_frac_coords[:, -1] -= slab_frac_coords[:, -1].min()
-
-        interface_height = slab_frac_coords[:, -1].max() + (
-            0.5 * interfacial_distance / interface_c_len
-        )
-
-        random_frac_coords = random_cart_coords.dot(new_lattice.inv_matrix)
-        random_frac_coords[:, -1] -= random_frac_coords[:, -1].min()
-
-        random_frac_coords[:, -1] += slab_frac_coords[:, -1].max() + (
-            interfacial_distance / interface_c_len
-        )
-
-        interface = Structure(
-            lattice=new_lattice,
-            coords=np.vstack([slab_frac_coords, random_frac_coords]),
-            species=slab_species + random_species,
-            coords_are_cartesian=False,
-            to_unit_cell=True,
-        )
-        interface.translate_sites(
-            range(len(interface)), [0.0, 0.0, 0.5 - interface_height]
-        )
-        shift = [random.uniform(0, 1), random.uniform(0, 1), 0.0]
-        interface.translate_sites(
-            range(len(slab_frac_coords), len(interface)), shift
-        )
-
-        interface.sort()
-        slab.sort()
-        random_slab.sort()
-
-        return interface, slab, random_slab
-
-    def _generate_random_structure(self, slab, factor, t_factor, timeout=10):
-        supercell_options = np.array(
-            [
-                [2, 2, 1],
-                [2, 2, 1],
-                [2, 1, 1],
-                [1, 2, 1],
-                [1, 1, 1],
-                [1, 1, 1],
-                [1, 1, 1],
-                [1, 1, 1],
-            ]
-        )
-        # ind = 3
-        ind = random.randint(0, len(supercell_options) - 1)
-        # print(ind)
-        supercell = supercell_options[ind]
-
-        if supercell.sum() == 5:
-            prim_cell_natoms = (self.natoms // self.layers) // 4
-        elif supercell.sum() == 4:
-            prim_cell_natoms = (self.natoms // self.layers) // 2
-        elif supercell.sum() == 3:
-            prim_cell_natoms = self.natoms // self.layers
-
-        surface_lattice = deepcopy(slab.lattice.matrix)
-        surface_AB_plane = (1 / supercell[:2])[:, None] * surface_lattice[:2]
-        surface_area = np.linalg.norm(
-            np.cross(surface_AB_plane[0], surface_AB_plane[1])
-        )
-        surface_atom_density = len(self.bulk) / self.bulk.volume
-        surface_atom_density = 0.04
-
-        random_density = random.uniform(
-            surface_atom_density - (0.1 * surface_atom_density),
-            surface_atom_density + (0.1 * surface_atom_density),
-        )
-
-        random_cvec = np.array(
-            [0, 0, prim_cell_natoms / (surface_area * random_density)]
-        )
-
-        random_lattice = np.vstack([surface_AB_plane, random_cvec])
-        # print(np.round(random_lattice, 3))
-        s = Structure(
-            lattice=Lattice(random_lattice),
-            coords=[[0, 0, 0]],
-            species=["Ga"],
-        )
-        sg = SpacegroupAnalyzer(s)
-        lattice_type = sg.get_crystal_system()
-
-        struc_compat = False
-        while not struc_compat:
-            struc_group = Group(
-                random.randint(
-                    self.crystal_system_map[lattice_type][0],
-                    self.crystal_system_map[lattice_type][1],
-                )
-            )
-            possible_struc_comps = self._check_possible_comp(
-                struc_group, prim_cell_natoms
-            )
-            if len(possible_struc_comps) > 0:
-                struc_comp_ind = random.randint(
-                    0, len(possible_struc_comps) - 1
-                )
-                struc_species, struc_numIons = possible_struc_comps[
-                    struc_comp_ind
-                ]
-                struc_compat = True
-
-        good_struc = False
-        start_time = time.time()
-        while not good_struc:
-            try:
-                struc = pyxtal()
-                struc.from_random(
-                    3,
-                    struc_group,
-                    species=struc_species,
-                    numIons=struc_numIons,
-                    lattice=pyxtal_Lattice.from_matrix(random_lattice),
-                    factor=factor,
-                    t_factor=t_factor,
-                )
-                ase_struc = struc.to_ase()
-                struc_min_d = np.min(neighbor_list("d", ase_struc, cutoff=5.0))
-
-                if struc_min_d >= 2.0 and struc_min_d <= 3:
-                    good_struc = True
-            except RuntimeError as e:
-                print("error")
-                pass
-
-            if time.time() - start_time > timeout:
-                break
-
-        if supercell.sum() > 3:
-            ase_struc = make_supercell(ase_struc, supercell * np.eye(3))
-
-        ase_struc.wrap()
-
-        return ase_struc, good_struc
-
-    def generate_interface(self, factor, t_factor, timeout=30):
-        slab_ind = random.randint(0, len(self.surface_generator.slabs) - 1)
-        slab = deepcopy(
-            self.surface_generator.slabs[slab_ind].primitive_slab_pmg
-        )
-        slab.apply_strain(
-            [
-                random.uniform(self.strain_range[0], self.strain_range[1]),
-                random.uniform(self.strain_range[0], self.strain_range[1]),
-                0,
-            ]
-        )
-        slab.make_supercell(self.supercell)
-
-        valid_struc = False
-        start_time = time.time()
-        while not valid_struc:
-            ase_struc, valid = self._generate_random_structure(
-                slab, factor, t_factor
-            )
-            valid_struc = valid
-
-            if time.time() - start_time > timeout:
-                break
-                print("not valid")
-
-        interface, surf, rand = self._stack_interface(slab, ase_struc)
-
-        return interface, surf, rand
-
-
-class RandomSurfaceGenerator:
-    """
-    This class will be used to build interfaces between a given film/substate and a random crystal structure.
-    """
-
-    def __init__(
-        self,
-        random_comp,
-        layers=2,
-        natoms_per_layer=12,
-        vacuum=40,
-        center=True,
-        rattle=True,
-    ):
-        try:
-            from pyxtal.tolerance import Tol_matrix
-            from pyxtal.symmetry import Group
-            from pyxtal import pyxtal
-            from pyxtal.lattice import Lattice as pyxtal_Lattice
-        except ImportError:
-            raise ImportError(
-                "pyxtal must be installed for the RandomInterfaceGenerator"
-            )
-
-        self.random_comp = random_comp
-        self.natoms_per_layer = natoms_per_layer
-        self.layers = layers
-        self.vacuum = vacuum
-        self.center = center
-        self.rattle = rattle
-
-        self.crystal_system_map = {
-            "triclinic": [1, 2],
-            "monoclinic": [3, 15],
-            "orthorhombic": [16, 74],
-            "tetragonal": [75, 142],
-            "trigonal": [143, 167],
-            "hexagonal": [168, 194],
-            "cubic": [195, 230],
-        }
-
-    def _check_possible_comp(self, group, natoms):
-        elements = self.random_comp
-
-        compositions = list(combinations_with_replacement(elements, natoms))
-        compositions = [
-            comp for comp in compositions if all(e in comp for e in elements)
-        ]
-
-        possible_comps = []
-
-        for combo in compositions:
-            unique_vals, counts = np.unique(combo, return_counts=True)
-            passed, freedom = group.check_compatible(counts)
-            if passed:
-                possible_comps.append((unique_vals.tolist(), counts.tolist()))
-
-        return possible_comps
-
-    def _generate_random_structure(self, factor, t_factor, timeout=10):
-        struc_compat = False
-        while not struc_compat:
-            struc_group = Group(random.randint(1, 230))
-            possible_struc_comps = self._check_possible_comp(
-                struc_group, self.natoms_per_layer
-            )
-            if len(possible_struc_comps) > 0:
-                struc_comp_ind = random.randint(
-                    0, len(possible_struc_comps) - 1
-                )
-                struc_species, struc_numIons = possible_struc_comps[
-                    struc_comp_ind
-                ]
-                struc_compat = True
-
-        good_struc = False
-        start_time = time.time()
-        while not good_struc:
-            try:
-                struc = pyxtal()
-                struc.from_random(
-                    3,
-                    struc_group,
-                    species=struc_species,
-                    numIons=struc_numIons,
-                    # lattice=pyxtal_Lattice.from_matrix(random_lattice),
-                    factor=factor,
-                    t_factor=t_factor,
-                )
-                ase_struc = struc.to_ase()
-                struc_min_d = np.min(neighbor_list("d", ase_struc, cutoff=5.0))
-
-                if struc_min_d >= 2.0 and struc_min_d <= 3:
-                    good_struc = True
-
-            except RuntimeError as e:
-                pass
-
-            if time.time() - start_time > timeout:
-                break
-
-        ase_struc.wrap()
-
-        return ase_struc, good_struc
-
-    def generate_surface(self, factor, t_factor, timeout=30):
-        valid_struc = False
-        start_time = time.time()
-        while not valid_struc:
-            ase_struc, valid = self._generate_random_structure(
-                factor, t_factor
-            )
-            valid_struc = valid
-
-            if time.time() - start_time > timeout:
-                break
-
-        surface_generator = SurfaceGenerator(
-            structure=ase_struc,
-            miller_index=[0, 0, 1],
-            layers=self.layers,
-            vacuum=self.vacuum,
-            generate_all=True,
-            filter_ionic_slabs=False,
-        )
-
-        slab_ind = random.randint(0, len(surface_generator.slabs) - 1)
-        slab = deepcopy(surface_generator.slabs[slab_ind].slab_pmg)
-
-        if self.center:
-            slab.translate_sites(range(len(slab)), [0.0, 0.0, 0.05])
-            top_z = slab.frac_coords[:, -1].max()
-            bot_z = slab.frac_coords[:, -1].min()
-            slab.translate_sites(
-                range(len(slab)), [0.0, 0.0, 0.5 - ((top_z + bot_z) / 2)]
-            )
-
-        if self.rattle:
-            pertub = PerturbStructureTransformation(
-                distance=0.15, min_distance=0.05
-            )
-            slab = pertub.apply_transformation(slab)
-
-        return slab
-
-
-class RandomBulkGenerator:
-    """
-    This class will be used to build interfaces between a given film/substate and a random crystal structure.
-    """
-
-    def __init__(
-        self,
-        random_comp,
-        natoms=40,
-        cell_size=11,
-    ):
-        self.random_comp = random_comp
-        self.natoms = natoms
-        self.cell_size = cell_size
-
-    def _get_composition(self, natoms):
-        elements = self.random_comp
-
-        compositions = list(combinations_with_replacement(elements, natoms))
-        compositions = [
-            comp for comp in compositions if all(e in comp for e in elements)
-        ]
-
-        ind = random.randint(0, len(compositions) - 1)
-        composition = compositions[ind]
-
-        return composition
-
-    def generate_structure(self):
-        blocks = self._get_composition(self.natoms)
-        unique_e, counts = np.unique(blocks, return_counts=True)
-
-        blmin = closest_distances_generator(
-            atom_numbers=[atomic_numbers[i] for i in unique_e],
-            ratio_of_covalent_radii=0.9,
-        )
-
-        cell = Atoms(cell=np.eye(3) * self.cell_size, pbc=True)
-
-        sg = StartGenerator(
-            cell,
-            blocks,
-            blmin,
-            number_of_variable_cell_vectors=0,
-        )
-
-        a = sg.get_new_candidate()
-        s = AseAtomsAdaptor().get_structure(a)
-
-        return s

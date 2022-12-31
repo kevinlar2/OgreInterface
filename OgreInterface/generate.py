@@ -5,46 +5,34 @@ from pymatgen.core.structure import Structure
 from pymatgen.analysis.structure_matcher import StructureMatcher
 from pymatgen.core.lattice import Lattice
 from pymatgen.core.surface import SlabGenerator
-from pymatgen.io.vasp.inputs import Poscar
 from pymatgen.io.ase import AseAtomsAdaptor
 from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
 from pymatgen.analysis.interfaces.zsl import ZSLGenerator, reduce_vectors
-from pymatgen.analysis.interfaces.substrate_analyzer import SubstrateAnalyzer
-from pymatgen.core.surface import get_slab_regions
-from pymatgen.core.periodic_table import Element
 from pymatgen.core.operations import SymmOp
 from pymatgen.analysis.ewald import EwaldSummation
-from pymatgen.transformations.standard_transformations import RotationTransformation
 from pymatgen.transformations.standard_transformations import (
     PerturbStructureTransformation,
 )
 
 from ase import Atoms
-from ase.io import read
 from ase.build.surfaces_with_termination import surfaces_with_termination
 from ase.build.general_surface import surface
-from ase.spacegroup import get_spacegroup
-from ase.geometry import get_layers
-from ase.build.general_surface import ext_gcd
 from ase.build.supercells import make_supercell
 from ase.neighborlist import neighbor_list
-from ase.data import atomic_numbers, covalent_radii
-from ase.ga.utilities import closest_distances_generator, CellBounds
 from ase.ga.startgenerator import StartGenerator
-from ase.build import surface as build_surface
 
 
 from OgreInterface.surfaces import Surface, Interface
 
 from itertools import combinations, combinations_with_replacement
 from tqdm import tqdm
-from math import gcd
 import numpy as np
 import random
 import time
 from copy import deepcopy
 import copy
 from functools import reduce
+from typing import Union, List, Optional
 
 
 class SurfaceGenerator:
@@ -62,23 +50,16 @@ class SurfaceGenerator:
 
     def __init__(
         self,
-        structure,
-        miller_index,
-        layers,
-        vacuum,
-        generate_all=True,
-        filter_ionic_slabs=False,
+        bulk: Union[Structure, Atoms],
+        miller_index: List[int],
+        layers: int,
+        vacuum: float,
+        generate_all: bool = True,
+        filter_ionic_slabs: bool = False,
     ):
-        if type(structure) == Atoms:
-            self.structure = structure
-            self.pmg_structure = AseAtomsAdaptor.get_structure(structure)
-        elif type(structure) == Structure:
-            self.structure = AseAtomsAdaptor.get_atoms(structure)
-            self.pmg_structure = structure
-        else:
-            raise TypeError(
-                f"structure accepts 'pymatgen.core.structure.Structure' or 'ase.Atoms' not '{type(structure).__name__}'"
-            )
+        self.bulk_structure, self.bulk_atoms = self._get_bulk(
+            atoms_or_struc=bulk
+        )
 
         self.miller_index = miller_index
         self.layers = layers
@@ -100,8 +81,29 @@ class SurfaceGenerator:
         structure = Structure.from_file(filename=filename)
 
         return cls(
-            structure, miller_index, layers, vacuum, generate_all, filter_ionic_slabs
+            structure,
+            miller_index,
+            layers,
+            vacuum,
+            generate_all,
+            filter_ionic_slabs,
         )
+
+    def _get_bulk(atoms_or_struc):
+        if type(atoms_or_struc) == Atoms:
+            init_structure = AseAtomsAdaptor.get_structure(atoms_or_struc)
+        elif type(atoms_or_struc) == Structure:
+            init_structure = AseAtomsAdaptor.get_atoms(atoms_or_struc)
+        else:
+            raise TypeError(
+                f"structure accepts 'pymatgen.core.structure.Structure' or 'ase.Atoms' not '{type(atoms_or_struc).__name__}'"
+            )
+
+        sg = SpacegroupAnalyzer(init_structure)
+        conventional_structure = sg.get_conventional_standard_structure()
+        conventional_atoms = AseAtomsAdaptor.get_atoms(conventional_structure)
+
+        return conventional_structure, conventional_atoms
 
     def _get_ewald_energy(self, slab):
         slab = copy.deepcopy(slab)
@@ -119,107 +121,80 @@ class SurfaceGenerator:
             a, b = b, a % b
         return a
 
-    def _generate_slabs2(self):
-        sg = SlabGenerator(
-            initial_structure=self.pmg_structure,
-            miller_index=self.miller_index,
-            min_slab_size=self.layers,
-            min_vacuum_size=self.vacuum,
-            in_unit_planes=True,
-            primitive=True,
-            lll_reduce=False,
-            reorient_lattice=False,
-            max_normal_search=int(max(np.abs(self.miller_index))),
-            center_slab=True,
-        )
-        miller_index = np.array(self.miller_index)
+    def _check_oriented_cell(
+        self, slab_generator: SlabGenerator, miller_index: np.ndarray
+    ):
+        """
+        This function is used to ensure that the c-vector of the oriented bulk
+        unit cell in the SlabGenerator matches with the given miller index.
+        This is required to properly determine the in-plane lattice vectors for
+        the epitaxial match.
 
+        Parameters:
+            slab_generator (SlabGenerator): SlabGenerator object from PyMatGen
+            miller_index (np.ndarray): Miller index of the plane
+
+        Returns:
+            SlabGenerator with proper orientation of c-vector
+        """
         if np.isclose(
-            sg.slab_scale_factor[-1],
+            slab_generator.slab_scale_factor[-1],
             -miller_index / np.min(np.abs(miller_index[miller_index != 0])),
         ).all():
-            print("neg")
-            sg.slab_scale_factor *= -1
-            single = self.pmg_structure.copy()
-            single.make_supercell(sg.slab_scale_factor)
-            sg.oriented_unit_cell = Structure.from_sites(single, to_unit_cell=True)
-
-        slabs = sg.get_slabs(tol=0.25)
-
-        surfaces = []
-
-        for slab in slabs:
-            basis = deepcopy(slab.lattice.matrix)
-            basis /= np.linalg.norm(basis, axis=1)[:, None]
-
-            for i, b in enumerate(basis):
-                abs_b = np.abs(b)
-                basis[i] /= abs_b[abs_b > 0.001].min()
-                basis[i] /= np.abs(reduce(self._float_gcd, basis[i]))
-
-            # TODO: if slab is left handed switch a and b vectors
-
-            if (
-                basis[-1]
-                == -miller_index / np.min(np.abs(miller_index[miller_index != 0]))
-            ).all():
-                operation = SymmOp.from_origin_axis_angle(
-                    origin=[0.5, 0.5, 0.5],
-                    axis=[1, 1, 0],
-                    angle=180,
-                )
-                slab.apply_operation(operation, fractional=True)
-
-            new_a, new_b = reduce_vectors(
-                slab.lattice.matrix[0], slab.lattice.matrix[1]
+            slab_generator.slab_scale_factor *= -1
+            single = self.bulk_structure.copy()
+            single.make_supercell(slab_generator.slab_scale_factor)
+            slab_generator.oriented_unit_cell = Structure.from_sites(
+                single, to_unit_cell=True
             )
 
-            final_struc = Structure(
-                lattice=Lattice(
-                    matrix=np.hstack([new_a, new_b, slab.lattice.matrix[-1]])
-                ),
-                species=slab.species,
-                coords=slab.cart_coords,
-                to_unit_cell=True,
-                coords_are_cartesian=True,
-                site_properties=slab.site_properties,
+        return slab_generator
+
+    def _get_reduced_basis(self, basis):
+        basis /= np.linalg.norm(basis, axis=1)[:, None]
+
+        for i, b in enumerate(basis):
+            abs_b = np.abs(b)
+            basis[i] /= abs_b[abs_b > 0.001].min()
+            basis[i] /= np.abs(reduce(self._float_gcd, basis[i]))
+
+        return basis
+
+    def _get_properly_oriented_slab(
+        self, basis: np.ndarray, miller_index: np.ndarray, slab: Structure
+    ):
+        """
+        This function is used to flip the structure if the c-vector and miller
+        index are negatives of each other. This happens during the process of
+        making the primitive slab. To resolve this, the structure will be
+        rotated 180 degrees.
+
+        Parameters:
+            basis (np.ndarray): 3x3 matrix defining the lattice vectors
+            miller_index (np.ndarray): Miller index of surface
+            slab (Structure): PyMatGen Structure object
+
+        Return:
+            Properly oriented slab
+        """
+        if (
+            basis[-1]
+            == -miller_index / np.min(np.abs(miller_index[miller_index != 0]))
+        ).all():
+            print("flip")
+            operation = SymmOp.from_origin_axis_angle(
+                origin=[0.5, 0.5, 0.5],
+                axis=[1, 1, 0],
+                angle=180,
             )
-            final_struc.sort()
+            slab.apply_operation(operation, fractional=True)
 
-            if np.linalg.det(final_struc.lattice.matrix) < 0:
-                print("switch")
-                final_struc.make_supercell(np.array([[0, 1, 0], [1, 0, 0], [0, 0, 1]]))
-
-            new_a, new_b = reduce_vectors(
-                final_struc.lattice.matrix[0], final_struc.lattice.matrix[1]
-            )
-
-            print(np.vstack([new_a, new_b]))
-
-            basis = deepcopy(final_struc.lattice.matrix)
-            print(basis)
-            basis /= np.linalg.norm(basis, axis=1)[:, None]
-
-            for i, b in enumerate(basis):
-                abs_b = np.abs(b)
-                basis[i] /= abs_b[abs_b > 0.001].min()
-                basis[i] /= np.abs(reduce(self._float_gcd, basis[i]))
-
-            surface = Surface(
-                slab=final_struc,
-                bulk=self.pmg_structure,
-                miller_index=self.miller_index,
-                layers=self.layers,
-                vacuum=self.vacuum,
-                uvw_basis=basis.astype(int),
-            )
-            surfaces.append(surface)
-
-        return surfaces
+        return slab
 
     def _generate_slabs(self):
+        # Initialize the SlabGenerator
         sg = SlabGenerator(
-            initial_structure=self.pmg_structure,
+            initial_structure=self.bulk_structure,
             miller_index=self.miller_index,
             min_slab_size=self.layers,
             min_vacuum_size=self.vacuum,
@@ -230,104 +205,15 @@ class SurfaceGenerator:
             max_normal_search=int(max(np.abs(self.miller_index))),
             center_slab=True,
         )
+        # Convert miller index to a numpy array
         miller_index = np.array(self.miller_index)
 
-        if np.isclose(
-            sg.slab_scale_factor[-1],
-            -miller_index / np.min(np.abs(miller_index[miller_index != 0])),
-        ).all():
-            print("neg")
-            sg.slab_scale_factor *= -1
-            single = self.pmg_structure.copy()
-            single.make_supercell(sg.slab_scale_factor)
-            sg.oriented_unit_cell = Structure.from_sites(single, to_unit_cell=True)
-
-        slabs = sg.get_slabs(tol=0.25)
-
-        surfaces = []
-
-        for slab in slabs:
-            basis = deepcopy(slab.lattice.matrix)
-            basis /= np.linalg.norm(basis, axis=1)[:, None]
-
-            for i, b in enumerate(basis):
-                abs_b = np.abs(b)
-                basis[i] /= abs_b[abs_b > 0.001].min()
-                basis[i] /= np.abs(reduce(self._float_gcd, basis[i]))
-
-            if (
-                basis[-1]
-                == -miller_index / np.min(np.abs(miller_index[miller_index != 0]))
-            ).all():
-                print("flip")
-                operation = SymmOp.from_origin_axis_angle(
-                    origin=[0.5, 0.5, 0.5],
-                    axis=[1, 1, 0],
-                    angle=180,
-                )
-                slab.apply_operation(operation, fractional=True)
-
-            new_a, new_b = reduce_vectors(
-                slab.lattice.matrix[0], slab.lattice.matrix[1]
-            )
-
-            final_struc = Structure(
-                lattice=Lattice(
-                    matrix=np.hstack([new_a, new_b, slab.lattice.matrix[-1]])
-                ),
-                species=slab.species,
-                coords=slab.cart_coords,
-                to_unit_cell=True,
-                coords_are_cartesian=True,
-                site_properties=slab.site_properties,
-            )
-            final_struc.sort()
-
-            basis = deepcopy(final_struc.lattice.matrix)
-            basis /= np.linalg.norm(basis, axis=1)[:, None]
-
-            for i, b in enumerate(basis):
-                abs_b = np.abs(b)
-                basis[i] /= abs_b[abs_b > 0.001].min()
-                basis[i] /= np.abs(reduce(self._float_gcd, basis[i]))
-
-            surface = Surface(
-                slab=final_struc,
-                bulk=self.pmg_structure,
-                miller_index=self.miller_index,
-                layers=self.layers,
-                vacuum=self.vacuum,
-                uvw_basis=basis.astype(int),
-            )
-            surfaces.append(surface)
-
-        return surfaces
-
-    def _generate_slabs_fast(self):
-        sg = SlabGenerator(
-            initial_structure=self.pmg_structure,
-            miller_index=self.miller_index,
-            min_slab_size=self.layers,
-            min_vacuum_size=self.vacuum,
-            in_unit_planes=True,
-            primitive=True,
-            lll_reduce=False,
-            reorient_lattice=False,
-            max_normal_search=int(max(np.abs(self.miller_index))),
-            center_slab=True,
+        # Check if the oriented cell has the proper basis
+        sg = self._check_oriented_cell(
+            slab_generator=sg, miller_index=miller_index
         )
-        miller_index = np.array(self.miller_index)
 
-        if np.isclose(
-            sg.slab_scale_factor[-1],
-            -miller_index / np.min(np.abs(miller_index[miller_index != 0])),
-        ).all():
-            print("neg")
-            sg.slab_scale_factor *= -1
-            single = self.pmg_structure.copy()
-            single.make_supercell(sg.slab_scale_factor)
-            sg.oriented_unit_cell = Structure.from_sites(single, to_unit_cell=True)
-
+        # Determine if all possible terminations are generated
         if self.generate_all:
             slabs = sg.get_slabs(tol=0.25)
         else:
@@ -336,128 +222,46 @@ class SurfaceGenerator:
 
         surfaces = []
 
+        # Loop through slabs to ensure that they are all properly oriented and reduced
+        # Return Surface objects
         for slab in slabs:
-            basis = deepcopy(slab.lattice.matrix)
-            basis /= np.linalg.norm(basis, axis=1)[:, None]
+            basis = self._get_reduced_basis(
+                basis=deepcopy(slab.lattice.matrix)
+            )
 
-            for i, b in enumerate(basis):
-                abs_b = np.abs(b)
-                basis[i] /= abs_b[abs_b > 0.001].min()
-                basis[i] /= np.abs(reduce(self._float_gcd, basis[i]))
-
-            if (
-                basis[-1]
-                == -miller_index / np.min(np.abs(miller_index[miller_index != 0]))
-            ).all():
-                print("flip")
-                operation = SymmOp.from_origin_axis_angle(
-                    origin=[0.5, 0.5, 0.5],
-                    axis=[1, 1, 0],
-                    angle=180,
-                )
-                slab.apply_operation(operation, fractional=True)
+            slab = self._get_properly_oriented_slab(
+                basis=basis, miller_index=miller_index, slab=slab
+            )
 
             new_a, new_b = reduce_vectors(
                 slab.lattice.matrix[0], slab.lattice.matrix[1]
             )
 
-            final_struc = Structure(
-                lattice=Lattice(
-                    matrix=np.hstack([new_a, new_b, slab.lattice.matrix[-1]])
-                ),
+            reduced_matrix = np.hstack([new_a, new_b, slab.lattice.matrix[-1]])
+
+            reduced_struc = Structure(
+                lattice=Lattice(matrix=reduced_matrix),
                 species=slab.species,
                 coords=slab.cart_coords,
                 to_unit_cell=True,
                 coords_are_cartesian=True,
                 site_properties=slab.site_properties,
             )
-            final_struc.sort()
+            reduced_struc.sort()
 
-            basis = deepcopy(final_struc.lattice.matrix)
-            basis /= np.linalg.norm(basis, axis=1)[:, None]
-
-            for i, b in enumerate(basis):
-                abs_b = np.abs(b)
-                basis[i] /= abs_b[abs_b > 0.001].min()
-                basis[i] /= np.abs(reduce(self._float_gcd, basis[i]))
+            reduced_basis = self._get_reduced_basis(
+                basis=deepcopy(reduced_struc.lattice.matrix)
+            )
 
             surface = Surface(
-                slab=final_struc,
-                bulk=self.pmg_structure,
+                slab=reduced_struc,
+                bulk=self.bulk_structure,
                 miller_index=self.miller_index,
                 layers=self.layers,
                 vacuum=self.vacuum,
-                uvw_basis=basis.astype(int),
+                uvw_basis=reduced_basis.astype(int),
             )
             surfaces.append(surface)
-
-        return surfaces
-
-    def _old_generate_slabs(self):
-        if self.generate_all:
-            slabs = surfaces_with_termination(
-                self.structure,
-                self.miller_index,
-                self.layers,
-                vacuum=self.vacuum,
-                return_all=True,
-                verbose=False,
-            )
-
-        else:
-            slab = surface(
-                self.structure, self.miller_index, self.layers, vacuum=self.vacuum
-            )
-            slabs = [slab]
-
-        pmg_slabs = [AseAtomsAdaptor.get_structure(slab) for slab in slabs]
-
-        if self.filter_ionic_slabs and self.generate_all:
-            diffs = []
-            for pmg_slab in pmg_slabs:
-                s = time.time()
-                E_vac, E_bulk = self._get_ewald_energy(pmg_slab)
-                # print(time.time() - s)
-                diffs.append(E_vac - (self.layers * E_bulk))
-
-            diffs = np.array(diffs)
-            stable_inds = np.where(np.isclose(diffs, diffs.min()))[0]
-            pmg_slabs = [pmg_slabs[i] for i in stable_inds]
-
-        combos = combinations(range(len(pmg_slabs)), 2)
-        same_slab_indices = []
-        # rot = lambda x, a: RotationTransformation(axis=[0,0,1], angle=a).apply_transformation(x)
-        for combo in combos:
-            # if self._is_equal(pmg_slabs[combo[0]], pmg_slabs[combo[1]]):
-            #     same_slab_indices.append(combo)
-
-            if pmg_slabs[combo[0]] == pmg_slabs[combo[1]]:
-                same_slab_indices.append(combo)
-            # if pmg_slabs[combo[0]] == rot(pmg_slabs[combo[1]], 90):
-            #     same = True
-            # if pmg_slabs[combo[0]] == rot(pmg_slabs[combo[1]], 180):
-            #     same = True
-            # if pmg_slabs[combo[0]] == rot(pmg_slabs[combo[1]], 270):
-            #     same = True
-            # if same:
-            #     same_slab_indices.append(combo)
-
-        to_delete = [np.min(same_slab_index) for same_slab_index in same_slab_indices]
-        unique_slab_indices = [i for i in range(len(pmg_slabs)) if i not in to_delete]
-        unique_pmg_slabs = [
-            pmg_slabs[i].get_sorted_structure() for i in unique_slab_indices
-        ]
-
-        surfaces = []
-        for slab in unique_pmg_slabs:
-            unique_surface = Surface(
-                slab=slab,
-                bulk=self.structure,
-                miller_index=self.miller_index,
-                layers=self.layers,
-                vacuum=self.vacuum,
-            )
-            surfaces.append(unique_surface)
 
         return surfaces
 
@@ -517,8 +321,12 @@ class InterfaceGenerator:
                 self.film_transformations,
                 self.substrate_transformations,
             ] = self.interface_output
-            self._film_norms = self._get_norm(self.film_sl_vecs, ein="ijk,ijk->ij")
-            self._sub_norms = self._get_norm(self.sub_sl_vecs, ein="ijk,ijk->ij")
+            self._film_norms = self._get_norm(
+                self.film_sl_vecs, ein="ijk,ijk->ij"
+            )
+            self._sub_norms = self._get_norm(
+                self.sub_sl_vecs, ein="ijk,ijk->ij"
+            )
             self.strain = self._get_strain()
             self.angle_diff = self._get_angle_diff()
             self.area_diff = self._get_area_diff()
@@ -555,21 +363,32 @@ class InterfaceGenerator:
         return np.c_[a_strain, b_strain]
 
     def _get_angle_diff(self):
-        sub_angles = self._get_angle(self.sub_sl_vecs[:, 0], self.sub_sl_vecs[:, 1])
-        film_angles = self._get_angle(self.film_sl_vecs[:, 0], self.film_sl_vecs[:, 1])
+        sub_angles = self._get_angle(
+            self.sub_sl_vecs[:, 0], self.sub_sl_vecs[:, 1]
+        )
+        film_angles = self._get_angle(
+            self.film_sl_vecs[:, 0], self.film_sl_vecs[:, 1]
+        )
         angle_diff = (film_angles / sub_angles) - 1
 
         return angle_diff
 
     def _get_area_diff(self):
-        sub_areas = self._get_area(self.sub_sl_vecs[:, 0], self.sub_sl_vecs[:, 1])
-        film_areas = self._get_area(self.film_sl_vecs[:, 0], self.film_sl_vecs[:, 1])
+        sub_areas = self._get_area(
+            self.sub_sl_vecs[:, 0], self.sub_sl_vecs[:, 1]
+        )
+        film_areas = self._get_area(
+            self.film_sl_vecs[:, 0], self.film_sl_vecs[:, 1]
+        )
         area_diff = (film_areas / sub_areas) - 1
 
         return area_diff
 
     def _get_area_ratios(self):
-        q = self.film_transformations[:, 0, 0] * self.film_transformations[:, 1, 1]
+        q = (
+            self.film_transformations[:, 0, 0]
+            * self.film_transformations[:, 1, 1]
+        )
         p = (
             self.substrate_transformations[:, 0, 0]
             * self.substrate_transformations[:, 1, 1]
@@ -580,7 +399,9 @@ class InterfaceGenerator:
 
     def _get_rotation_mat(self):
         dot_prod = np.divide(
-            np.einsum("ij,ij->i", self.sub_sl_vecs[:, 0], self.film_sl_vecs[:, 0]),
+            np.einsum(
+                "ij,ij->i", self.sub_sl_vecs[:, 0], self.film_sl_vecs[:, 0]
+            ),
             np.multiply(self._sub_norms[:, 0], self._film_norms[:, 0]),
         )
 
@@ -618,11 +439,17 @@ class InterfaceGenerator:
         if len(match_list) == 0:
             return None
         else:
-            film_sl_vecs = np.array([match.film_sl_vectors for match in match_list])
-            sub_sl_vecs = np.array([match.substrate_sl_vectors for match in match_list])
+            film_sl_vecs = np.array(
+                [match.film_sl_vectors for match in match_list]
+            )
+            sub_sl_vecs = np.array(
+                [match.substrate_sl_vectors for match in match_list]
+            )
             match_area = np.array([match.match_area for match in match_list])
             film_vecs = np.array([match.film_vectors for match in match_list])
-            sub_vecs = np.array([match.substrate_vectors for match in match_list])
+            sub_vecs = np.array(
+                [match.substrate_vectors for match in match_list]
+            )
             film_transformations = np.array(
                 [match.film_transformation for match in match_list]
             )
@@ -634,11 +461,16 @@ class InterfaceGenerator:
                 [np.eye(3, 3) for _ in range(film_transformations.shape[0])]
             )
             substrate_3x3_transformations = np.array(
-                [np.eye(3, 3) for _ in range(substrate_transformations.shape[0])]
+                [
+                    np.eye(3, 3)
+                    for _ in range(substrate_transformations.shape[0])
+                ]
             )
 
             film_3x3_transformations[:, :2, :2] = film_transformations
-            substrate_3x3_transformations[:, :2, :2] = substrate_transformations
+            substrate_3x3_transformations[
+                :, :2, :2
+            ] = substrate_transformations
 
             return [
                 film_sl_vecs,
@@ -674,8 +506,14 @@ class InterfaceGenerator:
         for i in range(len(structures)):
             coords = np.round(all_coords[i], 6)
             coords[:, -1] = coords[:, -1] - np.min(coords[:, -1])
-            coords.dtype = [("a", "float64"), ("b", "float64"), ("c", "float64")]
-            coords_inds = np.squeeze(np.argsort(coords, axis=0, order=("c", "b", "a")))
+            coords.dtype = [
+                ("a", "float64"),
+                ("b", "float64"),
+                ("c", "float64"),
+            ]
+            coords_inds = np.squeeze(
+                np.argsort(coords, axis=0, order=("c", "b", "a"))
+            )
             coords.dtype = "float64"
 
             coords_sorted = coords[coords_inds]
@@ -703,7 +541,11 @@ class InterfaceGenerator:
         else:
             coords1 = np.round(structure1.frac_coords, 4)
             coords1[:, -1] = coords1[:, -1] - np.min(coords1[:, -1])
-            coords1.dtype = [("a", "float64"), ("b", "float64"), ("c", "float64")]
+            coords1.dtype = [
+                ("a", "float64"),
+                ("b", "float64"),
+                ("c", "float64"),
+            ]
             coords1_inds = np.squeeze(
                 np.argsort(coords1, axis=0, order=("c", "b", "a"))
             )
@@ -711,7 +553,11 @@ class InterfaceGenerator:
 
             coords2 = np.round(structure2.frac_coords, 4)
             coords2[:, -1] = coords2[:, -1] - np.min(coords2[:, -1])
-            coords2.dtype = [("a", "float64"), ("b", "float64"), ("c", "float64")]
+            coords2.dtype = [
+                ("a", "float64"),
+                ("b", "float64"),
+                ("c", "float64"),
+            ]
             coords2_inds = np.squeeze(
                 np.argsort(coords2, axis=0, order=("c", "b", "a"))
             )
@@ -719,8 +565,12 @@ class InterfaceGenerator:
 
             coords1_sorted = coords1[coords1_inds]
             coords2_sorted = coords2[coords2_inds]
-            species1_sorted = np.array(structure1.species).astype(str)[coords1_inds]
-            species2_sorted = np.array(structure2.species).astype(str)[coords2_inds]
+            species1_sorted = np.array(structure1.species).astype(str)[
+                coords1_inds
+            ]
+            species2_sorted = np.array(structure2.species).astype(str)[
+                coords2_inds
+            ]
 
             coords = np.isclose(
                 coords1_sorted, coords2_sorted, rtol=1e-2, atol=1e-2
@@ -784,8 +634,12 @@ class InterfaceGenerator:
             ):
                 same_slab_indices.append(combo)
 
-        to_delete = [np.min(same_slab_index) for same_slab_index in same_slab_indices]
-        unique_slab_indices = [i for i in range(len(interfaces)) if i not in to_delete]
+        to_delete = [
+            np.min(same_slab_index) for same_slab_index in same_slab_indices
+        ]
+        unique_slab_indices = [
+            i for i in range(len(interfaces)) if i not in to_delete
+        ]
         unique_interfaces = [interfaces[i] for i in unique_slab_indices]
 
         areas = []
@@ -879,11 +733,15 @@ class RandomInterfaceGenerator:
         layers = self.layers
 
         interfacial_distance = random.uniform(
-            self.interfacial_distance_range[0], self.interfacial_distance_range[1]
+            self.interfacial_distance_range[0],
+            self.interfacial_distance_range[1],
         )
 
         random_ase_slab = surface(
-            random_structure, layers=layers, indices=(0, 0, 1), vacuum=self.vacuum
+            random_structure,
+            layers=layers,
+            indices=(0, 0, 1),
+            vacuum=self.vacuum,
         )
         random_slab = AseAtomsAdaptor().get_structure(random_ase_slab)
 
@@ -944,7 +802,9 @@ class RandomInterfaceGenerator:
             range(len(interface)), [0.0, 0.0, 0.5 - interface_height]
         )
         shift = [random.uniform(0, 1), random.uniform(0, 1), 0.0]
-        interface.translate_sites(range(len(slab_frac_coords), len(interface)), shift)
+        interface.translate_sites(
+            range(len(slab_frac_coords), len(interface)), shift
+        )
 
         interface.sort()
         slab.sort()
@@ -1016,8 +876,12 @@ class RandomInterfaceGenerator:
                 struc_group, prim_cell_natoms
             )
             if len(possible_struc_comps) > 0:
-                struc_comp_ind = random.randint(0, len(possible_struc_comps) - 1)
-                struc_species, struc_numIons = possible_struc_comps[struc_comp_ind]
+                struc_comp_ind = random.randint(
+                    0, len(possible_struc_comps) - 1
+                )
+                struc_species, struc_numIons = possible_struc_comps[
+                    struc_comp_ind
+                ]
                 struc_compat = True
 
         good_struc = False
@@ -1055,7 +919,9 @@ class RandomInterfaceGenerator:
 
     def generate_interface(self, factor, t_factor, timeout=30):
         slab_ind = random.randint(0, len(self.surface_generator.slabs) - 1)
-        slab = deepcopy(self.surface_generator.slabs[slab_ind].primitive_slab_pmg)
+        slab = deepcopy(
+            self.surface_generator.slabs[slab_ind].primitive_slab_pmg
+        )
         slab.apply_strain(
             [
                 random.uniform(self.strain_range[0], self.strain_range[1]),
@@ -1068,7 +934,9 @@ class RandomInterfaceGenerator:
         valid_struc = False
         start_time = time.time()
         while not valid_struc:
-            ase_struc, valid = self._generate_random_structure(slab, factor, t_factor)
+            ase_struc, valid = self._generate_random_structure(
+                slab, factor, t_factor
+            )
             valid_struc = valid
 
             if time.time() - start_time > timeout:
@@ -1147,8 +1015,12 @@ class RandomSurfaceGenerator:
                 struc_group, self.natoms_per_layer
             )
             if len(possible_struc_comps) > 0:
-                struc_comp_ind = random.randint(0, len(possible_struc_comps) - 1)
-                struc_species, struc_numIons = possible_struc_comps[struc_comp_ind]
+                struc_comp_ind = random.randint(
+                    0, len(possible_struc_comps) - 1
+                )
+                struc_species, struc_numIons = possible_struc_comps[
+                    struc_comp_ind
+                ]
                 struc_compat = True
 
         good_struc = False
@@ -1185,7 +1057,9 @@ class RandomSurfaceGenerator:
         valid_struc = False
         start_time = time.time()
         while not valid_struc:
-            ase_struc, valid = self._generate_random_structure(factor, t_factor)
+            ase_struc, valid = self._generate_random_structure(
+                factor, t_factor
+            )
             valid_struc = valid
 
             if time.time() - start_time > timeout:
@@ -1212,7 +1086,9 @@ class RandomSurfaceGenerator:
             )
 
         if self.rattle:
-            pertub = PerturbStructureTransformation(distance=0.15, min_distance=0.05)
+            pertub = PerturbStructureTransformation(
+                distance=0.15, min_distance=0.05
+            )
             slab = pertub.apply_transformation(slab)
 
         return slab

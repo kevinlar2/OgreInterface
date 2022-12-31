@@ -17,6 +17,12 @@ from pymatgen.analysis.interfaces.substrate_analyzer import SubstrateAnalyzer
 from pymatgen.symmetry.analyzer import SymmOp
 from pymatgen.analysis.molecule_structure_comparator import CovalentRadius
 from pymatgen.analysis.ewald import EwaldSummation
+from pymatgen.core.surface import SlabGenerator
+from pymatgen.analysis.interfaces.coherent_interfaces import (
+    get_2d_transform,
+    from_2d_to_3d,
+)
+
 
 from ase import Atoms
 from ase.io import read
@@ -54,7 +60,9 @@ from multiprocessing import Pool, cpu_count
 from math import gcd
 import numpy as np
 import copy
+from copy import deepcopy
 import time
+from functools import reduce
 
 
 class Surface:
@@ -70,6 +78,7 @@ class Surface:
         miller_index,
         layers,
         vacuum,
+        uvw_basis,
     ):
         if type(slab) == Atoms:
             self.slab_ase = slab
@@ -82,14 +91,6 @@ class Surface:
                 f"Structure accepts 'pymatgen.core.structure.Structure' or 'ase.Atoms' not '{type(slab).__name__}'"
             )
 
-        #  self.no_vac_slab_pmg = self._remove_vacuum(self.slab_pmg)
-        #  self.no_vac_slab_ase = AseAtomsAdaptor.get_atoms(self.no_vac_slab_pmg)
-
-        self.primitive_slab_pmg = self._get_primitive(self.slab_pmg)
-        self.primitive_slab_ase = AseAtomsAdaptor.get_atoms(
-            self._get_primitive(self.slab_pmg)
-        )
-
         if type(bulk) == Atoms:
             self.bulk_ase = bulk
             self.bulk_pmg = AseAtomsAdaptor.get_structure(bulk)
@@ -101,14 +102,15 @@ class Surface:
                 f"structure accepts 'pymatgen.core.structure.Structure' or 'ase.Atoms' not '{type(bulk).__name__}'"
             )
 
+        self.reduced_formula = self.bulk_pmg.composition.reduced_formula
         self.miller_index = miller_index
         self.layers = layers
         self.vacuum = vacuum
-        self.termination = self._get_termination()
-        self.crystallographic_directions = self._get_crystallographic_directions()
+        self.uvw_basis = uvw_basis
         self.area = np.linalg.norm(
             np.cross(self.slab_pmg.lattice.matrix[0], self.slab_pmg.lattice.matrix[1])
         )
+        self.slab_pmg_zup, self.inplane_vectors = self._make_planar()
 
     def remove_layers(self, num_layers, top=False, atol=None):
         group_inds_conv, _ = group_layers(structure=self.slab_pmg, atol=atol)
@@ -124,8 +126,66 @@ class Surface:
             to_delete_prim.extend(group_inds_prim[i])
 
         self.slab_pmg.remove_sites(to_delete_conv)
-        self.primitive_slab_pmg.remove_sites(to_delete_prim)
-        # self.primitive_slab_pmg = self._get_primitive(self.slab_pmg)
+
+    def _rotate_vecs(self, a, b):
+        orig_vecs = np.vstack([a, b])
+        a_norm = a / np.linalg.norm(a)
+        b_norm = b / np.linalg.norm(b)
+
+        a_to_i = np.array([[a_norm[0], -a_norm[1]], [a_norm[1], a_norm[0]]])
+        ai_vecs = orig_vecs.dot(a_to_i)
+        new_a = ai_vecs[0]
+        new_b = ai_vecs[1]
+        b_norm = b_norm.dot(a_to_i)
+
+        if self._angle_between(new_a, new_b) > 180:
+            rot_mat = np.array([[b_norm[0], -b_norm[1]], [b_norm[1], b_norm[0]]])
+            new_matrix = ai_vecs.dot(rot_mat)
+
+            return np.c_[new_matrix, np.zeros(2)]
+        else:
+            return np.c_[ai_vecs, np.zeros(2)]
+
+    def _angle_between(self, p1, p2):
+        ang1 = np.arctan2(*p1[::-1])
+        ang2 = np.arctan2(*p2[::-1])
+
+        return np.rad2deg((ang2 - ang1) % (2 * np.pi))
+
+    def _make_planar(self):
+        matrix = deepcopy(self.slab_pmg.lattice.matrix)
+        cross = np.cross(matrix[0], matrix[2])
+        ortho_basis = np.vstack(
+            [
+                matrix[0] / np.linalg.norm(matrix[0]),
+                cross / np.linalg.norm(cross),
+                matrix[2] / np.linalg.norm(matrix[2]),
+            ]
+        )
+
+        if np.linalg.det(ortho_basis) < 0:
+            # print("left handed")
+            ortho_basis[1] *= -1
+
+        op = SymmOp.from_rotation_and_translation(ortho_basis, translation_vec=np.zeros(3))
+
+        planar_slab = deepcopy(self.slab_pmg)
+        planar_slab.apply_operation(op)
+
+        planar_matrix = deepcopy(planar_slab.lattice.matrix)
+
+        new_inplane_vectors = self._rotate_vecs(planar_matrix[0, :2], planar_matrix[1, :2])
+
+        planar_slab = Structure(
+            lattice=Lattice(matrix=np.vstack([new_inplane_vectors, planar_matrix[-1]])),
+            species=planar_slab.species,
+            coords=planar_slab.cart_coords,
+            coords_are_cartesian=True,
+            to_unit_cell=True,
+            site_properties=planar_slab.site_properties,
+        )
+
+        return planar_slab, new_inplane_vectors
 
     def _get_ewald_energy(self):
         slab = copy.deepcopy(self.slab_pmg)
@@ -138,99 +198,10 @@ class Surface:
         return E_slab, E_bulk
 
     def passivate(self, bot=True, top=True, passivated_struc=None):
-        primitive_pas = passivator(
-            struc=self.primitive_slab_pmg,
-            bot=bot,
-            top=top,
-            symmetrize=False,
-            passivated_struc=passivated_struc,
-        )
-        # surface = Surface(
-        #     slab=slab,
-        #     bulk=self.structure,
-        #     miller_index=self.miller_index,
-        #     layers=self.layers,
-        #     vacuum=self.vacuum,
-        # )
-        pass
-
-    def _get_primitive(self, structure):
-        if type(structure) == Atoms:
-            structure = AseAtomsAdaptor.get_structure(structure)
-
-        spacegroup = SpacegroupAnalyzer(structure)
-        primitive = spacegroup.get_primitive_standard_structure()
-
-        return primitive.get_sorted_structure()
-
-    def _remove_vacuum(self, slab):
-        struc = copy.deepcopy(slab)
-        bot, _ = get_slab_regions(struc)[0]
-        struc.translate_sites(range(len(struc)), [0, 0, -bot])
-        frac_coords = struc.frac_coords
-        cart_coords = struc.cart_coords
-        max_z = np.max(frac_coords[:, -1])
-        _, top_new = get_slab_regions(struc)[0]
-        matrix = copy.deepcopy(struc.lattice.matrix)
-        matrix[2, 2] = top_new * matrix[2, 2]
-        new_lattice = Lattice(matrix)
-        struc.lattice = new_lattice
-
-        for i in range(len(struc)):
-            struc.sites[i].frac_coords[-1] = struc.sites[i].frac_coords[-1] / max_z
-            struc.sites[i].coords[-1] = cart_coords[i, -1]
-
-        return struc
+        raise NotImplementedError
 
     def _get_termination(self):
-        z_layers, _ = get_layers(self.slab_ase, (0, 0, 1))
-        top_layer = [i for i, val in enumerate(z_layers == max(z_layers)) if val]
-        termination = np.unique(
-            [self.slab_ase.get_chemical_symbols()[a] for a in top_layer]
-        )
-
-        return termination
-
-    def _get_crystallographic_directions(self, tol=1e-10):
-        """
-        TODO: Figure out how to find the crystallographic directions of the a and b
-        lattice vectors in the primitive slab
-        """
-        indices = np.asarray(self.miller_index)
-
-        if indices.shape != (3,) or not indices.any() or indices.dtype != int:
-            raise ValueError("%s is an invalid surface type" % indices)
-
-        h, k, l = indices
-        h0, k0, l0 = indices == 0
-
-        if h0 and k0 or h0 and l0 or k0 and l0:  # if two indices are zero
-            if not h0:
-                c1, c2, c3 = [(0, 1, 0), (0, 0, 1), (1, 0, 0)]
-            if not k0:
-                c1, c2, c3 = [(0, 0, 1), (1, 0, 0), (0, 1, 0)]
-            if not l0:
-                c1, c2, c3 = [(1, 0, 0), (0, 1, 0), (0, 0, 1)]
-        else:
-            p, q = ext_gcd(k, l)
-            a1, a2, a3 = self.bulk_ase.cell
-
-            # constants describing the dot product of basis c1 and c2:
-            # dot(c1,c2) = k1+i*k2, i in Z
-            k1 = np.dot(p * (k * a1 - h * a2) + q * (l * a1 - h * a3), l * a2 - k * a3)
-            k2 = np.dot(l * (k * a1 - h * a2) - k * (l * a1 - h * a3), l * a2 - k * a3)
-
-            if abs(k2) > tol:
-                i = -int(round(k1 / k2))  # i corresponding to the optimal basis
-                p, q = p + i * l, q - i * k
-
-            a, b = ext_gcd(p * k + q * l, h)
-
-            c1 = (p * k + q * l, -p * h, -q * h)
-            c2 = np.array((0, l, -k)) // abs(gcd(l, k))
-            c3 = (b, a * p, a * q)
-
-        return np.array([c1, c2, c3])
+        raise NotImplementedError
 
 
 class Interface:
@@ -244,6 +215,10 @@ class Interface:
         angle_diff,
         sub_strain_frac,
         interfacial_distance,
+        film_vecs,
+        sub_vecs,
+        film_sl_vecs,
+        sub_sl_vecs,
         vacuum,
         center=False,
     ):
@@ -252,15 +227,33 @@ class Interface:
         self.film = film
         self.film_transformation = film_transformation
         self.substrate_transformation = substrate_transformation
+        self.film_vecs = film_vecs
+        self.sub_vecs = sub_vecs
+        self.film_sl_vecs = film_sl_vecs
+        self.sub_sl_vecs = sub_sl_vecs
         self.strain = strain
         self.angle_diff = angle_diff
         self.sub_strain_frac = sub_strain_frac
         self.vacuum = vacuum
-        self.substrate_supercell = self._prepare_slab(
-            self.substrate.slab_pmg, self.substrate_transformation
+        (
+            self.substrate_supercell,
+            self.substrate_matrix,
+            self.substrate_rot_sl_vecs,
+            self.substrate_supercell_uvw,
+            self.substrate_supercell_scale_factors,
+        ) = self._prepare_slab(
+            self.substrate.slab_pmg_zup, self.sub_sl_vecs, self.substrate.uvw_basis
         )
-        self.film_supercell = self._prepare_slab(
-            self.film.slab_pmg, self.film_transformation
+        (
+            self.film_supercell,
+            self.film_matrix,
+            self.film_rot_sl_vecs,
+            self.film_supercell_uvw,
+            self.film_supercell_scale_factors,
+        ) = self._prepare_slab(
+            self.film.slab_pmg_zup,
+            self.film_sl_vecs,
+            self.film.uvw_basis,
         )
         self.interface_sl_vectors = self._get_interface_sl_vecs()
         self.interfacial_distance = interfacial_distance
@@ -268,6 +261,36 @@ class Interface:
         self.strained_sub = self._strain_and_orient_sub()
         self.strained_film = self._strain_and_orient_film()
         self.interface, self.sub_part, self.film_part = self._stack_interface()
+        self.area = np.linalg.norm(
+            np.cross(self.interface.lattice.matrix[0], self.interface.lattice.matrix[1])
+        )
+
+    def __str__(self):
+        fm = self.film.miller_index
+        sm = self.substrate.miller_index
+        film_str = f"{self.film.reduced_formula}({fm[0]} {fm[1]} {fm[2]})"
+        sub_str = f"{self.substrate.reduced_formula}({sm[0]} {sm[1]} {sm[2]})"
+        s_uvw = self.substrate_supercell_uvw
+        s_sf = self.substrate_supercell_scale_factors
+        f_uvw = self.film_supercell_uvw
+        f_sf = self.film_supercell_scale_factors
+        match_a_film = f"{f_sf[0]}*[{f_uvw[0][0]} {f_uvw[0][1]} {f_uvw[0][1]}]"
+        match_a_sub = f"{s_sf[0]}*[{s_uvw[0][0]} {s_uvw[0][1]} {s_uvw[0][1]}]"
+        match_b_film = f"{f_sf[1]}*[{f_uvw[1][0]} {f_uvw[1][1]} {f_uvw[1][1]}]"
+        match_b_sub = f"{s_sf[1]}*[{s_uvw[1][0]} {s_uvw[1][1]} {s_uvw[1][1]}]"
+        return_info = [
+            "Film: " + film_str,
+            "Substrate: " + sub_str,
+            "Epitaxial Match Along \\vec{a} (film || sub): " + f"{match_a_film} || {match_a_sub}",
+            "Epitaxial Match Along \\vec{b} (film || sub): " + f"{match_b_film} || {match_b_sub}",
+            "Strain Along \\vec{a} (%): " + f"{100*self.strain[0]:.3f}",
+            "Strain Along \\vec{b} (%): " + f"{100*self.strain[1]:.3f}",
+            "In-plane Angle Mismatch (%): " + f"{100*self.angle_diff:.3f}",
+            "Cross Section Area (Ang^2): " + f"{self.area:.3f}",
+        ]
+        return_str = "\n".join(return_info)
+
+        return return_str
 
     def write_file(self, output="POSCAR_interface"):
         Poscar(self.interface).write_file(output)
@@ -313,86 +336,63 @@ class Interface:
 
             return shifted_interface
 
-    def _get_supercell(self, slab, matrix):
-        new_slab = copy.copy(slab)
-        initial_slab_matrix = new_slab.lattice.matrix
-        initial_reduced_vecs = reduce_vectors(
-            initial_slab_matrix[0],
-            initial_slab_matrix[1],
-        )
-        initial_reduced_lattice = Lattice(
-            np.vstack(
-                [
-                    initial_reduced_vecs,
-                    initial_slab_matrix[-1],
-                ]
-            )
-        )
-        new_slab.lattice = initial_reduced_lattice
+    def _float_gcd(self, a, b, rtol=1e-05, atol=1e-08):
+        t = min(abs(a), abs(b))
+        while abs(b) > rtol * t + atol:
+            a, b = b, a % b
+        return a
 
-        new_slab.make_supercell(scaling_matrix=matrix)
-        supercell_slab_matrix = new_slab.lattice.matrix
-        supercell_reduced_vecs = reduce_vectors(
-            supercell_slab_matrix[0],
-            supercell_slab_matrix[1],
-        )
-        supercell_reduced_lattice = Lattice(
-            np.vstack(
-                [
-                    supercell_reduced_vecs,
-                    supercell_slab_matrix[-1],
-                ]
-            )
-        )
-        new_slab.lattice = supercell_reduced_lattice
+    def _rotate_vecs(self, a, b):
+        orig_vecs = np.vstack([a, b])
+        a_norm = a / np.linalg.norm(a)
+        b_norm = b / np.linalg.norm(b)
 
-        return new_slab
+        a_to_i = np.array([[a_norm[0], -a_norm[1]], [a_norm[1], a_norm[0]]])
+        ai_vecs = orig_vecs.dot(a_to_i)
+        new_a = ai_vecs[0]
+        new_b = ai_vecs[1]
+        b_norm = b_norm.dot(a_to_i)
 
-    def _prepare_slab(self, slab, matrix):
-        initial_slab_matrix = slab.lattice.matrix
-        initial_reduced_vecs = reduce_vectors(
-            initial_slab_matrix[0],
-            initial_slab_matrix[1],
+        if self._angle_between(new_a, new_b) > 180:
+            rot_mat = np.array([[b_norm[0], -b_norm[1]], [b_norm[1], b_norm[0]]])
+            new_matrix = ai_vecs.dot(rot_mat)
+
+            return np.c_[new_matrix, np.zeros(2)]
+        else:
+            return np.c_[ai_vecs, np.zeros(2)]
+
+    def _angle_between(self, p1, p2):
+        ang1 = np.arctan2(*p1[::-1])
+        ang2 = np.arctan2(*p2[::-1])
+
+        return np.rad2deg((ang2 - ang1) % (2 * np.pi))
+
+    def _prepare_slab(self, slab, sl_vec, uvw):
+        # rot_sl_vec = self._rotate_vecs(sl_vec[0, :2], sl_vec[1, :2])
+
+        # print(np.round(rot_sl_vec, 3))
+        # print(np.round(slab.lattice.matrix[:2], 3))
+        # print("")
+
+        # print(
+        #     np.round(
+        #         from_2d_to_3d(get_2d_transform(slab.lattice.matrix[:2], sl_vec)), 3
+        #     )
+        # )
+        matrix = np.round(from_2d_to_3d(get_2d_transform(slab.lattice.matrix[:2], sl_vec))).astype(
+            int
         )
-        initial_reduced_lattice = Lattice(
-            np.vstack(
-                [
-                    initial_reduced_vecs,
-                    initial_slab_matrix[-1],
-                ]
-            )
-        )
-        initial_reduced_slab = Structure(
-            lattice=initial_reduced_lattice,
-            species=slab.species,
-            coords=slab.cart_coords,
-            to_unit_cell=True,
-            coords_are_cartesian=True,
-        )
-        supercell_slab = copy.copy(initial_reduced_slab)
+        supercell_slab = copy.copy(slab)
         supercell_slab.make_supercell(scaling_matrix=matrix)
-        supercell_slab_matrix = supercell_slab.lattice.matrix
-        supercell_reduced_vecs = reduce_vectors(
-            supercell_slab_matrix[0],
-            supercell_slab_matrix[1],
-        )
-        supercell_reduced_lattice = Lattice(
-            np.vstack(
-                [
-                    supercell_reduced_vecs,
-                    supercell_slab_matrix[-1],
-                ]
-            )
-        )
-        initial_reduced_slab = Structure(
-            lattice=supercell_reduced_lattice,
-            species=supercell_slab.species,
-            coords=supercell_slab.cart_coords,
-            to_unit_cell=True,
-            coords_are_cartesian=True,
-        )
 
-        return initial_reduced_slab
+        uvw_supercell = matrix @ uvw
+        scale_factors = []
+        for i, b in enumerate(uvw_supercell):
+            scale = np.abs(reduce(self._float_gcd, b))
+            uvw_supercell[i] = uvw_supercell[i] / scale
+            scale_factors.append(scale)
+
+        return supercell_slab, matrix, sl_vec, uvw_supercell, scale_factors
 
     def _get_angle(self, a, b):
         a_norm = np.linalg.norm(a)
@@ -413,6 +413,27 @@ class Interface:
         new_vec = np.matmul(rot_mat, vec.reshape(-1, 1))
 
         return new_vec
+
+    def _get_interface_sl_vecs(self):
+        sub_sl_vecs = copy.copy(self.substrate_supercell.lattice.matrix[:2, :])
+        if self.sub_strain_frac == 0:
+            new_sl_vecs = sub_sl_vecs
+
+            return new_sl_vecs
+        else:
+            a_strain = self.strain[0]
+            b_strain = self.strain[1]
+            a_norm = np.linalg.norm(sub_sl_vecs[0])
+            b_norm = np.linalg.norm(sub_sl_vecs[1])
+            sub_angle = self._get_angle(sub_sl_vecs[0], sub_sl_vecs[1])
+            new_angle = sub_angle * (1 + (self.sub_strain_frac * self.angle_diff))
+            new_a = sub_sl_vecs[0] * (1 + (self.sub_strain_frac * a_strain))
+            new_b = self._rotate(sub_sl_vecs[0] * (b_norm / a_norm), new_angle) * (
+                1 + (self.sub_strain_frac * b_strain)
+            )
+            new_sl_vecs = np.array([new_a, np.squeeze(new_b)])
+
+            return new_sl_vecs
 
     def _get_interface_sl_vecs(self):
         sub_sl_vecs = copy.copy(self.substrate_supercell.lattice.matrix[:2, :])
@@ -520,31 +541,22 @@ class Interface:
         strained_sub_coords[:, -1] *= sub_conv_factor
         strained_film_coords[:, -1] *= film_conv_factor
 
-        sub_size = np.max(strained_sub_coords[:, -1]) - np.min(
-            strained_sub_coords[:, -1]
-        )
+        sub_size = np.max(strained_sub_coords[:, -1]) - np.min(strained_sub_coords[:, -1])
 
         strained_sub_coords[:, -1] -= np.min(strained_sub_coords[:, -1])
         strained_film_coords[:, -1] -= np.min(strained_film_coords[:, -1])
-        strained_film_coords[:, -1] += sub_size + (
-            self.interfacial_distance / interface_c_len
-        )
+        strained_film_coords[:, -1] += sub_size + (self.interfacial_distance / interface_c_len)
 
         interface_coords = np.r_[strained_sub_coords, strained_film_coords]
         interface_species = strained_sub.species + strained_film.species
 
-        self.interface_height = sub_size + (
-            (0.5 * self.interfacial_distance) / interface_c_len
-        )
+        self.interface_height = sub_size + ((0.5 * self.interfacial_distance) / interface_c_len)
 
         interface_lattice = Lattice(
             np.vstack(
                 [
                     strained_sub.lattice.matrix[:2],
-                    (
-                        interface_c_len
-                        / np.linalg.norm(strained_sub.lattice.matrix[:, -1])
-                    )
+                    (interface_c_len / np.linalg.norm(strained_sub.lattice.matrix[:, -1]))
                     * strained_sub.lattice.matrix[:, -1],
                 ]
             )
@@ -557,65 +569,61 @@ class Interface:
             to_unit_cell=True,
         )
 
-        reduced_interface_struc = interface_struc.get_reduced_structure()
-        sg = SpacegroupAnalyzer(reduced_interface_struc)
-        refined_interface_struc = sg.get_conventional_standard_structure()
-        primitive_interface_struc = refined_interface_struc.get_reduced_structure()
-        primitive_interface_struc = primitive_interface_struc.get_primitive_structure()
-        # print('REMINDER: line 498 surfaces.py')
-        # primitive_interface_struc = refined_interface_struc
+        # reduced_interface_struc = interface_struc.get_reduced_structure()
+        # sg = SpacegroupAnalyzer(reduced_interface_struc)
+        # refined_interface_struc = sg.get_conventional_standard_structure()
+        # primitive_interface_struc = refined_interface_struc.get_reduced_structure()
+        # primitive_interface_struc = primitive_interface_struc.get_primitive_structure()
+        # # print('REMINDER: line 498 surfaces.py')
+        # # primitive_interface_struc = refined_interface_struc
 
-        substrate_species, film_species, species_in_both = self._get_unique_species()
+        # substrate_species, film_species, species_in_both = self._get_unique_species()
 
-        if len(species_in_both) == 0:
-            pass
-        else:
-            for i in species_in_both:
-                substrate_species = np.delete(
-                    substrate_species, np.where(substrate_species == i)
-                )
-                film_species = np.delete(film_species, np.where(film_species == i))
+        # if len(species_in_both) == 0:
+        #     pass
+        # else:
+        #     for i in species_in_both:
+        #         substrate_species = np.delete(
+        #             substrate_species, np.where(substrate_species == i)
+        #         )
+        #         film_species = np.delete(film_species, np.where(film_species == i))
 
-        element_array_prim = np.array(
-            [site.species.elements[0].symbol for site in primitive_interface_struc]
-        )
+        # element_array_prim = np.array(
+        #     [site.species.elements[0].symbol for site in primitive_interface_struc]
+        # )
 
-        substrate_ind_prim = np.isin(element_array_prim, substrate_species)
-        film_ind_prim = np.isin(element_array_prim, film_species)
+        # substrate_ind_prim = np.isin(element_array_prim, substrate_species)
+        # film_ind_prim = np.isin(element_array_prim, film_species)
 
-        average_sub_height_prim = np.mean(
-            primitive_interface_struc.frac_coords[substrate_ind_prim, -1]
-        )
-        average_film_height_prim = np.mean(
-            primitive_interface_struc.frac_coords[film_ind_prim, -1]
-        )
+        # average_sub_height_prim = np.mean(
+        #     primitive_interface_struc.frac_coords[substrate_ind_prim, -1]
+        # )
+        # average_film_height_prim = np.mean(
+        #     primitive_interface_struc.frac_coords[film_ind_prim, -1]
+        # )
 
-        if average_film_height_prim < average_sub_height_prim:
-            primitive_interface_struc = self._flip_structure(primitive_interface_struc)
-        else:
-            pass
+        # if average_film_height_prim < average_sub_height_prim:
+        #     primitive_interface_struc = self._flip_structure(primitive_interface_struc)
+        # else:
+        #     pass
 
         if self.center:
-            primitive_interface_struc.translate_sites(
-                indices=range(len(primitive_interface_struc)),
+            interface_struc.translate_sites(
+                indices=range(len(interface_struc)),
                 vector=[0, 0, 0.5 - self.interface_height],
             )
             self.interface_height = 0.5
 
-        primitive_film = copy.deepcopy(primitive_interface_struc)
-        primitive_sub = copy.deepcopy(primitive_interface_struc)
+        primitive_film = copy.deepcopy(interface_struc)
+        primitive_sub = copy.deepcopy(interface_struc)
 
-        film_sites = np.where(
-            primitive_film.frac_coords[:, -1] > self.interface_height
-        )[0]
-        sub_sites = np.where(primitive_sub.frac_coords[:, -1] < self.interface_height)[
-            0
-        ]
+        film_sites = np.where(primitive_film.frac_coords[:, -1] > self.interface_height)[0]
+        sub_sites = np.where(primitive_sub.frac_coords[:, -1] < self.interface_height)[0]
 
         primitive_film.remove_sites(sub_sites)
         primitive_sub.remove_sites(film_sites)
 
-        return primitive_interface_struc, primitive_sub, primitive_film
+        return interface_struc, primitive_sub, primitive_film
 
     def _setup_for_surface_matching(self, layers_sub=2, layers_film=2):
         interface = self.interface
@@ -783,8 +791,7 @@ class Interface:
 
         if sub_metal.all():
             sub_dict = {
-                sub_species[i]: sub_elements[i].metallic_radius
-                for i in range(len(sub_elements))
+                sub_species[i]: sub_elements[i].metallic_radius for i in range(len(sub_elements))
             }
         else:
             Xs = [e.X for e in sub_elements]
@@ -799,8 +806,7 @@ class Interface:
 
         if film_metal.all():
             film_dict = {
-                film_species[i]: film_elements[i].metallic_radius
-                for i in range(len(film_elements))
+                film_species[i]: film_elements[i].metallic_radius for i in range(len(film_elements))
             }
         else:
             Xs = [e.X for e in film_elements]
@@ -879,9 +885,9 @@ class Interface:
         Y_new = np.hstack([np.vstack([Y + i for i in x_iter]) for _ in y_iter])
         Z_new = np.hstack([np.vstack([Z for _ in x_iter]) for _ in y_iter])
 
-        cart_coords = np.c_[
-            X_new.ravel(), Y_new.ravel(), np.zeros(X_new.ravel().shape)
-        ].dot(self.interface.lattice.matrix)
+        cart_coords = np.c_[X_new.ravel(), Y_new.ravel(), np.zeros(X_new.ravel().shape)].dot(
+            self.interface.lattice.matrix
+        )
 
         X_cart = cart_coords[:, 0].reshape(X_new.shape)
         Y_cart = cart_coords[:, 1].reshape(Y_new.shape)
@@ -1106,16 +1112,8 @@ class Interface:
             -((x - mus[:, 0][:, None]) ** 2 + (y - mus[:, 1][:, None]) ** 2)
             / (2 * sigmas[:, None] ** 2)
         )
-        dx = (
-            -scales[:, None]
-            * ((x - mus[:, 0][:, None]) / (2 * np.pi * sigmas[:, None] ** 4))
-            * e
-        )
-        dy = (
-            -scales[:, None]
-            * ((y - mus[:, 1][:, None]) / (2 * np.pi * sigmas[:, None] ** 4))
-            * e
-        )
+        dx = -scales[:, None] * ((x - mus[:, 0][:, None]) / (2 * np.pi * sigmas[:, None] ** 4)) * e
+        dy = -scales[:, None] * ((y - mus[:, 1][:, None]) / (2 * np.pi * sigmas[:, None] ** 4)) * e
 
         return dx.sum(axis=0), dy.sum(axis=0)
 
@@ -1150,9 +1148,7 @@ class Interface:
         frac_xy = np.c_[xs, ys, np.zeros(xs.shape)].dot(inv_matrix)[:, :2]
 
         inds_in_cell = ((frac_xy >= 0) & (frac_xy <= 1)).all(axis=1)
-        coords_in_cell = np.c_[frac_xy[inds_in_cell], np.zeros(inds_in_cell.sum())].dot(
-            matrix
-        )
+        coords_in_cell = np.c_[frac_xy[inds_in_cell], np.zeros(inds_in_cell.sum())].dot(matrix)
 
         xs_in_cell = coords_in_cell[:, 0]
         ys_in_cell = coords_in_cell[:, 1]
@@ -1178,9 +1174,7 @@ class Interface:
 
         for i in range(iterations):
             # s = time.time()
-            dx, dy = self._gradient(
-                x=opt_x[i], y=opt_y[i], sigmas=sigmas, mus=mus, scales=scales
-            )
+            dx, dy = self._gradient(x=opt_x[i], y=opt_y[i], sigmas=sigmas, mus=mus, scales=scales)
             m_xi = beta1 * m_x + (1 - beta1) * dx
             m_yi = beta1 * m_y + (1 - beta1) * dy
             v_xi = beta2 * v_x + (1 - beta2) * dx**2
@@ -1203,9 +1197,9 @@ class Interface:
 
         matrix = self.interface.lattice.matrix
         inv_matrix = self.interface.lattice.inv_matrix
-        frac_coords = np.c_[
-            opt_x.ravel(), opt_y.ravel(), np.zeros(len(opt_y.ravel()))
-        ].dot(inv_matrix)
+        frac_coords = np.c_[opt_x.ravel(), opt_y.ravel(), np.zeros(len(opt_y.ravel()))].dot(
+            inv_matrix
+        )
         frac_x = frac_coords[:, 0].reshape(opt_x.shape)
         frac_y = frac_coords[:, 1].reshape(opt_y.shape)
 
@@ -1236,9 +1230,9 @@ class Interface:
             ]
         )
 
-        cart_coords = np.c_[
-            frac_x.ravel(), frac_y.ravel(), np.zeros(len(frac_x.ravel()))
-        ].dot(matrix)
+        cart_coords = np.c_[frac_x.ravel(), frac_y.ravel(), np.zeros(len(frac_x.ravel()))].dot(
+            matrix
+        )
         cart_x = cart_coords[:, 0].reshape(frac_x.shape)
         cart_y = cart_coords[:, 1].reshape(frac_y.shape)
         final_xs, final_ys = cart_x[-1], cart_y[-1]
@@ -1248,12 +1242,10 @@ class Interface:
         centers = clustering.cluster_centers_
 
         frac_centers = np.c_[centers, np.zeros(len(centers))].dot(inv_matrix)[:, :2]
-        inds_in_cell = ((frac_centers.round(2) >= 0) & (frac_centers.round(2) < 1)).all(
-            axis=1
-        )
-        centers_in_cell = np.c_[
-            frac_centers[inds_in_cell], np.zeros(inds_in_cell.sum())
-        ].dot(matrix)[:, :2]
+        inds_in_cell = ((frac_centers.round(2) >= 0) & (frac_centers.round(2) < 1)).all(axis=1)
+        centers_in_cell = np.c_[frac_centers[inds_in_cell], np.zeros(inds_in_cell.sum())].dot(
+            matrix
+        )[:, :2]
 
         return opt_x, opt_y, centers_in_cell
 
@@ -1399,9 +1391,7 @@ class Interface:
                 [-2, 2, 0],
             ]
         )
-        film_coords = np.vstack([film_coords + shift for shift in periodic_shifts]).dot(
-            matrix
-        )
+        film_coords = np.vstack([film_coords + shift for shift in periodic_shifts]).dot(matrix)
         film_rs = np.tile(r[fi], 25)
 
         sub_coords = self.interface.frac_coords[si].dot(matrix)
@@ -1417,14 +1407,12 @@ class Interface:
             np.linspace(0, 1, grid_density_y),
         )
 
-        cart_coords = np.c_[
-            X_frac.ravel(), Y_frac.ravel(), np.zeros(len(Y_frac.ravel()))
-        ].dot(matrix)
+        cart_coords = np.c_[X_frac.ravel(), Y_frac.ravel(), np.zeros(len(Y_frac.ravel()))].dot(
+            matrix
+        )
         X = cart_coords[:, 0].reshape(X_frac.shape)
         Y = cart_coords[:, 1].reshape(Y_frac.shape)
-        Z = self.overlap_film_sub(
-            X=X, Y=Y, coords=coords, rs=rs, fi=film_inds, si=sub_inds
-        )
+        Z = self.overlap_film_sub(X=X, Y=Y, coords=coords, rs=rs, fi=film_inds, si=sub_inds)
         Z = Z.sum(axis=0)
         atom_volume = (4 / 3) * np.pi * np.concatenate([r[si], r[fi]]) ** 3
         O_bar = Z / atom_volume.sum()
@@ -1582,9 +1570,7 @@ class Interface:
                 [-2, 2, 0],
             ]
         )
-        film_coords = np.vstack([film_coords + shift for shift in periodic_shifts]).dot(
-            matrix
-        )
+        film_coords = np.vstack([film_coords + shift for shift in periodic_shifts]).dot(matrix)
         film_rs = np.tile(r[fi], 25)
 
         sub_coords = self.interface.frac_coords[si].dot(matrix)
@@ -1600,14 +1586,12 @@ class Interface:
             np.linspace(0, 1, grid_density_y),
         )
 
-        cart_coords = np.c_[
-            X_frac.ravel(), Y_frac.ravel(), np.zeros(len(Y_frac.ravel()))
-        ].dot(matrix)
+        cart_coords = np.c_[X_frac.ravel(), Y_frac.ravel(), np.zeros(len(Y_frac.ravel()))].dot(
+            matrix
+        )
         X = cart_coords[:, 0].reshape(X_frac.shape)
         Y = cart_coords[:, 1].reshape(Y_frac.shape)
-        Z = self.overlap_film_sub(
-            X=X, Y=Y, coords=coords, rs=rs, fi=film_inds, si=sub_inds
-        )
+        Z = self.overlap_film_sub(X=X, Y=Y, coords=coords, rs=rs, fi=film_inds, si=sub_inds)
         Z_components = np.copy(Z)[:, 0]
         # Z_components = Z_components[np.logical_not(np.isclose(Z_components, 0, atol=0.01).all(axis=1))]
         # Z_components = Z_components[np.argsort(np.argmax(Z_components, axis=1))]
@@ -1759,16 +1743,12 @@ class Interface:
         fi = layer_inds[bot_film_ind]
         fi2 = layer_inds[second_film_ind]
         film_z_shift = heights[bot_film_ind] - heights[second_film_ind]
-        film_dist = self.interface.lattice.get_cartesian_coords(
-            [0, 0, np.abs(film_z_shift)]
-        )[-1]
+        film_dist = self.interface.lattice.get_cartesian_coords([0, 0, np.abs(film_z_shift)])[-1]
 
         si = layer_inds[top_sub_ind]
         si2 = layer_inds[second_sub_ind]
         sub_z_shift = heights[top_sub_ind] - heights[second_sub_ind]
-        sub_dist = self.interface.lattice.get_cartesian_coords(
-            [0, 0, np.abs(sub_z_shift)]
-        )[-1]
+        sub_dist = self.interface.lattice.get_cartesian_coords([0, 0, np.abs(sub_z_shift)])[-1]
 
         scaling_matrix, _ = self._get_scaling_matrix(
             a=self.interface.lattice.matrix[0, :2],
@@ -1790,9 +1770,9 @@ class Interface:
         b = matrix[1, :2]
         borders = np.vstack([np.zeros(2), a, a + b, b, np.zeros(2)])
 
-        cart_coords = np.c_[
-            X_frac.ravel(), Y_frac.ravel(), np.zeros(len(Y_frac.ravel()))
-        ].dot(matrix)
+        cart_coords = np.c_[X_frac.ravel(), Y_frac.ravel(), np.zeros(len(Y_frac.ravel()))].dot(
+            matrix
+        )
         X = cart_coords[:, 0].reshape(X_frac.shape)
         Y = cart_coords[:, 1].reshape(Y_frac.shape)
 
@@ -1816,9 +1796,7 @@ class Interface:
             film_z_shift=film_z_shift,
         )
 
-        x_init_orig, y_init_orig = self._init_gd_positions(
-            mus=mus_orig, sigmas=sigmas_orig
-        )
+        x_init_orig, y_init_orig = self._init_gd_positions(mus=mus_orig, sigmas=sigmas_orig)
         x_gd_orig, y_gd_orig, all_centers_orig = self.adam(
             x_init_orig,
             y_init_orig,
@@ -1869,19 +1847,14 @@ class Interface:
         PES_values_sub = PES_values_sub[degenerate_min_inds]
         PES_values_film = PES_values_film[degenerate_min_inds]
         min_centers_orig = all_centers_orig[degenerate_min_inds]
-        PES_rank_values_2 = np.round(
-            PES_values_orig + PES_values_sub + PES_values_film, 4
-        )
+        PES_rank_values_2 = np.round(PES_values_orig + PES_values_sub + PES_values_film, 4)
         unique_PES_values_2 = np.unique(PES_rank_values_2)
         unique_inds = [np.where(PES_rank_values_2 == u)[0] for u in unique_PES_values_2]
         unique_shift_inds = [
-            u[np.argmin(np.linalg.norm(min_centers_orig[u], axis=1))]
-            for u in unique_inds
+            u[np.argmin(np.linalg.norm(min_centers_orig[u], axis=1))] for u in unique_inds
         ]
         # min_shift_inds = unique_shift_inds[np.argmin(PES_rank_values_2[unique_shift_inds])]
-        min_shift_inds = unique_shift_inds[
-            np.argmax(PES_rank_values_2[unique_shift_inds])
-        ]
+        min_shift_inds = unique_shift_inds[np.argmax(PES_rank_values_2[unique_shift_inds])]
         min_center_orig = min_centers_orig[min_shift_inds]
 
         Z_orig = self._generate_PES(
@@ -2024,9 +1997,7 @@ class Interface:
             s=50,
         )
 
-        ax.scatter(
-            min_center_orig[0], min_center_orig[1], color="white", s=100, marker="X"
-        )
+        ax.scatter(min_center_orig[0], min_center_orig[1], color="white", s=100, marker="X")
 
         ax.plot(
             borders[:, 0],
@@ -2175,9 +2146,9 @@ class Interface:
         y_grid_interp = np.linspace(0, 1, 401)
         X_interp, Y_interp = np.meshgrid(x_grid_interp, y_grid_interp)
         Z_interp = Z_spline.ev(Y_interp, X_interp)
-        cart_shifts_interp = np.c_[
-            X_interp.ravel(), Y_interp.ravel(), 0 * Y_interp.ravel()
-        ].dot(matrix)
+        cart_shifts_interp = np.c_[X_interp.ravel(), Y_interp.ravel(), 0 * Y_interp.ravel()].dot(
+            matrix
+        )
         X_cart_interp = cart_shifts_interp[:, 0].reshape(X_interp.shape)
         Y_cart_interp = cart_shifts_interp[:, 1].reshape(Y_interp.shape)
 
@@ -2196,9 +2167,7 @@ class Interface:
         y_opt = Y_cart_interp[max_inds]
 
         if shift:
-            self.shift_film(
-                shift=[x_opt[0], y_opt[0], 0], fractional=False, inplace=True
-            )
+            self.shift_film(shift=[x_opt[0], y_opt[0], 0], fractional=False, inplace=True)
 
         im = ax.pcolormesh(
             X_cart_interp,
@@ -2331,9 +2300,9 @@ class Interface:
         X_interp, Y_interp = np.meshgrid(x_grid_interp, y_grid_interp)
         Z_interp = Z_spline.ev(Y_interp, X_interp)
         Z_interp -= Z_interp.min()
-        cart_shifts_interp = np.c_[
-            X_interp.ravel(), Y_interp.ravel(), 0 * Y_interp.ravel()
-        ].dot(matrix)
+        cart_shifts_interp = np.c_[X_interp.ravel(), Y_interp.ravel(), 0 * Y_interp.ravel()].dot(
+            matrix
+        )
         X_cart_interp = cart_shifts_interp[:, 0].reshape(X_interp.shape)
         Y_cart_interp = cart_shifts_interp[:, 1].reshape(Y_interp.shape)
 
@@ -2352,9 +2321,7 @@ class Interface:
         y_opt = Y_cart_interp[max_inds]
 
         if shift:
-            self.shift_film(
-                shift=[x_opt[0], y_opt[0], 0], fractional=False, inplace=True
-            )
+            self.shift_film(shift=[x_opt[0], y_opt[0], 0], fractional=False, inplace=True)
 
         im = ax.contourf(
             X_cart_interp,
@@ -2398,9 +2365,7 @@ class Interface:
 
         return Z_interp.max()
 
-    def _plot_surface_matching(
-        self, x_grid, y_grid, Zs, output, dpi, fontsize, cmap, shift=True
-    ):
+    def _plot_surface_matching(self, x_grid, y_grid, Zs, output, dpi, fontsize, cmap, shift=True):
         matrix = self.interface.lattice.matrix
         a = matrix[0, :2]
         b = matrix[1, :2]
@@ -2435,9 +2400,7 @@ class Interface:
             y_opt = Y_cart_interp[max_inds]
 
             if shift:
-                self.shift_film(
-                    shift=[x_opt[0], y_opt[0], 0], fractional=False, inplace=True
-                )
+                self.shift_film(shift=[x_opt[0], y_opt[0], 0], fractional=False, inplace=True)
 
             im = ax.contourf(
                 X_cart_interp,
@@ -2654,13 +2617,9 @@ class Interface:
         )
 
         # Z = (film_E[0] + sub_E[0]) - np.array(int_E).reshape(X.shape)
-        Z_ew = (film_ewald_E[0] + sub_ewald_E[0]) - np.array(int_ewald_E).reshape(
-            X.shape
-        )
+        Z_ew = (film_ewald_E[0] + sub_ewald_E[0]) - np.array(int_ewald_E).reshape(X.shape)
         # Z_zb = (film_zbl_E[0] + sub_zbl_E[0]) - np.array(int_zbl_E).reshape(X.shape)
-        Z_born = (film_born_E[0] + sub_born_E[0]) - np.array(int_born_E).reshape(
-            X.shape
-        )
+        Z_born = (film_born_E[0] + sub_born_E[0]) - np.array(int_born_E).reshape(X.shape)
         Z = Z_ew + Z_born
         # Z = np.array(int_E).reshape(X.shape)
 
@@ -2670,9 +2629,9 @@ class Interface:
         X_interp, Y_interp = np.meshgrid(x_grid_interp, y_grid_interp)
         Z_interp = Z_spline.ev(Y_interp, X_interp)
         Z_interp -= Z_interp.min()
-        cart_shifts_interp = np.c_[
-            X_interp.ravel(), Y_interp.ravel(), 0 * Y_interp.ravel()
-        ].dot(matrix)
+        cart_shifts_interp = np.c_[X_interp.ravel(), Y_interp.ravel(), 0 * Y_interp.ravel()].dot(
+            matrix
+        )
         X_cart_interp = cart_shifts_interp[:, 0].reshape(X_interp.shape)
         Y_cart_interp = cart_shifts_interp[:, 1].reshape(Y_interp.shape)
 
@@ -2691,9 +2650,7 @@ class Interface:
         y_opt = Y_cart_interp[max_inds]
 
         if shift:
-            self.shift_film(
-                shift=[x_opt[0], y_opt[0], 0], fractional=False, inplace=True
-            )
+            self.shift_film(shift=[x_opt[0], y_opt[0], 0], fractional=False, inplace=True)
 
         im = ax.contourf(
             X_cart_interp,
@@ -2738,6 +2695,127 @@ class Interface:
         return Z_interp.max()
 
     def plot_interface(
+        self,
+        output="interface_view.png",
+        film_color="red",
+        substrate_color="blue",
+        supercell_color="black",
+    ):
+        sub_matrix = deepcopy(self.substrate.slab_pmg_zup.lattice.matrix)
+        film_matrix = deepcopy(self.film.slab_pmg_zup.lattice.matrix)
+        sub_sc_matrix = deepcopy(self.substrate_supercell.lattice.matrix)
+        film_sc_matrix = deepcopy(self.film_supercell.lattice.matrix)
+        int_matrix = deepcopy(self.interface.lattice.matrix)
+
+        coords = np.array(
+            [
+                [0, 0, 0],
+                [1, 0, 0],
+                [1, 1, 0],
+                [0, 1, 0],
+                [0, 0, 0],
+            ]
+        )
+
+        shifts = np.array(
+            [
+                [0, 0, 0],
+                [1, 0, 0],
+                [0, 1, 0],
+                [-1, 0, 0],
+                [0, -1, 0],
+                [1, 1, 0],
+                [-1, -1, 0],
+            ]
+        )
+
+        coords_3x3 = [coords + shift for shift in shifts]
+
+        sub_coords = [c.dot(sub_matrix) for c in coords_3x3]
+        film_coords = [c.dot(film_matrix) for c in coords_3x3]
+        int_coords = coords.dot(int_matrix)
+        film_sl = coords.dot(film_sc_matrix)
+        sub_sl = coords.dot(sub_sc_matrix)
+
+        f_mat = self.film_matrix
+        s_mat = self.substrate_matrix
+
+        sub_struc = Structure(
+            lattice=self.substrate.slab_pmg_zup.lattice,
+            species=["H"],
+            coords=np.zeros((1, 3)),
+            to_unit_cell=True,
+            coords_are_cartesian=True,
+        )
+        sub_struc.make_supercell(s_mat)
+        sub_inv_matrix = deepcopy(sub_struc.lattice.inv_matrix)
+
+        film_struc = Structure(
+            lattice=self.film.slab_pmg_zup.lattice,
+            species=["H"],
+            coords=np.zeros((1, 3)),
+            to_unit_cell=True,
+            coords_are_cartesian=True,
+        )
+        film_struc.make_supercell(f_mat)
+        film_inv_matrix = deepcopy(film_struc.lattice.inv_matrix)
+
+        fig, ax = plt.subplots(figsize=(4, 4), dpi=400)
+
+        for c in sub_struc.cart_coords:
+            for c_3x3 in sub_coords:
+                cart_coords = c_3x3 + c
+                fc = np.round(cart_coords.dot(sub_inv_matrix), 3)
+
+                x_in = np.logical_and(fc[:, 0] > 0.0, fc[:, 0] < 1.0)
+                y_in = np.logical_and(fc[:, 1] > 0.0, fc[:, 1] < 1.0)
+                point_in = np.logical_and(x_in, y_in)
+
+                if point_in.any():
+                    ax.plot(
+                        cart_coords[:, 0],
+                        cart_coords[:, 1],
+                        color=substrate_color,
+                        linewidth=0.5,
+                        marker="o",
+                        markersize=2,
+                    )
+
+        for c in film_struc.cart_coords:
+            for c_3x3 in film_coords:
+                cart_coords = c_3x3 + c
+                fc = np.round(cart_coords.dot(film_inv_matrix), 3)
+
+                x_in = np.logical_and(fc[:, 0] > 0.0, fc[:, 0] < 1.0)
+                y_in = np.logical_and(fc[:, 1] > 0.0, fc[:, 1] < 1.0)
+                point_in = np.logical_and(x_in, y_in)
+
+                if point_in.any():
+                    ax.plot(
+                        cart_coords[:, 0],
+                        cart_coords[:, 1],
+                        color=film_color,
+                        linewidth=0.5,
+                        marker="o",
+                        markersize=2,
+                    )
+
+        ax.plot(
+            sub_sl[:, 0],
+            sub_sl[:, 1],
+            color=substrate_color,
+        )
+        ax.plot(
+            film_sl[:, 0],
+            film_sl[:, 1],
+            color=film_color,
+        )
+
+        ax.set_aspect("equal")
+        fig.tight_layout(pad=0.4)
+        fig.savefig(output)
+
+    def plot_interface_old(
         self,
         output="interface_view.png",
         layers_from_interface=[2, 2],
@@ -2788,12 +2866,9 @@ class Interface:
 
         for inds in interface_atom_inds:
             layer_atom_coords = frac_coords[inds]
-            layer_atom_coords = (layer_atom_coords - supercell_shifts[:, None]).reshape(
-                -1, 3
-            )
+            layer_atom_coords = (layer_atom_coords - supercell_shifts[:, None]).reshape(-1, 3)
             inds_in_cell = (
-                (layer_atom_coords[:, :2].round(2) >= 0)
-                & (layer_atom_coords[:, :2].round(2) <= 1)
+                (layer_atom_coords[:, :2].round(2) >= 0) & (layer_atom_coords[:, :2].round(2) <= 1)
             ).all(axis=1)
             layer_atom_coords = layer_atom_coords[inds_in_cell].dot(matrix)
             layer_atom_symbols = np.array(self.interface.species, dtype="str")[inds]
@@ -2807,18 +2882,14 @@ class Interface:
 
             for i, z in enumerate(unique_elements):
                 layer_atom_species[np.isin(layer_atom_symbols, unique_species[i])] = z.Z
-                layer_atom_sizes[
-                    np.isin(layer_atom_symbols, unique_species[i])
-                ] = z.atomic_radius
+                layer_atom_sizes[np.isin(layer_atom_symbols, unique_species[i])] = z.atomic_radius
 
             all_unique_species.append(np.unique(layer_atom_species))
             colors = vesta_colors[layer_atom_species]
             layer_atom_sizes = vesta_radii[layer_atom_species] * 0.4
 
             for xy, r, c in zip(layer_atom_coords, layer_atom_sizes, colors):
-                ax.add_patch(
-                    Circle(xy, radius=r, ec=c[:3], fc=c, linewidth=1.5, clip_on=False)
-                )
+                ax.add_patch(Circle(xy, radius=r, ec=c[:3], fc=c, linewidth=1.5, clip_on=False))
 
         ax.plot(
             borders[:, 0],
@@ -2936,12 +3007,9 @@ class Interface:
 
         for inds in interface_atom_inds:
             layer_atom_coords = frac_coords[inds]
-            layer_atom_coords = (layer_atom_coords - supercell_shifts[:, None]).reshape(
-                -1, 3
-            )
+            layer_atom_coords = (layer_atom_coords - supercell_shifts[:, None]).reshape(-1, 3)
             inds_in_cell = (
-                (layer_atom_coords[:, :2].round(2) >= 0)
-                & (layer_atom_coords[:, :2].round(2) <= 1)
+                (layer_atom_coords[:, :2].round(2) >= 0) & (layer_atom_coords[:, :2].round(2) <= 1)
             ).all(axis=1)
             layer_atom_coords = layer_atom_coords[inds_in_cell].dot(matrix).dot(rot_mat)
             # layer_atom_coords = layer_atom_coords -
@@ -2956,18 +3024,14 @@ class Interface:
 
             for i, z in enumerate(unique_elements):
                 layer_atom_species[np.isin(layer_atom_symbols, unique_species[i])] = z.Z
-                layer_atom_sizes[
-                    np.isin(layer_atom_symbols, unique_species[i])
-                ] = z.atomic_radius
+                layer_atom_sizes[np.isin(layer_atom_symbols, unique_species[i])] = z.atomic_radius
 
             all_unique_species.append(np.unique(layer_atom_species))
             colors = vesta_colors[layer_atom_species]
             layer_atom_sizes = vesta_radii[layer_atom_species] * 0.4
 
             for xy, r, c in zip(layer_atom_coords, layer_atom_sizes, colors):
-                ax.add_patch(
-                    Circle(xy, radius=r, ec=c[:3], fc=c, linewidth=1.5, clip_on=False)
-                )
+                ax.add_patch(Circle(xy, radius=r, ec=c[:3], fc=c, linewidth=1.5, clip_on=False))
 
         ax.plot(
             borders[:, 0],
@@ -3049,9 +3113,7 @@ class Interface:
             top_sub_ind - (i + sub_random_layers) for i in range(film_shift_layers)
         ]
 
-        film_random_inds = np.concatenate(
-            [layer_inds[i] for i in film_random_layer_inds]
-        )
+        film_random_inds = np.concatenate([layer_inds[i] for i in film_random_layer_inds])
         sub_random_inds = np.concatenate([layer_inds[i] for i in sub_random_layer_inds])
 
         film_shift_inds = np.concatenate([layer_inds[i] for i in film_shift_layer_inds])
@@ -3059,26 +3121,20 @@ class Interface:
         sub_shift_inds = np.concatenate([layer_inds[i] for i in sub_shift_layer_inds])
 
         film_max_shifts = 0.2 * np.concatenate(
-            [
-                [1 / (j + 1)] * len(layer_inds[i])
-                for j, i in enumerate(film_shift_layer_inds)
-            ]
+            [[1 / (j + 1)] * len(layer_inds[i]) for j, i in enumerate(film_shift_layer_inds)]
         )
 
         sub_max_shifts = 0.2 * np.concatenate(
-            [
-                [1 / (j + 1)] * len(layer_inds[i])
-                for j, i in enumerate(sub_shift_layer_inds)
-            ]
+            [[1 / (j + 1)] * len(layer_inds[i]) for j, i in enumerate(sub_shift_layer_inds)]
         )
 
         random_max = np.max(interface.frac_coords[film_random_inds, -1])
         random_min = np.min(interface.frac_coords[sub_random_inds, -1])
 
         # random_unit_cell = interface.lattice.matrix.dot(np.array([1,1,(random_max - random_min)]) * np.eye(3))
-        random_unit_cell = (
-            np.array([1, 1, (random_max - random_min)]) * np.eye(3)
-        ).dot(interface.lattice.matrix)
+        random_unit_cell = (np.array([1, 1, (random_max - random_min)]) * np.eye(3)).dot(
+            interface.lattice.matrix
+        )
 
         all_random_inds = np.concatenate([film_random_inds, sub_random_inds])
 
@@ -3124,9 +3180,7 @@ class Interface:
 
         new_frac_coords = new_frac_coords[initial_atoms_ind]
 
-        new_species = np.concatenate(
-            [new_species, np.array(random_structure.species, dtype=str)]
-        )
+        new_species = np.concatenate([new_species, np.array(random_structure.species, dtype=str)])
         random_frac_coords = random_structure.frac_coords
         full_c = np.linalg.norm(interface.lattice.matrix[2])
         small_c = np.linalg.norm(random_structure.lattice.matrix[2])

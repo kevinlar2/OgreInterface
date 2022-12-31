@@ -13,23 +13,24 @@ from matplotlib.colors import Normalize
 from mpl_toolkits.axes_grid1.axes_divider import make_axes_locatable
 
 from functools import reduce
-from itertools import combinations_with_replacement, product
+from itertools import combinations_with_replacement
+
 
 
 class MillerSearch(object):
 
-    """Docstring for MillerSearch."""
+    """Docstring for MillerSearch. """
 
     def __init__(
-        self,
-        substrate,
-        film,
-        max_substrate_index=1,
-        max_film_index=1,
-        area_tol=0.01,
-        angle_tol=0.01,
-        length_tol=0.01,
-        max_area=500,
+            self,
+            substrate,
+            film,
+            max_substrate_index=1,
+            max_film_index=1,
+            area_tol=0.01,
+            angle_tol=0.01,
+            length_tol=0.01,
+            max_area=500,
     ):
         if type(substrate) == str:
             self.substrate = Structure.from_file(substrate)
@@ -38,9 +39,7 @@ class MillerSearch(object):
         elif type(substrate) == Atoms:
             self.substrate = AseAtomsAdaptor().get_structure(substrate)
         else:
-            raise TypeError(
-                f"MillerSearch accepts 'pymatgen.core.structure.Structure', 'ase.Atoms', or 'str', not '{type(substrate).__name__}'"
-            )
+            raise TypeError(f"MillerSearch accepts 'pymatgen.core.structure.Structure', 'ase.Atoms', or 'str', not '{type(substrate).__name__}'")
 
         if type(film) == str:
             self.film = Structure.from_file(film)
@@ -49,9 +48,7 @@ class MillerSearch(object):
         elif type(film) == Atoms:
             self.film = AseAtomsAdaptor().get_structure(film)
         else:
-            raise TypeError(
-                f"MillerSearch accepts 'pymatgen.core.structure.Structure', 'ase.Atoms', or 'str', not '{type(film).__name__}'"
-            )
+            raise TypeError(f"MillerSearch accepts 'pymatgen.core.structure.Structure', 'ase.Atoms', or 'str', not '{type(film).__name__}'")
 
         self.max_film_index = max_film_index
         self.max_substrate_index = max_substrate_index
@@ -59,14 +56,12 @@ class MillerSearch(object):
         self.angle_tol = angle_tol
         self.length_tol = length_tol
         self.max_area = max_area
-        self.substrate_inds = self._get_unique_miller_indices(self.substrate)
-        self.film_inds = self._get_unique_miller_indices(self.film)
-        # self.substrate_inds, self.film_inds = self._get_unique_miller_indices()
+        self.substrate_inds, self.film_inds = self._get_unique_miller_indices()
         self.misfit_data = None
         self.area_data = None
-        self.count_data = None
+        self.count_data = None 
 
-    def _float_gcd(self, a, b, rtol=1e-05, atol=1e-08):
+    def _float_gcd(self, a, b, rtol = 1e-05, atol = 1e-08):
         t = min(abs(a), abs(b))
         while abs(b) > rtol * t + atol:
             a, b = b, a % b
@@ -84,8 +79,8 @@ class MillerSearch(object):
         return output.astype(int)
 
     def _cubic_to_hex(self, uvw):
-        u = (1 / 3) * ((2 * uvw[0]) - uvw[1])
-        v = (1 / 3) * ((2 * uvw[1]) - uvw[0])
+        u = (1/3) * ((2 * uvw[0]) - uvw[1])
+        v = (1/3) * ((2 * uvw[1]) - uvw[0])
         t = -(u + v)
         w = uvw[-1]
 
@@ -95,66 +90,31 @@ class MillerSearch(object):
 
         return output.astype(int)
 
-    def _get_unique_miller_indices(self, struc):
-        struc_sg = SpacegroupAnalyzer(struc)
-        # struc_conv_cell = struc_sg.get_conventional_standard_structure()
-        symmops = struc_sg.get_symmetry_operations(cartesian=False)
-        planes = set(list(product([-2, -1, 0, 1, 2], repeat=3)))
-        planes.remove((0, 0, 0))
+    def _get_unique_miller_indices(self):
+        sub_sg = SpacegroupAnalyzer(self.substrate)
+        film_sg = SpacegroupAnalyzer(self.film)
 
-        reduced_planes = []
-        for plane in planes:
-            gcd = np.abs(reduce(self._float_gcd, plane))
-            reduced_plane = tuple((plane / gcd).astype(int))
-            reduced_planes.append(reduced_plane)
+        sub_conventional_cell = sub_sg.get_conventional_standard_structure()
+        film_conventional_cell = film_sg.get_conventional_standard_structure()
 
-        reduced_planes = set(reduced_planes)
-
-        planes_dict = {p: [] for p in reduced_planes}
-
-        for plane in reduced_planes:
-            if plane in planes_dict.keys():
-                for i, symmop in enumerate(symmops):
-                    origin = symmop.operate((0, 0, 0))
-                    point_out = symmop.operate(plane) - origin
-                    gcd = np.abs(reduce(self._float_gcd, point_out))
-                    point_out = tuple((point_out / gcd).astype(int))
-                    planes_dict[plane].append(point_out)
-                    if point_out != plane:
-                        if point_out in planes_dict.keys():
-                            del planes_dict[point_out]
-
-        unique_planes = []
-
-        for k in planes_dict:
-            equivalent_planes = np.array(list(set(planes_dict[k])))
-            diff = np.abs(np.sum(np.sign(equivalent_planes), axis=1))
-            like_signs = equivalent_planes[diff == np.max(diff)]
-            if len(like_signs) == 1:
-                unique_planes.append(like_signs[0])
-            else:
-                first_max = like_signs[
-                    np.abs(like_signs)[:, 0] == np.max(np.abs(like_signs)[:, 0])
-                ]
-                if len(first_max) == 1:
-                    unique_planes.append(first_max[0])
-                else:
-                    second_max = first_max[
-                        np.abs(first_max)[:, 1] == np.max(np.abs(first_max)[:, 1])
-                    ]
-                    if len(second_max) == 1:
-                        unique_planes.append(second_max[0])
-                    else:
-                        unique_planes.append(
-                            second_max[np.argmax(np.sign(second_max).sum(axis=1))]
-                        )
-
-        unique_planes = np.vstack(unique_planes)
-        sorted_planes = sorted(
-            unique_planes, key=lambda x: (np.linalg.norm(x), -np.sign(x).sum())
+        unique_sub_inds = np.array(
+            get_symmetrically_distinct_miller_indices(sub_conventional_cell, max_index=self.max_substrate_index)
+        )
+        unique_film_inds = np.array(
+            get_symmetrically_distinct_miller_indices(film_conventional_cell, max_index=self.max_film_index)
         )
 
-        return np.vstack(sorted_planes)
+        sub_norms = np.linalg.norm(unique_sub_inds, axis=1)
+        film_norms = np.linalg.norm(unique_film_inds, axis=1)
+        
+        sub_sort = np.argsort(sub_norms)
+        film_sort = np.argsort(film_norms)
+
+        sorted_unique_sub_inds = unique_sub_inds[sub_sort]
+        sorted_unique_film_inds = unique_film_inds[film_sort]
+
+
+        return sorted_unique_sub_inds, sorted_unique_film_inds
 
     def run_scan(self):
         substrates = []
@@ -199,18 +159,12 @@ class MillerSearch(object):
                     angle_diff = interface.angle_diff
                     strains = np.c_[strain, angle_diff]
                     max_misfits = strains[:, np.argmax(np.abs(strains), axis=1)]
-                    # print(max_misfits.shape)
-                    print(strains.shape)
-                    # min_strain = np.min(np.abs(max_misfits))
+                    min_strain = np.min(np.abs(max_misfits))
                     #  min_strain = np.min(np.abs(interface.area_ratio))
                     #  min_strain = np.min(np.abs(strain))
-                    all_areas = interface.substrate_areas / np.sqrt(
-                        film.area * substrate.area
-                    )
-                    min_area_ind = np.argmin(all_areas)
-                    misfits[i, j] = np.max(strain[min_area_ind])
-                    areas[i, j] = all_areas[min_area_ind]
-                    counts[i, j] = len(max_misfits)
+                    misfits[i,j] = min_strain 
+                    areas[i,j] = np.min(interface.substrate_areas)
+                    counts[i,j] = len(max_misfits)
 
         self.misfits = np.round(misfits.T, 8)
         self.areas = areas.T
@@ -218,28 +172,24 @@ class MillerSearch(object):
 
     def plot_misfits(
         self,
-        cmap="rainbow",
+        cmap='rainbow',
         dpi=400,
-        output="misfit_plot.png",
+        output='misfit_plot.png',
         fontsize=12,
-        figsize=(5.5, 4),
+        figsize=(5.5,4),
         labelrotation=20,
         substrate_label=None,
         film_label=None,
     ):
         ylabels = []
         for ylabel in self.film_inds:
-            tmp_label = [
-                str(i) if i >= 0 else "$\\overline{" + str(-i) + "}$" for i in ylabel
-            ]
+            tmp_label = [str(i) if i >= 0 else '$\\overline{' + str(-i) + '}$' for i in ylabel]
             ylabels.append(f'({"".join(tmp_label)})')
             # ylabels.append(str(tmp_label).replace('[', '(').replace(']', ')').replace(' ', ''))
 
         xlabels = []
         for xlabel in self.substrate_inds:
-            tmp_label = [
-                str(i) if i >= 0 else "$\\overline{" + str(-i) + "}$" for i in xlabel
-            ]
+            tmp_label = [str(i) if i >= 0 else '$\\overline{' + str(-i) + '}$' for i in xlabel]
             xlabels.append(f'({"".join(tmp_label)})')
 
         # ylabels = [f'{i}'.replace('[', '(').replace(']', ')').replace(' ', '') for i in self.film_inds]
@@ -249,32 +199,29 @@ class MillerSearch(object):
         M = len(self.substrate_inds)
         x, y = np.meshgrid(np.arange(M), np.arange(N))
         s = self.areas
-        c = self.misfits * 100
-
+        c = self.misfits* 100
+        
         fig, ax = plt.subplots(figsize=figsize, dpi=dpi)
         ax_divider = make_axes_locatable(ax)
 
         cax = ax_divider.append_axes(
             "right",
-            size=np.min(figsize) * 0.04,
-            pad=np.min(figsize) * 0.01,
+            size=np.min(figsize)*0.04,
+            pad=np.min(figsize)*0.01,
         )
 
         if film_label is None:
-            ax.set_ylabel("Film Miller Index", fontsize=fontsize)
+            ax.set_ylabel('Film Miller Index', fontsize=fontsize)
         else:
-            ax.set_ylabel(film_label + " Miller Index", fontsize=fontsize)
+            ax.set_ylabel(film_label + ' Miller Index', fontsize=fontsize)
 
         if substrate_label is None:
-            ax.set_xlabel("Substrate Miller Index", fontsize=fontsize)
+            ax.set_xlabel('Substrate Miller Index', fontsize=fontsize)
         else:
-            ax.set_xlabel(substrate_label + " Miller Index", fontsize=fontsize)
+            ax.set_xlabel(substrate_label + ' Miller Index', fontsize=fontsize)
 
-        R = 0.9 * s / np.nanmax(s) / 2
-        circles = [
-            plt.Circle((i, j), radius=r, edgecolor="black", lw=3)
-            for r, i, j in zip(R.flat, x.flat, y.flat)
-        ]
+        R = 0.9 * s/np.nanmax(s)/2
+        circles = [plt.Circle((i,j), radius=r, edgecolor='black', lw=3) for r, i, j in zip(R.flat, x.flat, y.flat)]
         col = PatchCollection(
             circles,
             array=c.flatten(),
@@ -283,7 +230,7 @@ class MillerSearch(object):
                 vmin=np.max([np.nanmin(c) - 0.01 * np.nanmin(c), 0]),
                 vmax=np.nanmax(c) + 0.01 * np.nanmax(c),
             ),
-            edgecolor="black",
+            edgecolor='black',
             linewidth=1,
         )
         ax.add_collection(col)
@@ -294,17 +241,17 @@ class MillerSearch(object):
             xticklabels=xlabels,
             yticklabels=ylabels,
         )
-        ax.set_xticks(np.arange(M + 1) - 0.5, minor=True)
-        ax.set_yticks(np.arange(N + 1) - 0.5, minor=True)
-        ax.tick_params(axis="x", labelrotation=labelrotation)
+        ax.set_xticks(np.arange(M+1)-0.5, minor=True)
+        ax.set_yticks(np.arange(N+1)-0.5, minor=True)
+        ax.tick_params(axis='x', labelrotation=labelrotation)
         ax.tick_params(labelsize=fontsize)
-        ax.grid(which="minor", linestyle=":", linewidth=0.75)
+        ax.grid(which='minor', linestyle=':', linewidth=0.75)
 
         cbar = fig.colorbar(col, cax=cax)
-        cbar.set_label("Misfit Percentage", fontsize=fontsize)
+        cbar.set_label('Misfit Percentage', fontsize=fontsize)
         cbar.ax.tick_params(labelsize=fontsize)
-        cbar.ax.ticklabel_format(style="sci", scilimits=(-3, 3), useMathText=True)
-        cbar.ax.yaxis.set_offset_position("left")
+        cbar.ax.ticklabel_format(style='sci', scilimits=(-3,3), useMathText=True)
+        cbar.ax.yaxis.set_offset_position('left')
 
         fig.tight_layout(pad=0.4)
         fig.savefig(output)
@@ -313,8 +260,8 @@ class MillerSearch(object):
 
 if __name__ == "__main__":
     ms = MillerSearch(
-        substrate="./dd-poscars/POSCAR_InAs_conv",
-        film="./dd-poscars/POSCAR_Al_conv",
+        substrate='./dd-poscars/POSCAR_InAs_conv',
+        film='./dd-poscars/POSCAR_Al_conv',
         max_film_index=2,
         max_substrate_index=2,
         length_tol=0.01,
@@ -323,4 +270,7 @@ if __name__ == "__main__":
         max_area=500,
     )
     ms.run_scan()
-    ms.plot_misfits(figsize=(6.5, 5), fontsize=17, labelrotation=0)
+    ms.plot_misfits(figsize=(6.5,5), fontsize=17, labelrotation=0)
+    
+
+

@@ -185,7 +185,6 @@ class SurfaceGenerator:
             basis[-1]
             == -miller_index / np.min(np.abs(miller_index[miller_index != 0]))
         ).all():
-            print("flip")
             operation = SymmOp.from_origin_axis_angle(
                 origin=[0.5, 0.5, 0.5],
                 axis=[1, 1, 0],
@@ -277,7 +276,7 @@ class SurfaceGenerator:
                 miller_index=self.miller_index,
                 layers=self.layers,
                 vacuum=self.vacuum,
-                uvw_basis=reduced_basis.astype(int),
+                uvw_basis=np.round(reduced_basis).astype(int),
             )
             surfaces.append(surface)
 
@@ -463,6 +462,8 @@ class InterfaceGenerator:
         )
         film_vectors = self.film.inplane_vectors
         substrate_vectors = self.substrate.inplane_vectors
+        print("film_vectors =", film_vectors)
+        print("sub_vectors =", substrate_vectors)
         matches = zsl(film_vectors, substrate_vectors)
         match_list = list(matches)
 

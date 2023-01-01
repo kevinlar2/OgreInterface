@@ -267,6 +267,38 @@ class Interface:
 
         return area
 
+    @property
+    def substrate_basis(self):
+        return self.substrate_supercell_uvw
+
+    @property
+    def substrate_a(self):
+        return self.substrate_supercell_uvw[0]
+
+    @property
+    def substrate_b(self):
+        return self.substrate_supercell_uvw[1]
+
+    @property
+    def substrate_c(self):
+        return self.substrate_supercell_uvw[2]
+
+    @property
+    def film_basis(self):
+        return self.film_supercell_uvw
+
+    @property
+    def film_a(self):
+        return self.film_supercell_uvw[0]
+
+    @property
+    def film_b(self):
+        return self.film_supercell_uvw[1]
+
+    @property
+    def film_c(self):
+        return self.film_supercell_uvw[2]
+
     def __str__(self):
         fm = self.film.miller_index
         sm = self.substrate.miller_index
@@ -276,17 +308,25 @@ class Interface:
         s_sf = self.substrate_supercell_scale_factors
         f_uvw = self.film_supercell_uvw
         f_sf = self.film_supercell_scale_factors
-        match_a_film = f"{f_sf[0]}*[{f_uvw[0][0]} {f_uvw[0][1]} {f_uvw[0][2]}]"
-        match_a_sub = f"{s_sf[0]}*[{s_uvw[0][0]} {s_uvw[0][1]} {s_uvw[0][2]}]"
-        match_b_film = f"{f_sf[1]}*[{f_uvw[1][0]} {f_uvw[1][1]} {f_uvw[1][2]}]"
-        match_b_sub = f"{s_sf[1]}*[{s_uvw[1][0]} {s_uvw[1][1]} {s_uvw[1][2]}]"
+        match_a_film = (
+            f"{f_sf[0]}*[{f_uvw[0][0]:2d} {f_uvw[0][1]:2d} {f_uvw[0][2]:2d}]"
+        )
+        match_a_sub = (
+            f"{s_sf[0]}*[{s_uvw[0][0]:2d} {s_uvw[0][1]:2d} {s_uvw[0][2]:2d}]"
+        )
+        match_b_film = (
+            f"{f_sf[1]}*[{f_uvw[1][0]:2d} {f_uvw[1][1]:2d} {f_uvw[1][2]:2d}]"
+        )
+        match_b_sub = (
+            f"{s_sf[1]}*[{s_uvw[1][0]:2d} {s_uvw[1][1]:2d} {s_uvw[1][2]:2d}]"
+        )
         return_info = [
             "Film: " + film_str,
             "Substrate: " + sub_str,
             "Epitaxial Match Along \\vec{a} (film || sub): "
-            + f"{match_a_film} || {match_a_sub}",
+            + f"({match_a_film} || {match_a_sub})",
             "Epitaxial Match Along \\vec{b} (film || sub): "
-            + f"{match_b_film} || {match_b_sub}",
+            + f"({match_b_film} || {match_b_sub})",
             "Strain Along \\vec{a} (%): " + f"{100*self.strain[0]:.3f}",
             "Strain Along \\vec{b} (%): " + f"{100*self.strain[1]:.3f}",
             "In-plane Angle Mismatch (%): " + f"{100*self.angle_diff:.3f}",
@@ -381,7 +421,7 @@ class Interface:
         supercell_slab = copy.copy(slab)
         supercell_slab.make_supercell(scaling_matrix=matrix)
 
-        uvw_supercell = uvw.dot(matrix)
+        uvw_supercell = matrix @ uvw
         scale_factors = []
         for i, b in enumerate(uvw_supercell):
             scale = np.abs(reduce(self._float_gcd, b))
@@ -2845,6 +2885,15 @@ class Interface:
         film_sc_matrix = deepcopy(self.film_supercell.lattice.matrix)
         int_matrix = deepcopy(self.interface.lattice.matrix)
 
+        sub_a = sub_sc_matrix[0] / np.linalg.norm(sub_sc_matrix[0])
+        film_a = film_sc_matrix[0] / np.linalg.norm(film_sc_matrix[0])
+        sub_a_to_i = np.array(
+            [[sub_a[0], -sub_a[1], 0], [sub_a[1], sub_a[0], 0], [0, 0, 1]]
+        )
+        film_a_to_i = np.array(
+            [[film_a[0], -film_a[1], 0], [film_a[1], film_a[0], 0], [0, 0, 1]]
+        )
+
         coords = np.array(
             [
                 [0, 0, 0],
@@ -2872,6 +2921,8 @@ class Interface:
         sub_coords = [c.dot(sub_matrix) for c in coords_3x3]
         film_coords = [c.dot(film_matrix) for c in coords_3x3]
         int_coords = coords.dot(int_matrix)
+        # film_sl = coords.dot(film_sc_matrix).dot(film_a_to_i)
+        # sub_sl = coords.dot(sub_sc_matrix).dot(sub_a_to_i)
         film_sl = coords.dot(film_sc_matrix)
         sub_sl = coords.dot(sub_sc_matrix)
 
@@ -2904,6 +2955,8 @@ class Interface:
             for c_3x3 in sub_coords:
                 cart_coords = c_3x3 + c
                 fc = np.round(cart_coords.dot(sub_inv_matrix), 3)
+                # plot_coords = cart_coords.dot(sub_a_to_i)
+                plot_coords = cart_coords
 
                 x_in = np.logical_and(fc[:, 0] > 0.0, fc[:, 0] < 1.0)
                 y_in = np.logical_and(fc[:, 1] > 0.0, fc[:, 1] < 1.0)
@@ -2911,8 +2964,8 @@ class Interface:
 
                 if point_in.any():
                     ax.plot(
-                        cart_coords[:, 0],
-                        cart_coords[:, 1],
+                        plot_coords[:, 0],
+                        plot_coords[:, 1],
                         color=substrate_color,
                         linewidth=0.5,
                         marker="o",
@@ -2923,6 +2976,8 @@ class Interface:
             for c_3x3 in film_coords:
                 cart_coords = c_3x3 + c
                 fc = np.round(cart_coords.dot(film_inv_matrix), 3)
+                # plot_coords = cart_coords.dot(film_a_to_i)
+                plot_coords = cart_coords
 
                 x_in = np.logical_and(fc[:, 0] > 0.0, fc[:, 0] < 1.0)
                 y_in = np.logical_and(fc[:, 1] > 0.0, fc[:, 1] < 1.0)
@@ -2930,8 +2985,8 @@ class Interface:
 
                 if point_in.any():
                     ax.plot(
-                        cart_coords[:, 0],
-                        cart_coords[:, 1],
+                        plot_coords[:, 0],
+                        plot_coords[:, 1],
                         color=film_color,
                         linewidth=0.5,
                         marker="o",

@@ -54,57 +54,58 @@ class Surface:
         vacuum,
         uvw_basis,
     ):
-        if type(slab) == Atoms:
-            self.slab_ase = slab
-            self.slab_pmg = AseAtomsAdaptor.get_structure(slab)
-        elif type(slab) == Structure:
-            self.slab_ase = AseAtomsAdaptor.get_atoms(slab)
-            self.slab_pmg = slab
-        else:
-            raise TypeError(
-                f"Structure accepts 'pymatgen.core.structure.Structure' or 'ase.Atoms' not '{type(slab).__name__}'"
-            )
-
-        if type(bulk) == Atoms:
-            self.bulk_ase = bulk
-            self.bulk_pmg = AseAtomsAdaptor.get_structure(bulk)
-        elif type(bulk) == Structure:
-            self.bulk_ase = AseAtomsAdaptor.get_atoms(bulk)
-            self.bulk_pmg = bulk
-        else:
-            raise TypeError(
-                f"structure accepts 'pymatgen.core.structure.Structure' or 'ase.Atoms' not '{type(bulk).__name__}'"
-            )
-
-        self.reduced_formula = self.bulk_pmg.composition.reduced_formula
+        self.slab_structure, self.slab_atoms = self._get_atoms_and_struc(slab)
+        self.bulk_structure, self.bulk_atoms = self._get_atoms_and_struc(bulk)
         self.miller_index = miller_index
         self.layers = layers
         self.vacuum = vacuum
         self.uvw_basis = uvw_basis
-        self.area = np.linalg.norm(
+        (
+            self.slab_structure_oriented,
+            self.inplane_vectors,
+        ) = self._make_planar()
+
+    @property
+    def formula(self):
+        return self.bulk_structure.composition.reduced_formula
+
+    @property
+    def area(self):
+        area = np.linalg.norm(
             np.cross(
-                self.slab_pmg.lattice.matrix[0],
-                self.slab_pmg.lattice.matrix[1],
+                self.slab_structure.lattice.matrix[0],
+                self.slab_structure.lattice.matrix[1],
             )
         )
-        self.slab_pmg_zup, self.inplane_vectors = self._make_planar()
+
+        return area
+
+    def _get_atoms_and_struc(self, atoms_or_struc):
+        if type(atoms_or_struc) == Atoms:
+            init_structure = AseAtomsAdaptor.get_structure(atoms_or_struc)
+            init_atoms = atoms_or_struc
+        elif type(atoms_or_struc) == Structure:
+            init_structure = atoms_or_struc
+            init_atoms = AseAtomsAdaptor.get_atoms(atoms_or_struc)
+        else:
+            raise TypeError(
+                f"structure accepts 'pymatgen.core.structure.Structure' or 'ase.Atoms' not '{type(atoms_or_struc).__name__}'"
+            )
+
+        return init_structure, init_atoms
 
     def remove_layers(self, num_layers, top=False, atol=None):
-        group_inds_conv, _ = group_layers(structure=self.slab_pmg, atol=atol)
-        group_inds_prim, _ = group_layers(
-            structure=self.primitive_slab_pmg, atol=atol
+        group_inds_conv, _ = group_layers(
+            structure=self.slab_structure, atol=atol
         )
         if top:
             group_inds_conv = group_inds_conv[::-1]
-            group_inds_prim = group_inds_prim[::-1]
 
         to_delete_conv = []
-        to_delete_prim = []
         for i in range(num_layers):
             to_delete_conv.extend(group_inds_conv[i])
-            to_delete_prim.extend(group_inds_prim[i])
 
-        self.slab_pmg.remove_sites(to_delete_conv)
+        self.slab_structure.remove_sites(to_delete_conv)
 
     def _rotate_vecs(self, a, b):
         orig_vecs = np.vstack([a, b])
@@ -133,26 +134,30 @@ class Surface:
 
         return np.rad2deg((ang2 - ang1) % (2 * np.pi))
 
-    def _make_planar(self):
-        matrix = deepcopy(self.slab_pmg.lattice.matrix)
-        cross = np.cross(matrix[0], matrix[2])
+    def _get_orthoganol_basis(self, basis):
+        cross = np.cross(basis[0], basis[2])
         ortho_basis = np.vstack(
             [
-                matrix[0] / np.linalg.norm(matrix[0]),
+                basis[0] / np.linalg.norm(basis[0]),
                 cross / np.linalg.norm(cross),
-                matrix[2] / np.linalg.norm(matrix[2]),
+                basis[2] / np.linalg.norm(basis[2]),
             ]
         )
 
         if np.linalg.det(ortho_basis) < 0:
-            # print("left handed")
             ortho_basis[1] *= -1
+
+        return ortho_basis
+
+    def _make_planar(self):
+        matrix = deepcopy(self.slab_structure.lattice.matrix)
+        ortho_basis = self._get_orthoganol_basis(matrix)
 
         op = SymmOp.from_rotation_and_translation(
             ortho_basis, translation_vec=np.zeros(3)
         )
 
-        planar_slab = deepcopy(self.slab_pmg)
+        planar_slab = deepcopy(self.slab_structure)
         planar_slab.apply_operation(op)
 
         planar_matrix = deepcopy(planar_slab.lattice.matrix)
@@ -161,10 +166,10 @@ class Surface:
             planar_matrix[0, :2], planar_matrix[1, :2]
         )
 
+        new_matrix = np.vstack([new_inplane_vectors, planar_matrix[-1]])
+
         planar_slab = Structure(
-            lattice=Lattice(
-                matrix=np.vstack([new_inplane_vectors, planar_matrix[-1]])
-            ),
+            lattice=Lattice(matrix=new_matrix),
             species=planar_slab.species,
             coords=planar_slab.cart_coords,
             coords_are_cartesian=True,
@@ -175,8 +180,8 @@ class Surface:
         return planar_slab, new_inplane_vectors
 
     def _get_ewald_energy(self):
-        slab = copy.deepcopy(self.slab_pmg)
-        bulk = copy.deepcopy(self.bulk_pmg)
+        slab = copy.deepcopy(self.slab_structure)
+        bulk = copy.deepcopy(self.bulk_structure)
         slab.add_oxidation_state_by_guess()
         bulk.add_oxidation_state_by_guess()
         E_slab = EwaldSummation(slab).total_energy
@@ -229,7 +234,7 @@ class Interface:
             self.substrate_supercell_uvw,
             self.substrate_supercell_scale_factors,
         ) = self._prepare_slab(
-            self.substrate.slab_pmg_zup,
+            self.substrate.slab_structure_oriented,
             self.sub_sl_vecs,
             self.substrate.uvw_basis,
         )
@@ -240,7 +245,7 @@ class Interface:
             self.film_supercell_uvw,
             self.film_supercell_scale_factors,
         ) = self._prepare_slab(
-            self.film.slab_pmg_zup,
+            self.film.slab_structure_oriented,
             self.film_sl_vecs,
             self.film.uvw_basis,
         )
@@ -250,26 +255,31 @@ class Interface:
         self.strained_sub = self._strain_and_orient_sub()
         self.strained_film = self._strain_and_orient_film()
         self.interface, self.sub_part, self.film_part = self._stack_interface()
-        self.area = np.linalg.norm(
+
+    @property
+    def area(self):
+        area = np.linalg.norm(
             np.cross(
                 self.interface.lattice.matrix[0],
                 self.interface.lattice.matrix[1],
             )
         )
 
+        return area
+
     def __str__(self):
         fm = self.film.miller_index
         sm = self.substrate.miller_index
-        film_str = f"{self.film.reduced_formula}({fm[0]} {fm[1]} {fm[2]})"
-        sub_str = f"{self.substrate.reduced_formula}({sm[0]} {sm[1]} {sm[2]})"
+        film_str = f"{self.film.formula}({fm[0]} {fm[1]} {fm[2]})"
+        sub_str = f"{self.substrate.formula}({sm[0]} {sm[1]} {sm[2]})"
         s_uvw = self.substrate_supercell_uvw
         s_sf = self.substrate_supercell_scale_factors
         f_uvw = self.film_supercell_uvw
         f_sf = self.film_supercell_scale_factors
-        match_a_film = f"{f_sf[0]}*[{f_uvw[0][0]} {f_uvw[0][1]} {f_uvw[0][1]}]"
-        match_a_sub = f"{s_sf[0]}*[{s_uvw[0][0]} {s_uvw[0][1]} {s_uvw[0][1]}]"
-        match_b_film = f"{f_sf[1]}*[{f_uvw[1][0]} {f_uvw[1][1]} {f_uvw[1][1]}]"
-        match_b_sub = f"{s_sf[1]}*[{s_uvw[1][0]} {s_uvw[1][1]} {s_uvw[1][1]}]"
+        match_a_film = f"{f_sf[0]}*[{f_uvw[0][0]} {f_uvw[0][1]} {f_uvw[0][2]}]"
+        match_a_sub = f"{s_sf[0]}*[{s_uvw[0][0]} {s_uvw[0][1]} {s_uvw[0][2]}]"
+        match_b_film = f"{f_sf[1]}*[{f_uvw[1][0]} {f_uvw[1][1]} {f_uvw[1][2]}]"
+        match_b_sub = f"{s_sf[1]}*[{s_uvw[1][0]} {s_uvw[1][1]} {s_uvw[1][2]}]"
         return_info = [
             "Film: " + film_str,
             "Substrate: " + sub_str,
@@ -364,24 +374,14 @@ class Interface:
         return np.rad2deg((ang2 - ang1) % (2 * np.pi))
 
     def _prepare_slab(self, slab, sl_vec, uvw):
-        # rot_sl_vec = self._rotate_vecs(sl_vec[0, :2], sl_vec[1, :2])
-
-        # print(np.round(rot_sl_vec, 3))
-        # print(np.round(slab.lattice.matrix[:2], 3))
-        # print("")
-
-        # print(
-        #     np.round(
-        #         from_2d_to_3d(get_2d_transform(slab.lattice.matrix[:2], sl_vec)), 3
-        #     )
-        # )
         matrix = np.round(
             from_2d_to_3d(get_2d_transform(slab.lattice.matrix[:2], sl_vec))
         ).astype(int)
+
         supercell_slab = copy.copy(slab)
         supercell_slab.make_supercell(scaling_matrix=matrix)
 
-        uvw_supercell = matrix @ uvw
+        uvw_supercell = uvw.dot(matrix)
         scale_factors = []
         for i, b in enumerate(uvw_supercell):
             scale = np.abs(reduce(self._float_gcd, b))
@@ -479,6 +479,15 @@ class Interface:
 
     def _strain_and_orient_sub(self):
         strained_sub = copy.copy(self.substrate_supercell)
+
+        # TODO transform better
+        mat = from_2d_to_3d(
+            get_2d_transform(
+                self.substrate_supercell.lattice.matrix[:2],
+                self.interface_sl_vectors,
+            )
+        )
+
         new_lattice = Lattice(
             np.vstack(
                 [
@@ -503,10 +512,10 @@ class Interface:
         return copy_structure
 
     def _get_unique_species(self):
-        substrate_species = np.unique(self.substrate.bulk_pmg.species).astype(
-            str
-        )
-        film_species = np.unique(self.film.bulk_pmg.species).astype(str)
+        substrate_species = np.unique(
+            self.substrate.bulk_structure.species
+        ).astype(str)
+        film_species = np.unique(self.film.bulk_structure.species).astype(str)
 
         species_in_both = []
         for species in substrate_species:
@@ -803,10 +812,10 @@ class Interface:
 
     def _get_radii(self):
         sub_species = np.unique(
-            np.array(self.substrate.bulk_pmg.species, dtype=str)
+            np.array(self.substrate.bulk_structure.species, dtype=str)
         )
         film_species = np.unique(
-            np.array(self.film.bulk_pmg.species, dtype=str)
+            np.array(self.film.bulk_structure.species, dtype=str)
         )
 
         sub_elements = [Element(s) for s in sub_species]
@@ -2826,8 +2835,12 @@ class Interface:
         substrate_color="blue",
         supercell_color="black",
     ):
-        sub_matrix = deepcopy(self.substrate.slab_pmg_zup.lattice.matrix)
-        film_matrix = deepcopy(self.film.slab_pmg_zup.lattice.matrix)
+        sub_matrix = deepcopy(
+            self.substrate.slab_structure_oriented.lattice.matrix
+        )
+        film_matrix = deepcopy(
+            self.film.slab_structure_oriented.lattice.matrix
+        )
         sub_sc_matrix = deepcopy(self.substrate_supercell.lattice.matrix)
         film_sc_matrix = deepcopy(self.film_supercell.lattice.matrix)
         int_matrix = deepcopy(self.interface.lattice.matrix)
@@ -2866,7 +2879,7 @@ class Interface:
         s_mat = self.substrate_matrix
 
         sub_struc = Structure(
-            lattice=self.substrate.slab_pmg_zup.lattice,
+            lattice=self.substrate.slab_structure_oriented.lattice,
             species=["H"],
             coords=np.zeros((1, 3)),
             to_unit_cell=True,
@@ -2876,7 +2889,7 @@ class Interface:
         sub_inv_matrix = deepcopy(sub_struc.lattice.inv_matrix)
 
         film_struc = Structure(
-            lattice=self.film.slab_pmg_zup.lattice,
+            lattice=self.film.slab_structure_oriented.lattice,
             species=["H"],
             coords=np.zeros((1, 3)),
             to_unit_cell=True,

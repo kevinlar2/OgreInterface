@@ -350,6 +350,7 @@ class InterfaceGenerator:
             self.sub_vecs,
             self.film_transformations,
             self.substrate_transformations,
+            self.stack_transformations,
         ) = self._generate_interface_props()
         # except TolarenceError:
         # print("No interfaces were found, please increase the tolarences.")
@@ -462,8 +463,6 @@ class InterfaceGenerator:
         )
         film_vectors = self.film.inplane_vectors
         substrate_vectors = self.substrate.inplane_vectors
-        print("film_vectors =", film_vectors)
-        print("sub_vectors =", substrate_vectors)
         matches = zsl(film_vectors, substrate_vectors)
         match_list = list(matches)
 
@@ -499,6 +498,9 @@ class InterfaceGenerator:
                     for _ in range(substrate_transformations.shape[0])
                 ]
             )
+            stack_transforms = np.array(
+                [match.match_transformation for match in match_list]
+            )
 
             film_3x3_transformations[:, :2, :2] = film_transformations
             substrate_3x3_transformations[
@@ -513,6 +515,7 @@ class InterfaceGenerator:
                 sub_vecs,
                 film_3x3_transformations,
                 substrate_3x3_transformations,
+                stack_transforms,
             ]
 
     def _is_equal(self, structure1, structure2):
@@ -624,6 +627,7 @@ class InterfaceGenerator:
                 film=self.film,
                 film_transformation=self.film_transformations[i],
                 substrate_transformation=self.substrate_transformations[i],
+                stack_transformation=self.stack_transformations[i],
                 strain=self.strain[i],
                 angle_diff=self.angle_diff[i],
                 sub_strain_frac=self.sub_strain_frac,

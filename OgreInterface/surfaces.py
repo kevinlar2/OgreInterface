@@ -24,7 +24,7 @@ from OgreInterface.born import born_calculator
 from OgreInterface.ewald_matscipy import ewald_calculator
 
 import matplotlib.pyplot as plt
-from matplotlib.patches import Circle
+from matplotlib.patches import Circle, Polygon
 from matplotlib.colors import Normalize
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 
@@ -203,6 +203,7 @@ class Interface:
         film,
         film_transformation,
         substrate_transformation,
+        stack_transformation,
         strain,
         angle_diff,
         sub_strain_frac,
@@ -219,6 +220,7 @@ class Interface:
         self.film = film
         self.film_transformation = film_transformation
         self.substrate_transformation = substrate_transformation
+        self.stack_transformation = stack_transformation
         self.film_vecs = film_vecs
         self.sub_vecs = sub_vecs
         self.film_sl_vecs = film_sl_vecs
@@ -252,9 +254,9 @@ class Interface:
         self.interface_sl_vectors = self._get_interface_sl_vecs()
         self.interfacial_distance = interfacial_distance
         self.interface_height = None
-        self.strained_sub = self._strain_and_orient_sub()
+        self.strained_sub = self.substrate_supercell
         self.strained_film = self._strain_and_orient_film()
-        self.interface, self.sub_part, self.film_part = self._stack_interface()
+        self.interface = self._stack_interface()
 
     @property
     def area(self):
@@ -504,41 +506,37 @@ class Interface:
         return min_z, max_z
 
     def _strain_and_orient_film(self):
-        strained_film = copy.copy(self.film_supercell)
-        new_lattice = Lattice(
-            np.vstack(
-                [
-                    self.interface_sl_vectors,
-                    self.film_supercell.lattice.matrix[-1],
-                ]
-            )
+        op = SymmOp.from_rotation_and_translation(
+            self.stack_transformation, translation_vec=np.zeros(3)
         )
-        strained_film.lattice = new_lattice
+
+        strained_film = deepcopy(self.film_supercell)
+        strained_film.apply_operation(op)
 
         return strained_film
 
-    def _strain_and_orient_sub(self):
-        strained_sub = copy.copy(self.substrate_supercell)
+    # def _strain_and_orient_sub(self):
+    #     strained_sub = copy.copy(self.substrate_supercell)
 
-        # TODO transform better
-        mat = from_2d_to_3d(
-            get_2d_transform(
-                self.substrate_supercell.lattice.matrix[:2],
-                self.interface_sl_vectors,
-            )
-        )
+    #     # TODO transform better
+    #     mat = from_2d_to_3d(
+    #         get_2d_transform(
+    #             self.substrate_supercell.lattice.matrix[:2],
+    #             self.interface_sl_vectors,
+    #         )
+    #     )
 
-        new_lattice = Lattice(
-            np.vstack(
-                [
-                    self.interface_sl_vectors,
-                    self.substrate_supercell.lattice.matrix[-1],
-                ]
-            )
-        )
-        strained_sub.lattice = new_lattice
+    #     new_lattice = Lattice(
+    #         np.vstack(
+    #             [
+    #                 self.interface_sl_vectors,
+    #                 self.substrate_supercell.lattice.matrix[-1],
+    #             ]
+    #         )
+    #     )
+    #     strained_sub.lattice = new_lattice
 
-        return strained_sub
+    #     return strained_sub
 
     def _flip_structure(self, structure):
         copy_structure = copy.copy(structure)
@@ -565,6 +563,85 @@ class Interface:
         return substrate_species, film_species, species_in_both
 
     def _stack_interface(self):
+        strained_sub = self.strained_sub
+        strained_film = self.strained_film
+
+        sub_matrix = strained_sub.lattice.matrix
+
+        strained_sub_coords = deepcopy(strained_sub.cart_coords)
+        strained_film_coords = deepcopy(strained_film.cart_coords)
+        strained_sub_frac_coords = deepcopy(strained_sub.frac_coords)
+        strained_film_frac_coords = deepcopy(strained_film.frac_coords)
+
+        min_sub_coords = np.min(strained_sub_frac_coords[:, -1])
+        max_sub_coords = np.max(strained_sub_frac_coords[:, -1])
+        min_film_coords = np.min(strained_film_frac_coords[:, -1])
+        max_film_coords = np.max(strained_film_frac_coords[:, -1])
+
+        sub_c_len = np.linalg.norm(strained_sub.lattice.matrix[-1])
+        film_c_len = np.linalg.norm(strained_film.lattice.matrix[-1])
+        interface_c_len = np.sum(
+            [
+                (max_sub_coords - min_sub_coords) * sub_c_len,
+                (max_film_coords - min_film_coords) * film_c_len,
+                self.vacuum,
+                self.interfacial_distance,
+            ]
+        )
+        frac_int_distance = self.interfacial_distance / interface_c_len
+
+        interface_matrix = np.vstack(
+            [sub_matrix[:2], interface_c_len * (sub_matrix[-1] / sub_c_len)]
+        )
+        interface_lattice = Lattice(matrix=interface_matrix)
+        interface_inv_matrix = interface_lattice.inv_matrix
+
+        sub_interface_coords = strained_sub_coords.dot(interface_inv_matrix)
+        sub_interface_coords[:, -1] -= sub_interface_coords[:, -1].min()
+
+        film_interface_coords = strained_film_coords.dot(interface_inv_matrix)
+        film_interface_coords[:, -1] -= film_interface_coords[:, -1].min()
+        film_interface_coords[:, -1] += (
+            sub_interface_coords[:, -1].max() + frac_int_distance
+        )
+
+        interface_coords = np.r_[sub_interface_coords, film_interface_coords]
+        interface_species = strained_sub.species + strained_film.species
+        interface_site_properties = {
+            key: strained_sub.site_properties[key]
+            + strained_film.site_properties[key]
+            for key in strained_sub.site_properties
+        }
+        interface_site_properties["is_sub"] = np.array(
+            [True] * len(strained_sub) + [False] * len(strained_film)
+        )
+        interface_site_properties["is_film"] = np.array(
+            [False] * len(strained_sub) + [True] * len(strained_film)
+        )
+
+        self.interface_height = sub_interface_coords[:, -1].max() + (
+            0.5 * frac_int_distance
+        )
+
+        interface_struc = Structure(
+            lattice=interface_lattice,
+            species=interface_species,
+            coords=interface_coords,
+            to_unit_cell=True,
+            coords_are_cartesian=False,
+            site_properties=interface_site_properties,
+        )
+
+        if self.center:
+            interface_struc.translate_sites(
+                indices=range(len(interface_struc)),
+                vector=[0, 0, 0.5 - self.interface_height],
+            )
+            self.interface_height = 0.5
+
+        return interface_struc
+
+    def _stack_interface_old(self):
         strained_sub = self.strained_sub
         strained_film = self.strained_film
         strained_sub_coords = copy.deepcopy(strained_sub.frac_coords)
@@ -628,44 +705,6 @@ class Interface:
             coords=interface_coords,
             to_unit_cell=True,
         )
-
-        # reduced_interface_struc = interface_struc.get_reduced_structure()
-        # sg = SpacegroupAnalyzer(reduced_interface_struc)
-        # refined_interface_struc = sg.get_conventional_standard_structure()
-        # primitive_interface_struc = refined_interface_struc.get_reduced_structure()
-        # primitive_interface_struc = primitive_interface_struc.get_primitive_structure()
-        # # print('REMINDER: line 498 surfaces.py')
-        # # primitive_interface_struc = refined_interface_struc
-
-        # substrate_species, film_species, species_in_both = self._get_unique_species()
-
-        # if len(species_in_both) == 0:
-        #     pass
-        # else:
-        #     for i in species_in_both:
-        #         substrate_species = np.delete(
-        #             substrate_species, np.where(substrate_species == i)
-        #         )
-        #         film_species = np.delete(film_species, np.where(film_species == i))
-
-        # element_array_prim = np.array(
-        #     [site.species.elements[0].symbol for site in primitive_interface_struc]
-        # )
-
-        # substrate_ind_prim = np.isin(element_array_prim, substrate_species)
-        # film_ind_prim = np.isin(element_array_prim, film_species)
-
-        # average_sub_height_prim = np.mean(
-        #     primitive_interface_struc.frac_coords[substrate_ind_prim, -1]
-        # )
-        # average_film_height_prim = np.mean(
-        #     primitive_interface_struc.frac_coords[film_ind_prim, -1]
-        # )
-
-        # if average_film_height_prim < average_sub_height_prim:
-        #     primitive_interface_struc = self._flip_structure(primitive_interface_struc)
-        # else:
-        #     pass
 
         if self.center:
             interface_struc.translate_sites(
@@ -2922,8 +2961,9 @@ class Interface:
         film_coords = [c.dot(film_matrix) for c in coords_3x3]
         int_coords = coords.dot(int_matrix)
         # film_sl = coords.dot(film_sc_matrix).dot(film_a_to_i)
+        film_sl = coords.dot(film_sc_matrix).dot(self.stack_transformation.T)
         # sub_sl = coords.dot(sub_sc_matrix).dot(sub_a_to_i)
-        film_sl = coords.dot(film_sc_matrix)
+        # film_sl = coords.dot(film_sc_matrix)
         sub_sl = coords.dot(sub_sc_matrix)
 
         f_mat = self.film_matrix
@@ -2977,7 +3017,8 @@ class Interface:
                 cart_coords = c_3x3 + c
                 fc = np.round(cart_coords.dot(film_inv_matrix), 3)
                 # plot_coords = cart_coords.dot(film_a_to_i)
-                plot_coords = cart_coords
+                plot_coords = cart_coords.dot(self.stack_transformation.T)
+                # plot_coords = cart_coords
 
                 x_in = np.logical_and(fc[:, 0] > 0.0, fc[:, 0] < 1.0)
                 y_in = np.logical_and(fc[:, 1] > 0.0, fc[:, 1] < 1.0)
@@ -3002,6 +3043,158 @@ class Interface:
             film_sl[:, 0],
             film_sl[:, 1],
             color=film_color,
+        )
+
+        ax.set_aspect("equal")
+        fig.tight_layout(pad=0.4)
+        fig.savefig(output)
+
+    def plot_interface_new(
+        self,
+        output="interface_view.png",
+        film_color="red",
+        substrate_color="blue",
+        supercell_color="black",
+    ):
+        sub_matrix = deepcopy(
+            self.substrate.slab_structure_oriented.lattice.matrix
+        )
+        film_matrix = deepcopy(
+            self.film.slab_structure_oriented.lattice.matrix
+        )
+        sub_sc_matrix = deepcopy(self.substrate_supercell.lattice.matrix)
+        film_sc_matrix = deepcopy(self.film_supercell.lattice.matrix)
+        int_matrix = deepcopy(self.interface.lattice.matrix)
+
+        sub_a = sub_sc_matrix[0] / np.linalg.norm(sub_sc_matrix[0])
+        film_a = film_sc_matrix[0] / np.linalg.norm(film_sc_matrix[0])
+
+        coords = np.array(
+            [
+                [0, 0, 0],
+                [1, 0, 0],
+                [1, 1, 0],
+                [0, 1, 0],
+                [0, 0, 0],
+            ]
+        )
+
+        # TODO: Implement 3x3 for supercell instead of individual cells
+        shifts = np.array(
+            [
+                [0, 0, 0],
+                # [1, 0, 0],
+                # [0, 1, 0],
+                # [-1, 0, 0],
+                # [0, -1, 0],
+                # [1, 1, 0],
+                # [-1, -1, 0],
+            ]
+        )
+
+        coords_3x3 = [coords + shift for shift in shifts]
+
+        sub_coords = [c.dot(sub_matrix) for c in coords_3x3]
+        film_coords = [c.dot(film_matrix) for c in coords_3x3]
+        film_sl = coords.dot(film_sc_matrix).dot(self.stack_transformation.T)
+        sub_sl = coords.dot(sub_sc_matrix)
+
+        f_mat = self.film_matrix
+        s_mat = self.substrate_matrix
+
+        sub_struc = Structure(
+            lattice=self.substrate.slab_structure_oriented.lattice,
+            species=["H"],
+            coords=np.zeros((1, 3)),
+            to_unit_cell=True,
+            coords_are_cartesian=True,
+        )
+        sub_struc.make_supercell(s_mat)
+        sub_inv_matrix = deepcopy(sub_struc.lattice.inv_matrix)
+
+        film_struc = Structure(
+            lattice=self.film.slab_structure_oriented.lattice,
+            species=["H"],
+            coords=np.zeros((1, 3)),
+            to_unit_cell=True,
+            coords_are_cartesian=True,
+        )
+        film_struc.make_supercell(f_mat)
+        film_inv_matrix = deepcopy(film_struc.lattice.inv_matrix)
+
+        fig, ax = plt.subplots(figsize=(4, 4), dpi=400)
+
+        sub_plotted = []
+
+        for c in sub_struc.cart_coords:
+            for c_3x3 in sub_coords:
+                cart_coords = c_3x3 + c
+                fc = np.round(cart_coords.dot(sub_inv_matrix), 3)
+                plot_coords = cart_coords
+                center = (
+                    np.round(np.mean(plot_coords[:-1, 0]), 2),
+                    np.round(np.mean(plot_coords[:-1, 1]), 2),
+                )
+
+                x_in = np.logical_and(fc[:, 0] > 0.0, fc[:, 0] < 1.0)
+                y_in = np.logical_and(fc[:, 1] > 0.0, fc[:, 1] < 1.0)
+                point_in = np.logical_and(x_in, y_in)
+
+                if point_in.any():
+                    if center not in sub_plotted:
+                        poly = Polygon(
+                            xy=plot_coords[:, :2],
+                            closed=True,
+                            # alpha=0.3,
+                            facecolor=(0, 0, 1, 0.3),
+                            edgecolor=(0, 0, 1, 1),
+                        )
+                        ax.add_patch(poly)
+                        sub_plotted.append(center)
+
+        film_plotted = []
+
+        for c in film_struc.cart_coords:
+            for c_3x3 in film_coords:
+                cart_coords = c_3x3 + c
+                fc = np.round(cart_coords.dot(film_inv_matrix), 3)
+                plot_coords = cart_coords.dot(self.stack_transformation.T)
+                center = (
+                    np.round(np.mean(plot_coords[:-1, 0]), 2),
+                    np.round(np.mean(plot_coords[:-1, 1]), 2),
+                )
+                center_array = np.round(
+                    np.mean(cart_coords[:-1], axis=0).dot(film_inv_matrix),
+                    3,
+                )
+                center_x_in = np.logical_and(
+                    -0.3 <= center_array[0], center_array[0] <= 1.3
+                )
+                center_y_in = np.logical_and(
+                    -0.3 <= center_array[1], center_array[1] <= 1.3
+                )
+                center_in = np.logical_and(center_x_in, center_y_in)
+
+                x_in = np.logical_and(fc[:, 0] > 0.0, fc[:, 0] < 1.0)
+                y_in = np.logical_and(fc[:, 1] > 0.0, fc[:, 1] < 1.0)
+                point_in = np.logical_and(x_in, y_in)
+
+                # if point_in.any() or center_in:
+                # if center not in film_plotted:
+                poly = Polygon(
+                    xy=plot_coords[:, :2],
+                    closed=True,
+                    # alpha=0.3,
+                    facecolor=(200 / 255, 0, 0, 0.3),
+                    edgecolor=(200 / 255, 0, 0, 1),
+                )
+                ax.add_patch(poly)
+                film_plotted.append(center)
+
+        ax.plot(
+            sub_sl[:, 0],
+            sub_sl[:, 1],
+            color="black",
         )
 
         ax.set_aspect("equal")

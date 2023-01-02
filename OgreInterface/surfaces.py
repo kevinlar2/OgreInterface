@@ -2907,6 +2907,60 @@ class Interface:
 
         return Z_interp.max()
 
+    def _generate_sc_for_interface_view(self, struc, transformation_matrix):
+        plot_struc = Structure(
+            lattice=struc.lattice,
+            species=["H"],
+            coords=np.zeros((1, 3)),
+            to_unit_cell=True,
+            coords_are_cartesian=True,
+        )
+        plot_struc.make_supercell(transformation_matrix)
+        inv_matrix = plot_struc.lattice.inv_matrix
+
+        return plot_struc, inv_matrix
+
+    def _plot_interface_view(
+        self,
+        ax,
+        zero_coord,
+        supercell_shift,
+        cell_vetices,
+        slab_matrix,
+        sc_inv_matrix,
+        facecolor,
+        edgecolor,
+        is_film=False,
+    ):
+        cart_coords = (
+            zero_coord + supercell_shift + cell_vetices.dot(slab_matrix)
+        )
+        fc = np.round(cart_coords.dot(sc_inv_matrix), 3)
+        if is_film:
+            plot_coords = cart_coords.dot(self.stack_transformation.T)
+        else:
+            plot_coords = cart_coords
+
+        center = np.round(
+            np.mean(cart_coords[:-1], axis=0).dot(sc_inv_matrix),
+            3,
+        )
+        center_in = np.logical_and(-0.0001 <= center[:2], center[:2] <= 1.0001)
+
+        x_in = np.logical_and(fc[:, 0] > 0.0, fc[:, 0] < 1.0)
+        y_in = np.logical_and(fc[:, 1] > 0.0, fc[:, 1] < 1.0)
+        point_in = np.logical_and(x_in, y_in)
+
+        if point_in.any() or center_in.all():
+            poly = Polygon(
+                xy=plot_coords[:, :2],
+                closed=True,
+                facecolor=facecolor,
+                edgecolor=edgecolor,
+                linewidth=1.5,
+            )
+            ax.add_patch(poly)
+
     def plot_interface(
         self,
         output="interface_view.png",
@@ -2914,24 +2968,10 @@ class Interface:
         substrate_color="blue",
         supercell_color="black",
     ):
-        sub_matrix = deepcopy(
-            self.substrate.slab_structure_oriented.lattice.matrix
-        )
-        film_matrix = deepcopy(
-            self.film.slab_structure_oriented.lattice.matrix
-        )
+        sub_matrix = self.substrate.slab_structure_oriented.lattice.matrix
+        film_matrix = self.film.slab_structure_oriented.lattice.matrix
         sub_sc_matrix = deepcopy(self.substrate_supercell.lattice.matrix)
         film_sc_matrix = deepcopy(self.film_supercell.lattice.matrix)
-        int_matrix = deepcopy(self.interface.lattice.matrix)
-
-        sub_a = sub_sc_matrix[0] / np.linalg.norm(sub_sc_matrix[0])
-        film_a = film_sc_matrix[0] / np.linalg.norm(film_sc_matrix[0])
-        sub_a_to_i = np.array(
-            [[sub_a[0], -sub_a[1], 0], [sub_a[1], sub_a[0], 0], [0, 0, 1]]
-        )
-        film_a_to_i = np.array(
-            [[film_a[0], -film_a[1], 0], [film_a[1], film_a[0], 0], [0, 0, 1]]
-        )
 
         coords = np.array(
             [
@@ -2943,7 +2983,7 @@ class Interface:
             ]
         )
 
-        shifts = np.array(
+        sc_shifts = np.array(
             [
                 [0, 0, 0],
                 [1, 0, 0],
@@ -2952,574 +2992,67 @@ class Interface:
                 [0, -1, 0],
                 [1, 1, 0],
                 [-1, -1, 0],
+                [1, -1, 0],
+                [-1, 1, 0],
             ]
         )
 
-        coords_3x3 = [coords + shift for shift in shifts]
-
-        sub_coords = [c.dot(sub_matrix) for c in coords_3x3]
-        film_coords = [c.dot(film_matrix) for c in coords_3x3]
-        int_coords = coords.dot(int_matrix)
-        # film_sl = coords.dot(film_sc_matrix).dot(film_a_to_i)
-        film_sl = coords.dot(film_sc_matrix).dot(self.stack_transformation.T)
-        # sub_sl = coords.dot(sub_sc_matrix).dot(sub_a_to_i)
-        # film_sl = coords.dot(film_sc_matrix)
+        sub_sc_shifts = sc_shifts.dot(sub_sc_matrix)
+        film_sc_shifts = sc_shifts.dot(film_sc_matrix)
         sub_sl = coords.dot(sub_sc_matrix)
 
-        f_mat = self.film_matrix
-        s_mat = self.substrate_matrix
-
-        sub_struc = Structure(
-            lattice=self.substrate.slab_structure_oriented.lattice,
-            species=["H"],
-            coords=np.zeros((1, 3)),
-            to_unit_cell=True,
-            coords_are_cartesian=True,
+        sub_struc, sub_inv_matrix = self._generate_sc_for_interface_view(
+            struc=self.substrate.slab_structure_oriented,
+            transformation_matrix=self.substrate_matrix,
         )
-        sub_struc.make_supercell(s_mat)
-        sub_inv_matrix = deepcopy(sub_struc.lattice.inv_matrix)
 
-        film_struc = Structure(
-            lattice=self.film.slab_structure_oriented.lattice,
-            species=["H"],
-            coords=np.zeros((1, 3)),
-            to_unit_cell=True,
-            coords_are_cartesian=True,
+        film_struc, film_inv_matrix = self._generate_sc_for_interface_view(
+            struc=self.film.slab_structure_oriented,
+            transformation_matrix=self.film_matrix,
         )
-        film_struc.make_supercell(f_mat)
-        film_inv_matrix = deepcopy(film_struc.lattice.inv_matrix)
 
         fig, ax = plt.subplots(figsize=(4, 4), dpi=400)
 
         for c in sub_struc.cart_coords:
-            for c_3x3 in sub_coords:
-                cart_coords = c_3x3 + c
-                fc = np.round(cart_coords.dot(sub_inv_matrix), 3)
-                # plot_coords = cart_coords.dot(sub_a_to_i)
-                plot_coords = cart_coords
-
-                x_in = np.logical_and(fc[:, 0] > 0.0, fc[:, 0] < 1.0)
-                y_in = np.logical_and(fc[:, 1] > 0.0, fc[:, 1] < 1.0)
-                point_in = np.logical_and(x_in, y_in)
-
-                if point_in.any():
-                    ax.plot(
-                        plot_coords[:, 0],
-                        plot_coords[:, 1],
-                        color=substrate_color,
-                        linewidth=0.5,
-                        marker="o",
-                        markersize=2,
-                    )
+            for shift in sub_sc_shifts:
+                self._plot_interface_view(
+                    ax=ax,
+                    zero_coord=c,
+                    supercell_shift=shift,
+                    cell_vetices=coords,
+                    slab_matrix=sub_matrix,
+                    sc_inv_matrix=sub_inv_matrix,
+                    is_film=False,
+                    facecolor=(0, 0, 1, 0.2),
+                    edgecolor=(0, 0, 1, 1),
+                )
 
         for c in film_struc.cart_coords:
-            for c_3x3 in film_coords:
-                cart_coords = c_3x3 + c
-                fc = np.round(cart_coords.dot(film_inv_matrix), 3)
-                # plot_coords = cart_coords.dot(film_a_to_i)
-                plot_coords = cart_coords.dot(self.stack_transformation.T)
-                # plot_coords = cart_coords
-
-                x_in = np.logical_and(fc[:, 0] > 0.0, fc[:, 0] < 1.0)
-                y_in = np.logical_and(fc[:, 1] > 0.0, fc[:, 1] < 1.0)
-                point_in = np.logical_and(x_in, y_in)
-
-                if point_in.any():
-                    ax.plot(
-                        plot_coords[:, 0],
-                        plot_coords[:, 1],
-                        color=film_color,
-                        linewidth=0.5,
-                        marker="o",
-                        markersize=2,
-                    )
-
-        ax.plot(
-            sub_sl[:, 0],
-            sub_sl[:, 1],
-            color=substrate_color,
-        )
-        ax.plot(
-            film_sl[:, 0],
-            film_sl[:, 1],
-            color=film_color,
-        )
-
-        ax.set_aspect("equal")
-        fig.tight_layout(pad=0.4)
-        fig.savefig(output)
-
-    def plot_interface_new(
-        self,
-        output="interface_view.png",
-        film_color="red",
-        substrate_color="blue",
-        supercell_color="black",
-    ):
-        sub_matrix = deepcopy(
-            self.substrate.slab_structure_oriented.lattice.matrix
-        )
-        film_matrix = deepcopy(
-            self.film.slab_structure_oriented.lattice.matrix
-        )
-        sub_sc_matrix = deepcopy(self.substrate_supercell.lattice.matrix)
-        film_sc_matrix = deepcopy(self.film_supercell.lattice.matrix)
-        int_matrix = deepcopy(self.interface.lattice.matrix)
-
-        sub_a = sub_sc_matrix[0] / np.linalg.norm(sub_sc_matrix[0])
-        film_a = film_sc_matrix[0] / np.linalg.norm(film_sc_matrix[0])
-
-        coords = np.array(
-            [
-                [0, 0, 0],
-                [1, 0, 0],
-                [1, 1, 0],
-                [0, 1, 0],
-                [0, 0, 0],
-            ]
-        )
-
-        # TODO: Implement 3x3 for supercell instead of individual cells
-        shifts = np.array(
-            [
-                [0, 0, 0],
-                # [1, 0, 0],
-                # [0, 1, 0],
-                # [-1, 0, 0],
-                # [0, -1, 0],
-                # [1, 1, 0],
-                # [-1, -1, 0],
-            ]
-        )
-
-        coords_3x3 = [coords + shift for shift in shifts]
-
-        sub_coords = [c.dot(sub_matrix) for c in coords_3x3]
-        film_coords = [c.dot(film_matrix) for c in coords_3x3]
-        film_sl = coords.dot(film_sc_matrix).dot(self.stack_transformation.T)
-        sub_sl = coords.dot(sub_sc_matrix)
-
-        f_mat = self.film_matrix
-        s_mat = self.substrate_matrix
-
-        sub_struc = Structure(
-            lattice=self.substrate.slab_structure_oriented.lattice,
-            species=["H"],
-            coords=np.zeros((1, 3)),
-            to_unit_cell=True,
-            coords_are_cartesian=True,
-        )
-        sub_struc.make_supercell(s_mat)
-        sub_inv_matrix = deepcopy(sub_struc.lattice.inv_matrix)
-
-        film_struc = Structure(
-            lattice=self.film.slab_structure_oriented.lattice,
-            species=["H"],
-            coords=np.zeros((1, 3)),
-            to_unit_cell=True,
-            coords_are_cartesian=True,
-        )
-        film_struc.make_supercell(f_mat)
-        film_inv_matrix = deepcopy(film_struc.lattice.inv_matrix)
-
-        fig, ax = plt.subplots(figsize=(4, 4), dpi=400)
-
-        sub_plotted = []
-
-        for c in sub_struc.cart_coords:
-            for c_3x3 in sub_coords:
-                cart_coords = c_3x3 + c
-                fc = np.round(cart_coords.dot(sub_inv_matrix), 3)
-                plot_coords = cart_coords
-                center = (
-                    np.round(np.mean(plot_coords[:-1, 0]), 2),
-                    np.round(np.mean(plot_coords[:-1, 1]), 2),
-                )
-
-                x_in = np.logical_and(fc[:, 0] > 0.0, fc[:, 0] < 1.0)
-                y_in = np.logical_and(fc[:, 1] > 0.0, fc[:, 1] < 1.0)
-                point_in = np.logical_and(x_in, y_in)
-
-                if point_in.any():
-                    if center not in sub_plotted:
-                        poly = Polygon(
-                            xy=plot_coords[:, :2],
-                            closed=True,
-                            # alpha=0.3,
-                            facecolor=(0, 0, 1, 0.3),
-                            edgecolor=(0, 0, 1, 1),
-                        )
-                        ax.add_patch(poly)
-                        sub_plotted.append(center)
-
-        film_plotted = []
-
-        for c in film_struc.cart_coords:
-            for c_3x3 in film_coords:
-                cart_coords = c_3x3 + c
-                fc = np.round(cart_coords.dot(film_inv_matrix), 3)
-                plot_coords = cart_coords.dot(self.stack_transformation.T)
-                center = (
-                    np.round(np.mean(plot_coords[:-1, 0]), 2),
-                    np.round(np.mean(plot_coords[:-1, 1]), 2),
-                )
-                center_array = np.round(
-                    np.mean(cart_coords[:-1], axis=0).dot(film_inv_matrix),
-                    3,
-                )
-                center_x_in = np.logical_and(
-                    -0.3 <= center_array[0], center_array[0] <= 1.3
-                )
-                center_y_in = np.logical_and(
-                    -0.3 <= center_array[1], center_array[1] <= 1.3
-                )
-                center_in = np.logical_and(center_x_in, center_y_in)
-
-                x_in = np.logical_and(fc[:, 0] > 0.0, fc[:, 0] < 1.0)
-                y_in = np.logical_and(fc[:, 1] > 0.0, fc[:, 1] < 1.0)
-                point_in = np.logical_and(x_in, y_in)
-
-                # if point_in.any() or center_in:
-                # if center not in film_plotted:
-                poly = Polygon(
-                    xy=plot_coords[:, :2],
-                    closed=True,
-                    # alpha=0.3,
-                    facecolor=(200 / 255, 0, 0, 0.3),
+            for shift in film_sc_shifts:
+                self._plot_interface_view(
+                    ax=ax,
+                    zero_coord=c,
+                    supercell_shift=shift,
+                    cell_vetices=coords,
+                    slab_matrix=film_matrix,
+                    sc_inv_matrix=film_inv_matrix,
+                    is_film=True,
+                    facecolor=(200 / 255, 0, 0, 0.2),
                     edgecolor=(200 / 255, 0, 0, 1),
                 )
-                ax.add_patch(poly)
-                film_plotted.append(center)
 
         ax.plot(
             sub_sl[:, 0],
             sub_sl[:, 1],
             color="black",
+            linewidth=3,
         )
 
-        ax.set_aspect("equal")
-        fig.tight_layout(pad=0.4)
-        fig.savefig(output)
-
-    def plot_interface_old(
-        self,
-        output="interface_view.png",
-        layers_from_interface=[2, 2],
-        alpha=0.5,
-        legend_fontsize=16,
-        transparent=False,
-        atol=None,
-    ):
-        layer_inds, heights = group_layers(self.interface, atol=atol)
-        bot_film_ind = np.min(np.where(heights > self.interface_height))
-        top_sub_ind = np.max(np.where(heights < self.interface_height))
-        film_layer_inds = [
-            bot_film_ind + i for i in range(layers_from_interface[1])
-        ]
-        sub_layer_inds = [
-            top_sub_ind - i for i in range(layers_from_interface[0])
-        ]
-        interface_layer_inds = np.sort(film_layer_inds + sub_layer_inds)
-        interface_atom_inds = [layer_inds[i] for i in interface_layer_inds]
-        frac_coords = self.interface.frac_coords
-
-        matrix = self.interface.lattice.matrix
-        a = matrix[0, :2]
-        b = matrix[1, :2]
-
-        borders = np.vstack([np.zeros(2), a, a + b, b, np.zeros(2)])
-        x_size = borders[:, 0].max() - borders[:, 0].min()
-        y_size = borders[:, 1].max() - borders[:, 1].min()
-        ratio = y_size / x_size
-
-        fig, ax = plt.subplots(figsize=(4, 4 * ratio), dpi=400)
-
-        supercell_shifts = np.array(
-            [
-                [0, 0, 0],
-                [-1, -1, 0],
-                [-1, 0, 0],
-                [0, -1, 0],
-                [-1, 1, 0],
-                [1, -1, 0],
-                [0, 1, 0],
-                [1, 0, 0],
-                [1, 1, 0],
-            ]
-        )
-
-        vesta_data = np.loadtxt("./vesta_colors.csv", delimiter=",")
-        vesta_colors = np.c_[
-            vesta_data[:, :3], alpha * np.ones(len(vesta_data))
-        ]
-        vesta_radii = vesta_data[:, -1]
-
-        all_unique_species = []
-
-        for inds in interface_atom_inds:
-            layer_atom_coords = frac_coords[inds]
-            layer_atom_coords = (
-                layer_atom_coords - supercell_shifts[:, None]
-            ).reshape(-1, 3)
-            inds_in_cell = (
-                (layer_atom_coords[:, :2].round(2) >= 0)
-                & (layer_atom_coords[:, :2].round(2) <= 1)
-            ).all(axis=1)
-            layer_atom_coords = layer_atom_coords[inds_in_cell].dot(matrix)
-            layer_atom_symbols = np.array(self.interface.species, dtype="str")[
-                inds
-            ]
-            layer_atom_symbols = np.concatenate(
-                [layer_atom_symbols for _ in range(9)]
-            )[inds_in_cell]
-            layer_atom_species = np.zeros(layer_atom_symbols.shape, dtype=int)
-            layer_atom_sizes = np.zeros(layer_atom_symbols.shape, dtype=float)
-            unique_species = np.unique(layer_atom_symbols)
-            unique_elements = [Element(i) for i in unique_species]
-
-            for i, z in enumerate(unique_elements):
-                layer_atom_species[
-                    np.isin(layer_atom_symbols, unique_species[i])
-                ] = z.Z
-                layer_atom_sizes[
-                    np.isin(layer_atom_symbols, unique_species[i])
-                ] = z.atomic_radius
-
-            all_unique_species.append(np.unique(layer_atom_species))
-            colors = vesta_colors[layer_atom_species]
-            layer_atom_sizes = vesta_radii[layer_atom_species] * 0.4
-
-            for xy, r, c in zip(layer_atom_coords, layer_atom_sizes, colors):
-                ax.add_patch(
-                    Circle(
-                        xy,
-                        radius=r,
-                        ec=c[:3],
-                        fc=c,
-                        linewidth=1.5,
-                        clip_on=False,
-                    )
-                )
-
-        ax.plot(
-            borders[:, 0],
-            borders[:, 1],
-            color="black",
-            linewidth=2,
-            solid_capstyle="round",
-        )
         ax.set_aspect("equal")
         ax.axis("off")
 
-        all_unique_species = np.unique(np.concatenate(all_unique_species))
-
-        legend_lines = []
-        legend_labels = []
-        for z in all_unique_species:
-            legend_lines.append(
-                plt.scatter(
-                    [np.nan],
-                    [np.nan],
-                    color=vesta_colors[z],
-                    s=50 * vesta_radii[z] ** 2,
-                    ec=vesta_colors[z, :3],
-                )
-            )
-            legend_labels.append(f"{Element.from_Z(z)}")
-
-        from mpl_toolkits.axes_grid1 import make_axes_locatable
-
-        divider = make_axes_locatable(ax)
-        lax = divider.append_axes("bottom", size="8%", pad=0.05)
-        lax.axis("off")
-
-        l = lax.legend(
-            legend_lines,
-            legend_labels,
-            ncol=len(all_unique_species),
-            loc="center",
-            framealpha=1,
-            fontsize=legend_fontsize,
-            handletextpad=0,
-            columnspacing=0.5,
-            mode="expand",
-        )
-        l.set_zorder(200)
-        frame = l.get_frame()
-        frame.set_facecolor("white")
-        frame.set_edgecolor("black")
-        frame.set_linewidth(2)
-
-        fig.tight_layout(pad=0.4)
-        fig.savefig(output, transparent=transparent)
-
-    def plot_interface_side(
-        self,
-        output="interface_view.png",
-        layers_from_interface=[2, 2],
-        alpha=0.5,
-        legend_fontsize=16,
-        transparent=False,
-        atol=None,
-    ):
-        layer_inds, heights = group_layers(self.interface, atol=atol)
-        bot_film_ind = np.min(np.where(heights > self.interface_height))
-        top_sub_ind = np.max(np.where(heights < self.interface_height))
-        film_layer_inds = [
-            bot_film_ind + i for i in range(layers_from_interface[1])
-        ]
-        sub_layer_inds = [
-            top_sub_ind - i for i in range(layers_from_interface[0])
-        ]
-        interface_layer_inds = np.sort(film_layer_inds + sub_layer_inds)
-        interface_atom_inds = [layer_inds[i] for i in interface_layer_inds]
-        frac_coords = self.interface.frac_coords
-
-        matrix = self.interface.lattice.matrix
-        a = matrix[0, :2]
-        b = matrix[1, :2]
-
-        theta = np.arccos(np.dot(a, [0, 1]) / np.linalg.norm(a))
-        # rot_mat = np.array([
-        #     [np.cos(theta), -np.sin(theta)],
-        #     [np.sin(theta), np.cos(theta)],
-        # ])
-        rot_mat = np.array(
-            [
-                [np.cos(theta), -np.sin(theta), 0],
-                [np.sin(theta), np.cos(theta), 0],
-                [0, 0, 1],
-            ]
-        )
-
-        borders = np.c_[a, b, np.zeros(0)].dot(rot_mat)
-        x_size = borders[:, 0].max() - borders[:, 0].min()
-        y_size = borders[:, 1].max() - borders[:, 1].min()
-        ratio = y_size / x_size
-
-        fig, ax = plt.subplots(figsize=(4, 4 * ratio), dpi=400)
-
-        supercell_shifts = np.array(
-            [
-                [0, 0, 0],
-                [-1, -1, 0],
-                [-1, 0, 0],
-                [0, -1, 0],
-                [-1, 1, 0],
-                [1, -1, 0],
-                [0, 1, 0],
-                [1, 0, 0],
-                [1, 1, 0],
-            ]
-        )
-
-        vesta_data = np.loadtxt("./vesta_colors.csv", delimiter=",")
-        vesta_colors = np.c_[
-            vesta_data[:, :3], alpha * np.ones(len(vesta_data))
-        ]
-        vesta_radii = vesta_data[:, -1]
-
-        all_unique_species = []
-
-        for inds in interface_atom_inds:
-            layer_atom_coords = frac_coords[inds]
-            layer_atom_coords = (
-                layer_atom_coords - supercell_shifts[:, None]
-            ).reshape(-1, 3)
-            inds_in_cell = (
-                (layer_atom_coords[:, :2].round(2) >= 0)
-                & (layer_atom_coords[:, :2].round(2) <= 1)
-            ).all(axis=1)
-            layer_atom_coords = (
-                layer_atom_coords[inds_in_cell].dot(matrix).dot(rot_mat)
-            )
-            # layer_atom_coords = layer_atom_coords -
-            layer_atom_symbols = np.array(self.interface.species, dtype="str")[
-                inds
-            ]
-            layer_atom_symbols = np.concatenate(
-                [layer_atom_symbols for _ in range(9)]
-            )[inds_in_cell]
-            layer_atom_species = np.zeros(layer_atom_symbols.shape, dtype=int)
-            layer_atom_sizes = np.zeros(layer_atom_symbols.shape, dtype=float)
-            unique_species = np.unique(layer_atom_symbols)
-            unique_elements = [Element(i) for i in unique_species]
-
-            for i, z in enumerate(unique_elements):
-                layer_atom_species[
-                    np.isin(layer_atom_symbols, unique_species[i])
-                ] = z.Z
-                layer_atom_sizes[
-                    np.isin(layer_atom_symbols, unique_species[i])
-                ] = z.atomic_radius
-
-            all_unique_species.append(np.unique(layer_atom_species))
-            colors = vesta_colors[layer_atom_species]
-            layer_atom_sizes = vesta_radii[layer_atom_species] * 0.4
-
-            for xy, r, c in zip(layer_atom_coords, layer_atom_sizes, colors):
-                ax.add_patch(
-                    Circle(
-                        xy,
-                        radius=r,
-                        ec=c[:3],
-                        fc=c,
-                        linewidth=1.5,
-                        clip_on=False,
-                    )
-                )
-
-        ax.plot(
-            borders[:, 0],
-            borders[:, 1],
-            color="black",
-            linewidth=2,
-            solid_capstyle="round",
-        )
-        ax.set_aspect("equal")
-        ax.axis("off")
-
-        all_unique_species = np.unique(np.concatenate(all_unique_species))
-
-        legend_lines = []
-        legend_labels = []
-        for z in all_unique_species:
-            legend_lines.append(
-                plt.scatter(
-                    [np.nan],
-                    [np.nan],
-                    color=vesta_colors[z],
-                    s=50 * vesta_radii[z] ** 2,
-                    ec=vesta_colors[z, :3],
-                )
-            )
-            legend_labels.append(f"{Element.from_Z(z)}")
-
-        from mpl_toolkits.axes_grid1 import make_axes_locatable
-
-        divider = make_axes_locatable(ax)
-        lax = divider.append_axes("bottom", size="8%", pad=0.05)
-        lax.axis("off")
-
-        l = lax.legend(
-            legend_lines,
-            legend_labels,
-            ncol=len(all_unique_species),
-            loc="center",
-            framealpha=1,
-            fontsize=legend_fontsize,
-            handletextpad=0,
-            columnspacing=0.5,
-            mode="expand",
-        )
-        l.set_zorder(200)
-        frame = l.get_frame()
-        frame.set_facecolor("white")
-        frame.set_edgecolor("black")
-        frame.set_linewidth(2)
-
-        fig.tight_layout(pad=0.4)
-        fig.savefig(output, transparent=transparent)
+        fig.tight_layout()
+        fig.savefig(output, bbox_inches="tight")
 
     def create_ga_candidate(
         self,

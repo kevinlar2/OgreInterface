@@ -2970,6 +2970,7 @@ class Interface:
         film_color="red",
         substrate_color="blue",
         supercell_color="black",
+        dpi=400,
     ):
         sub_matrix = self.substrate.slab_structure_oriented.lattice.matrix
         film_matrix = self.film.slab_structure_oriented.lattice.matrix
@@ -3014,7 +3015,7 @@ class Interface:
             transformation_matrix=self.film_matrix,
         )
 
-        fig, ax = plt.subplots(figsize=(4, 4), dpi=400)
+        fig, ax = plt.subplots(figsize=(4, 4), dpi=dpi)
 
         for c in sub_struc.cart_coords:
             for shift in sub_sc_shifts:

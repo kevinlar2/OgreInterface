@@ -22,7 +22,7 @@ from OgreInterface.ewald import ionic_score_function
 from OgreInterface.zbl import zbl_score_function
 
 # from OgreInterface.born import born_calculator
-from OgreInterface.ewald_matscipy import ewald_calculator
+# from OgreInterface.ewald_matscipy import ewald_calculator
 
 import matplotlib.pyplot as plt
 from matplotlib.patches import Circle, Polygon

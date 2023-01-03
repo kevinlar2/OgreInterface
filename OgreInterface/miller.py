@@ -134,19 +134,23 @@ class MillerSearch(object):
                 unique_planes.append(like_signs[0])
             else:
                 first_max = like_signs[
-                    np.abs(like_signs)[:, 0] == np.max(np.abs(like_signs)[:, 0])
+                    np.abs(like_signs)[:, 0]
+                    == np.max(np.abs(like_signs)[:, 0])
                 ]
                 if len(first_max) == 1:
                     unique_planes.append(first_max[0])
                 else:
                     second_max = first_max[
-                        np.abs(first_max)[:, 1] == np.max(np.abs(first_max)[:, 1])
+                        np.abs(first_max)[:, 1]
+                        == np.max(np.abs(first_max)[:, 1])
                     ]
                     if len(second_max) == 1:
                         unique_planes.append(second_max[0])
                     else:
                         unique_planes.append(
-                            second_max[np.argmax(np.sign(second_max).sum(axis=1))]
+                            second_max[
+                                np.argmax(np.sign(second_max).sum(axis=1))
+                            ]
                         )
 
         unique_planes = np.vstack(unique_planes)
@@ -162,7 +166,7 @@ class MillerSearch(object):
 
         for inds in self.substrate_inds:
             substrate = SurfaceGenerator(
-                structure=self.substrate,
+                bulk=self.substrate,
                 miller_index=inds,
                 layers=3,
                 vacuum=20,
@@ -172,7 +176,7 @@ class MillerSearch(object):
 
         for inds in self.film_inds:
             film = SurfaceGenerator(
-                structure=self.film,
+                bulk=self.film,
                 miller_index=inds,
                 layers=3,
                 vacuum=20,
@@ -198,7 +202,9 @@ class MillerSearch(object):
                     strain = interface.strain
                     angle_diff = interface.angle_diff
                     strains = np.c_[strain, angle_diff]
-                    max_misfits = strains[:, np.argmax(np.abs(strains), axis=1)]
+                    max_misfits = strains[
+                        :, np.argmax(np.abs(strains), axis=1)
+                    ]
                     # print(max_misfits.shape)
                     print(strains.shape)
                     # min_strain = np.min(np.abs(max_misfits))
@@ -230,7 +236,8 @@ class MillerSearch(object):
         ylabels = []
         for ylabel in self.film_inds:
             tmp_label = [
-                str(i) if i >= 0 else "$\\overline{" + str(-i) + "}$" for i in ylabel
+                str(i) if i >= 0 else "$\\overline{" + str(-i) + "}$"
+                for i in ylabel
             ]
             ylabels.append(f'({"".join(tmp_label)})')
             # ylabels.append(str(tmp_label).replace('[', '(').replace(']', ')').replace(' ', ''))
@@ -238,7 +245,8 @@ class MillerSearch(object):
         xlabels = []
         for xlabel in self.substrate_inds:
             tmp_label = [
-                str(i) if i >= 0 else "$\\overline{" + str(-i) + "}$" for i in xlabel
+                str(i) if i >= 0 else "$\\overline{" + str(-i) + "}$"
+                for i in xlabel
             ]
             xlabels.append(f'({"".join(tmp_label)})')
 
@@ -303,7 +311,9 @@ class MillerSearch(object):
         cbar = fig.colorbar(col, cax=cax)
         cbar.set_label("Misfit Percentage", fontsize=fontsize)
         cbar.ax.tick_params(labelsize=fontsize)
-        cbar.ax.ticklabel_format(style="sci", scilimits=(-3, 3), useMathText=True)
+        cbar.ax.ticklabel_format(
+            style="sci", scilimits=(-3, 3), useMathText=True
+        )
         cbar.ax.yaxis.set_offset_position("left")
 
         fig.tight_layout(pad=0.4)

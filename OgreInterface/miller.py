@@ -1,4 +1,8 @@
-from OgreInterface.generate import InterfaceGenerator, SurfaceGenerator
+from OgreInterface.generate import (
+    InterfaceGenerator,
+    SurfaceGenerator,
+    TolarenceError,
+)
 from pymatgen.core.surface import get_symmetrically_distinct_miller_indices
 from pymatgen.core.structure import Structure
 from pymatgen.io.ase import AseAtomsAdaptor
@@ -59,8 +63,12 @@ class MillerSearch(object):
         self.angle_tol = angle_tol
         self.length_tol = length_tol
         self.max_area = max_area
-        self.substrate_inds = self._get_unique_miller_indices(self.substrate)
-        self.film_inds = self._get_unique_miller_indices(self.film)
+        self.substrate_inds = self._get_unique_miller_indices(
+            self.substrate, self.max_substrate_index
+        )
+        self.film_inds = self._get_unique_miller_indices(
+            self.film, self.max_film_index
+        )
         # self.substrate_inds, self.film_inds = self._get_unique_miller_indices()
         self.misfit_data = None
         self.area_data = None
@@ -95,11 +103,11 @@ class MillerSearch(object):
 
         return output.astype(int)
 
-    def _get_unique_miller_indices(self, struc):
+    def _get_unique_miller_indices(self, struc, max_index):
         struc_sg = SpacegroupAnalyzer(struc)
         # struc_conv_cell = struc_sg.get_conventional_standard_structure()
         symmops = struc_sg.get_symmetry_operations(cartesian=False)
-        planes = set(list(product([-2, -1, 0, 1, 2], repeat=3)))
+        planes = set(list(product(range(-max_index, max_index + 1), repeat=3)))
         planes.remove((0, 0, 0))
 
         reduced_planes = []
@@ -190,15 +198,15 @@ class MillerSearch(object):
 
         for i, substrate in enumerate(substrates):
             for j, film in enumerate(films):
-                interface = InterfaceGenerator(
-                    substrate=substrate,
-                    film=film,
-                    length_tol=self.length_tol,
-                    angle_tol=self.angle_tol,
-                    area_tol=self.area_tol,
-                    max_area=self.max_area,
-                )
-                if interface.interface_output is not None:
+                try:
+                    interface = InterfaceGenerator(
+                        substrate=substrate,
+                        film=film,
+                        length_tol=self.length_tol,
+                        angle_tol=self.angle_tol,
+                        area_tol=self.area_tol,
+                        max_area=self.max_area,
+                    )
                     strain = interface.strain
                     angle_diff = interface.angle_diff
                     strains = np.c_[strain, angle_diff]
@@ -206,7 +214,7 @@ class MillerSearch(object):
                         :, np.argmax(np.abs(strains), axis=1)
                     ]
                     # print(max_misfits.shape)
-                    print(strains.shape)
+                    # print(strains.shape)
                     # min_strain = np.min(np.abs(max_misfits))
                     #  min_strain = np.min(np.abs(interface.area_ratio))
                     #  min_strain = np.min(np.abs(strain))
@@ -217,6 +225,9 @@ class MillerSearch(object):
                     misfits[i, j] = np.max(strain[min_area_ind])
                     areas[i, j] = all_areas[min_area_ind]
                     counts[i, j] = len(max_misfits)
+
+                except TolarenceError:
+                    pass
 
         self.misfits = np.round(misfits.T, 8)
         self.areas = areas.T

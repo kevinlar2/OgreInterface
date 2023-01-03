@@ -2939,8 +2939,10 @@ class Interface:
         fc = np.round(cart_coords.dot(sc_inv_matrix), 3)
         if is_film:
             plot_coords = cart_coords.dot(self.stack_transformation.T)
+            linewidth = 1.0
         else:
             plot_coords = cart_coords
+            linewidth = 3.0
 
         center = np.round(
             np.mean(cart_coords[:-1], axis=0).dot(sc_inv_matrix),
@@ -2958,7 +2960,7 @@ class Interface:
                 closed=True,
                 facecolor=facecolor,
                 edgecolor=edgecolor,
-                linewidth=1.5,
+                linewidth=linewidth,
             )
             ax.add_patch(poly)
 

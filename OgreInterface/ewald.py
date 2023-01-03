@@ -14,6 +14,7 @@ import torch.nn as nn
 from os.path import join, isdir, isfile
 import os
 
+
 class IonicScoreFunction(spk.model.AtomisticModel):
     def __init__(
         self,
@@ -38,7 +39,9 @@ class IonicScoreFunction(spk.model.AtomisticModel):
         if self.model_outputs is None:
             self.collect_outputs()
 
-    def forward(self, inputs: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+    def forward(
+        self, inputs: Dict[str, torch.Tensor]
+    ) -> Dict[str, torch.Tensor]:
         # initialize derivatives for response properties
         inputs = self.initialize_derivatives(inputs)
 
@@ -55,49 +58,55 @@ class IonicScoreFunction(spk.model.AtomisticModel):
 
 
 def ionic_score_function(atoms, charge_dict, cutoff=10.0, alpha=0.2, k_max=10):
-    charges = np.array([
-        [charge_dict[s] for s in atom.get_chemical_symbols()] for atom in atoms
-    ])
+    charges = np.array(
+        [
+            [charge_dict[s] for s in atom.get_chemical_symbols()]
+            for atom in atoms
+        ]
+    )
 
     input_generator = spk.interfaces.AtomsConverter(
         neighbor_list=trn.MatScipyNeighborList(cutoff=cutoff),
     )
     inputs = input_generator(atoms=atoms)
-    inputs['partial_charges'] = torch.from_numpy(charges.ravel())
+    inputs["partial_charges"] = torch.from_numpy(charges.ravel())
 
-    pairwise_distance = spk.atomistic.PairwiseDistances() 
+    pairwise_distance = spk.atomistic.PairwiseDistances()
     ewald_energy = spk.atomistic.EnergyEwald(
         alpha=alpha,
         k_max=k_max,
-        energy_unit='eV',
-        position_unit='Ang',
-        output_key='energy_ewald',
+        energy_unit="eV",
+        position_unit="Ang",
+        output_key="energy_ewald",
         use_neighbors_lr=False,
     )
 
     zbl_energy = spk.atomistic.ZBLRepulsionEnergy(
-        energy_unit='eV',
-        position_unit='Ang',
-        output_key='energy_zbl',
+        energy_unit="eV",
+        position_unit="Ang",
+        output_key="energy_zbl",
         trainable=False,
-        cutoff_fn=spk.nn.CosineCutoff(cutoff)
+        cutoff_fn=spk.nn.CosineCutoff(cutoff),
     )
 
     agg_energy = spk.atomistic.Aggregation(
-            keys=['energy_zbl', 'energy_ewald'],
-            output_key='energy'
+        keys=["energy_zbl", "energy_ewald"], output_key="energy"
     )
 
     ew = IonicScoreFunction(
         input_modules=[pairwise_distance],
         output_modules=[ewald_energy, zbl_energy, agg_energy],
-        model_outputs=['energy_ewald', 'energy_zbl', 'energy'],
+        model_outputs=["energy_ewald", "energy_zbl", "energy"],
         postprocessors=[
             trn.CastTo64(),
-        ]
+        ],
     )
 
     data = ew.forward(inputs)
     numpy_data = {k: data[k].numpy() for k in data}
 
-    return numpy_data['energy'], numpy_data['energy_ewald'], numpy_data['energy_zbl']
+    return (
+        numpy_data["energy"],
+        numpy_data["energy_ewald"],
+        numpy_data["energy_zbl"],
+    )

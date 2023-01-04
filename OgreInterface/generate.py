@@ -223,13 +223,6 @@ class SurfaceGenerator:
             # max_normal_search=5,
             center_slab=True,
         )
-        # Convert miller index to a numpy array
-        miller_index = np.array(self.miller_index)
-
-        # # Check if the oriented cell has the proper basis
-        # sg = self._check_oriented_cell(
-        #     slab_generator=sg, miller_index=miller_index
-        # )
 
         # Determine if all possible terminations are generated
         if self.generate_all:
@@ -243,49 +236,17 @@ class SurfaceGenerator:
         # Loop through slabs to ensure that they are all properly oriented and reduced
         # Return Surface objects
         for i, slab in enumerate(slabs):
-            # Poscar(slab.get_orthogonal_c_slab()).write_file(f"POSCAR_{i}")
-            # Get the inital miller-indices of the lattice
-            basis = self._get_reduced_basis(
-                basis=deepcopy(slab.lattice.matrix)
-            )
-
-            # Ensure that the slab is properly oriented w.r.t the given surface normal
-            slab = self._get_properly_oriented_slab(
-                basis=basis, miller_index=miller_index, slab=slab
-            )
-
-            # Reduce the vectors according to the Zur and McGill algorithm
-            new_a, new_b = reduce_vectors(
-                slab.lattice.matrix[0], slab.lattice.matrix[1]
-            )
-
-            # This is the lattice of the reduced surface
-            reduced_matrix = np.hstack([new_a, new_b, slab.lattice.matrix[-1]])
-
-            # Create the pymatgen structure of the reduced surface
-            reduced_struc = Structure(
-                lattice=Lattice(matrix=reduced_matrix),
-                species=slab.species,
-                coords=slab.cart_coords,
-                to_unit_cell=True,
-                coords_are_cartesian=True,
-                site_properties=slab.site_properties,
-            )
-            reduced_struc.sort()
-
-            # Get the final reduced miller-indices of the lattice
-            reduced_basis = self._get_reduced_basis(
-                basis=deepcopy(reduced_struc.lattice.matrix)
-            )
+            c_slab = slab.get_orthogonal_c_slab()
+            c_slab.sort()
 
             # Create the Surface object
             surface = Surface(
-                slab=reduced_struc,
+                slab=c_slab,
                 bulk=self.bulk_structure,
                 miller_index=self.miller_index,
                 layers=self.layers,
                 vacuum=self.vacuum,
-                uvw_basis=np.round(reduced_basis).astype(int),
+                uvw_basis=sg.basis,
             )
             surfaces.append(surface)
 

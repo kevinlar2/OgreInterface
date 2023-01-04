@@ -2,6 +2,7 @@
 This module will be used to construct the surfaces and interfaces used in this package.
 """
 from pymatgen.core.structure import Structure
+from pymatgen.core.surface import Slab
 from pymatgen.core.lattice import Lattice
 from pymatgen.core.periodic_table import Element
 from pymatgen.io.vasp.inputs import Poscar
@@ -61,10 +62,6 @@ class Surface:
         self.layers = layers
         self.vacuum = vacuum
         self.uvw_basis = uvw_basis
-        (
-            self.slab_structure_oriented,
-            self.inplane_vectors,
-        ) = self._make_planar()
 
     @property
     def formula(self):
@@ -81,11 +78,24 @@ class Surface:
 
         return area
 
+    @property
+    def inplane_vectors(self):
+        matrix = deepcopy(self.slab_structure.lattice.matrix)
+        return matrix[:2]
+
+    @property
+    def miller_index_a(self):
+        return self.uvw_basis[0].astype(int)
+
+    @property
+    def miller_index_b(self):
+        return self.uvw_basis[1].astype(int)
+
     def _get_atoms_and_struc(self, atoms_or_struc):
         if type(atoms_or_struc) == Atoms:
             init_structure = AseAtomsAdaptor.get_structure(atoms_or_struc)
             init_atoms = atoms_or_struc
-        elif type(atoms_or_struc) == Structure:
+        elif type(atoms_or_struc) == Structure or type(atoms_or_struc) == Slab:
             init_structure = atoms_or_struc
             init_atoms = AseAtomsAdaptor.get_atoms(atoms_or_struc)
         else:
@@ -107,78 +117,6 @@ class Surface:
             to_delete_conv.extend(group_inds_conv[i])
 
         self.slab_structure.remove_sites(to_delete_conv)
-
-    def _rotate_vecs(self, a, b):
-        orig_vecs = np.vstack([a, b])
-        a_norm = a / np.linalg.norm(a)
-        b_norm = b / np.linalg.norm(b)
-
-        a_to_i = np.array([[a_norm[0], -a_norm[1]], [a_norm[1], a_norm[0]]])
-        ai_vecs = orig_vecs.dot(a_to_i)
-        new_a = ai_vecs[0]
-        new_b = ai_vecs[1]
-        b_norm = b_norm.dot(a_to_i)
-
-        if self._angle_between(new_a, new_b) > 180:
-            rot_mat = np.array(
-                [[b_norm[0], -b_norm[1]], [b_norm[1], b_norm[0]]]
-            )
-            new_matrix = ai_vecs.dot(rot_mat)
-
-            return np.c_[new_matrix, np.zeros(2)]
-        else:
-            return np.c_[ai_vecs, np.zeros(2)]
-
-    def _angle_between(self, p1, p2):
-        ang1 = np.arctan2(*p1[::-1])
-        ang2 = np.arctan2(*p2[::-1])
-
-        return np.rad2deg((ang2 - ang1) % (2 * np.pi))
-
-    def _get_orthoganol_basis(self, basis):
-        cross = np.cross(basis[0], basis[2])
-        ortho_basis = np.vstack(
-            [
-                basis[0] / np.linalg.norm(basis[0]),
-                cross / np.linalg.norm(cross),
-                basis[2] / np.linalg.norm(basis[2]),
-            ]
-        )
-
-        if np.linalg.det(ortho_basis) < 0:
-            ortho_basis[1] *= -1
-
-        return ortho_basis
-
-    def _make_planar(self):
-        matrix = deepcopy(self.slab_structure.lattice.matrix)
-        ortho_basis = self._get_orthoganol_basis(matrix)
-
-        op = SymmOp.from_rotation_and_translation(
-            ortho_basis, translation_vec=np.zeros(3)
-        )
-
-        planar_slab = deepcopy(self.slab_structure)
-        planar_slab.apply_operation(op)
-
-        planar_matrix = deepcopy(planar_slab.lattice.matrix)
-
-        new_inplane_vectors = self._rotate_vecs(
-            planar_matrix[0, :2], planar_matrix[1, :2]
-        )
-
-        new_matrix = np.vstack([new_inplane_vectors, planar_matrix[-1]])
-
-        planar_slab = Structure(
-            lattice=Lattice(matrix=new_matrix),
-            species=planar_slab.species,
-            coords=planar_slab.cart_coords,
-            coords_are_cartesian=True,
-            to_unit_cell=True,
-            site_properties=planar_slab.site_properties,
-        )
-
-        return planar_slab, new_inplane_vectors
 
     def _get_ewald_energy(self):
         slab = copy.deepcopy(self.slab_structure)
@@ -237,7 +175,7 @@ class Interface:
             self.substrate_supercell_uvw,
             self.substrate_supercell_scale_factors,
         ) = self._prepare_slab(
-            self.substrate.slab_structure_oriented,
+            self.substrate.slab_structure,
             self.sub_sl_vecs,
             self.substrate.uvw_basis,
         )
@@ -248,7 +186,7 @@ class Interface:
             self.film_supercell_uvw,
             self.film_supercell_scale_factors,
         ) = self._prepare_slab(
-            self.film.slab_structure_oriented,
+            self.film.slab_structure,
             self.film_sl_vecs,
             self.film.uvw_basis,
         )
@@ -2972,8 +2910,8 @@ class Interface:
         supercell_color="black",
         dpi=400,
     ):
-        sub_matrix = self.substrate.slab_structure_oriented.lattice.matrix
-        film_matrix = self.film.slab_structure_oriented.lattice.matrix
+        sub_matrix = self.substrate.slab_structure.lattice.matrix
+        film_matrix = self.film.slab_structure.lattice.matrix
         sub_sc_matrix = deepcopy(self.substrate_supercell.lattice.matrix)
         film_sc_matrix = deepcopy(self.film_supercell.lattice.matrix)
 
@@ -3006,12 +2944,12 @@ class Interface:
         sub_sl = coords.dot(sub_sc_matrix)
 
         sub_struc, sub_inv_matrix = self._generate_sc_for_interface_view(
-            struc=self.substrate.slab_structure_oriented,
+            struc=self.substrate.slab_structure,
             transformation_matrix=self.substrate_matrix,
         )
 
         film_struc, film_inv_matrix = self._generate_sc_for_interface_view(
-            struc=self.film.slab_structure_oriented,
+            struc=self.film.slab_structure,
             transformation_matrix=self.film_matrix,
         )
 

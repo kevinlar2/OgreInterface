@@ -39,6 +39,8 @@ from pymatgen.core.structure import Structure
 from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
 from pymatgen.util.coord import in_coord_list
 from pymatgen.core.surface import Slab
+from pymatgen.core.operations import SymmOp
+from pymatgen.io.vasp.inputs import Poscar
 
 from OgreInterface.prmitive_pymatgen import get_primitive_structure
 
@@ -305,6 +307,8 @@ class SlabGenerator:
         init_oriented_struc = initial_structure.copy()
         init_oriented_struc.make_supercell(basis)
 
+        Poscar(init_oriented_struc).write_file("POSCAR_ouc")
+
         primitive_oriented_struc = get_primitive_structure(
             init_oriented_struc,
             constrain_latt={
@@ -313,6 +317,8 @@ class SlabGenerator:
                 "beta": init_oriented_struc.lattice.beta,
             },
         )
+
+        Poscar(primitive_oriented_struc).write_file("POSCAR_prim")
 
         primitive_transformation = np.linalg.solve(
             init_oriented_struc.lattice.matrix,
@@ -341,16 +347,43 @@ class SlabGenerator:
         ):
             ortho_basis[1] *= -1
 
-        ortho_basis2 = cart_basis.dot(ortho_basis.T)
+        op = SymmOp.from_rotation_and_translation(
+            ortho_basis, translation_vec=np.zeros(3)
+        )
+
+        planar_oriented_struc = primitive_oriented_struc.copy()
+        planar_oriented_struc.apply_operation(op)
+
+        planar_matrix = copy.deepcopy(planar_oriented_struc.lattice.matrix)
 
         new_a, new_b, mat = reduce_vectors_zur_and_mcgill(
-            ortho_basis2[0, :2], ortho_basis2[1, :2]
+            planar_matrix[0, :2], planar_matrix[1, :2]
         )
+
+        planar_oriented_struc.make_supercell(mat)
+
+        a_norm = (
+            planar_oriented_struc.lattice.matrix[0]
+            / planar_oriented_struc.lattice.a
+        )
+        a_to_i = np.array(
+            [[a_norm[0], -a_norm[1], 0], [a_norm[1], a_norm[0], 0], [0, 0, 1]]
+        )
+
+        op2 = SymmOp.from_rotation_and_translation(
+            a_to_i.T, translation_vec=np.zeros(3)
+        )
+        planar_oriented_struc.apply_operation(op2)
+        final_matrix = copy.deepcopy(planar_oriented_struc.lattice.matrix)
+
+        # a_to_i = np.array([[a_norm[0], -a_norm[1]], [a_norm[1], a_norm[0]]])
+        # ai_vecs = orig_vecs.dot(a_to_i)
 
         final_basis = mat.dot(primitive_basis)
 
         oriented_primitive_struc = primitive_oriented_struc.copy()
         oriented_primitive_struc.make_supercell(mat)
+        oriented_primitive_struc.sort()
 
         for i, b in enumerate(final_basis):
             final_basis[i] = convert_float_to_int_vector(b)
@@ -360,8 +393,10 @@ class SlabGenerator:
 
         # When getting the OUC, lets return the most reduced
         # structure as possible to reduce calculations
+        self.inplane_vectors = final_matrix[:2]
+        self.basis = final_basis
         self.oriented_unit_cell = Structure.from_sites(
-            oriented_primitive_struc, to_unit_cell=True
+            planar_oriented_struc, to_unit_cell=True
         )
         self.max_normal_search = max_normal_search
         self.parent = initial_structure

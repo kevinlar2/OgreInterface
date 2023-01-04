@@ -3,10 +3,12 @@ from OgreInterface.generate import (
     SurfaceGenerator,
     TolarenceError,
 )
+from OgreInterface.surface_pymatgen import SlabGenerator
 from pymatgen.core.surface import get_symmetrically_distinct_miller_indices
 from pymatgen.core.structure import Structure
 from pymatgen.io.ase import AseAtomsAdaptor
 from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
+from pymatgen.analysis.interfaces.zsl import ZSLGenerator, reduce_vectors
 
 from ase import Atoms
 import numpy as np
@@ -173,24 +175,43 @@ class MillerSearch(object):
         films = []
 
         for inds in self.substrate_inds:
-            substrate = SurfaceGenerator(
-                bulk=self.substrate,
+            sg_sub = SlabGenerator(
+                initial_structure=self.substrate,
                 miller_index=inds,
-                layers=3,
-                vacuum=20,
-                generate_all=False,
+                min_slab_size=5,
+                min_vacuum_size=5,
+                lll_reduce=False,
+                center_slab=True,
+                in_unit_planes=True,
+                primitive=False,
+                max_normal_search=2,
+                reorient_lattice=False,
             )
-            substrates.append(substrate.slabs[0])
+            sub_inplane_vectors = sg_sub.inplane_vectors
+            sub_area = np.linalg.norm(
+                np.cross(sub_inplane_vectors[0], sub_inplane_vectors[1])
+            )
+            substrates.append([sub_inplane_vectors, sub_area])
 
         for inds in self.film_inds:
-            film = SurfaceGenerator(
-                bulk=self.film,
+            sg_film = SlabGenerator(
+                initial_structure=self.film,
                 miller_index=inds,
-                layers=3,
-                vacuum=20,
-                generate_all=False,
+                min_slab_size=5,
+                min_vacuum_size=5,
+                lll_reduce=False,
+                center_slab=True,
+                in_unit_planes=True,
+                primitive=False,
+                max_normal_search=2,
+                reorient_lattice=False,
             )
-            films.append(film.slabs[0])
+            film_inplane_vectors = sg_film.inplane_vectors
+            film_area = np.linalg.norm(
+                np.cross(film_inplane_vectors[0], film_inplane_vectors[1])
+            )
+
+            films.append([film_inplane_vectors, film_area])
 
         misfits = np.ones((len(substrates), len(films))) * np.nan
         areas = np.ones((len(substrates), len(films))) * np.nan
@@ -198,36 +219,45 @@ class MillerSearch(object):
 
         for i, substrate in enumerate(substrates):
             for j, film in enumerate(films):
-                try:
-                    interface = InterfaceGenerator(
-                        substrate=substrate,
-                        film=film,
-                        length_tol=self.length_tol,
-                        angle_tol=self.angle_tol,
-                        area_tol=self.area_tol,
-                        max_area=self.max_area,
-                    )
-                    strain = interface.strain
-                    angle_diff = interface.angle_diff
-                    strains = np.c_[strain, angle_diff]
-                    max_misfits = strains[
-                        :, np.argmax(np.abs(strains), axis=1)
-                    ]
-                    # print(max_misfits.shape)
-                    # print(strains.shape)
-                    # min_strain = np.min(np.abs(max_misfits))
-                    #  min_strain = np.min(np.abs(interface.area_ratio))
-                    #  min_strain = np.min(np.abs(strain))
-                    all_areas = interface.substrate_areas / np.sqrt(
-                        film.area * substrate.area
-                    )
-                    min_area_ind = np.argmin(all_areas)
-                    misfits[i, j] = np.max(strain[min_area_ind])
-                    areas[i, j] = all_areas[min_area_ind]
-                    counts[i, j] = len(max_misfits)
+                zsl = ZSLGenerator(
+                    max_area_ratio_tol=self.area_tol,
+                    max_angle_tol=self.angle_tol,
+                    max_length_tol=self.length_tol,
+                    max_area=self.max_area,
+                )
+                matches = zsl(film[0], substrate[0])
+                match_list = list(matches)
 
-                except TolarenceError:
-                    pass
+                if len(match_list) > 0:
+                    match_area = np.array(
+                        [match.match_area for match in match_list]
+                    )
+                    min_area_ind = np.argmin(match_area)
+
+                    min_area_match = match_list[min_area_ind]
+
+                    film_a_norm = np.linalg.norm(
+                        min_area_match.film_sl_vectors[0]
+                    )
+                    film_b_norm = np.linalg.norm(
+                        min_area_match.film_sl_vectors[1]
+                    )
+
+                    sub_a_norm = np.linalg.norm(
+                        min_area_match.substrate_sl_vectors[0]
+                    )
+                    sub_b_norm = np.linalg.norm(
+                        min_area_match.substrate_sl_vectors[1]
+                    )
+
+                    a_strain = (film_a_norm / sub_a_norm) - 1
+                    b_strain = (film_b_norm / sub_b_norm) - 1
+
+                    min_area = match_area[min_area_ind]
+                    min_strain = max(a_strain, b_strain)
+
+                    misfits[i, j] = min_strain
+                    areas[i, j] = min_area / np.sqrt(substrate[1] * film[1])
 
         self.misfits = np.round(misfits.T, 8)
         self.areas = areas.T
@@ -239,7 +269,7 @@ class MillerSearch(object):
         dpi=400,
         output="misfit_plot.png",
         fontsize=12,
-        figsize=(5.5, 4),
+        # figsize=(5.5, 4),
         labelrotation=20,
         substrate_label=None,
         film_label=None,
@@ -251,7 +281,6 @@ class MillerSearch(object):
                 for i in ylabel
             ]
             ylabels.append(f'({"".join(tmp_label)})')
-            # ylabels.append(str(tmp_label).replace('[', '(').replace(']', ')').replace(' ', ''))
 
         xlabels = []
         for xlabel in self.substrate_inds:
@@ -261,14 +290,13 @@ class MillerSearch(object):
             ]
             xlabels.append(f'({"".join(tmp_label)})')
 
-        # ylabels = [f'{i}'.replace('[', '(').replace(']', ')').replace(' ', '') for i in self.film_inds]
-        # xlabels = [f'{i}'.replace('[', '(').replace(']', ')').replace(' ', '') for i in self.substrate_inds]
-
         N = len(self.film_inds)
         M = len(self.substrate_inds)
         x, y = np.meshgrid(np.arange(M), np.arange(N))
         s = self.areas
         c = self.misfits * 100
+
+        figsize = (5 * (M / N), 4)
 
         fig, ax = plt.subplots(figsize=figsize, dpi=dpi)
         ax_divider = make_axes_locatable(ax)
@@ -289,7 +317,7 @@ class MillerSearch(object):
         else:
             ax.set_xlabel(substrate_label + " Miller Index", fontsize=fontsize)
 
-        R = 0.9 * s / np.nanmax(s) / 2
+        R = 0.85 * s / np.nanmax(s) / 2
         circles = [
             plt.Circle((i, j), radius=r, edgecolor="black", lw=3)
             for r, i, j in zip(R.flat, x.flat, y.flat)
@@ -327,6 +355,7 @@ class MillerSearch(object):
         )
         cbar.ax.yaxis.set_offset_position("left")
 
+        ax.set_aspect("equal")
         fig.tight_layout(pad=0.4)
         fig.savefig(output)
         plt.close(fig)

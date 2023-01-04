@@ -2,7 +2,7 @@
 This module will be used to construct the surfaces and interfaces used in this package.
 """
 from OgreInterface.surfaces import Surface, Interface
-from OgreInterface.surface_pmg import SlabGenerator
+from OgreInterface.surface_pymatgen import SlabGenerator
 
 from pymatgen.core.structure import Structure
 from pymatgen.analysis.structure_matcher import StructureMatcher
@@ -216,7 +216,7 @@ class SurfaceGenerator:
             min_slab_size=self.layers,
             min_vacuum_size=self.vacuum,
             in_unit_planes=True,
-            primitive=True,
+            primitive=False,
             lll_reduce=False,
             reorient_lattice=False,
             # max_normal_search=int(max(np.abs(self.miller_index))),
@@ -226,10 +226,10 @@ class SurfaceGenerator:
         # Convert miller index to a numpy array
         miller_index = np.array(self.miller_index)
 
-        # Check if the oriented cell has the proper basis
-        sg = self._check_oriented_cell(
-            slab_generator=sg, miller_index=miller_index
-        )
+        # # Check if the oriented cell has the proper basis
+        # sg = self._check_oriented_cell(
+        #     slab_generator=sg, miller_index=miller_index
+        # )
 
         # Determine if all possible terminations are generated
         if self.generate_all:
@@ -242,49 +242,8 @@ class SurfaceGenerator:
 
         # Loop through slabs to ensure that they are all properly oriented and reduced
         # Return Surface objects
-        for slab in slabs:
-            ouc = slab.oriented_unit_cell
-            prim_eqiv = ouc.copy()
-            transform = np.round(
-                from_2d_to_3d(
-                    get_2d_transform(
-                        ouc.lattice.matrix[:2], slab.lattice.matrix[:2]
-                    )
-                )
-            )
-            transform = self._get_reduced_basis(transform)
-            print(transform)
-            prim_eqiv.make_supercell(transform)
-            Poscar(prim_eqiv).write_file("POSCAR_prim_equiv")
-            print(
-                "slab --> ouc: ",
-                get_2d_transform(
-                    slab.lattice.matrix[:2], ouc.lattice.matrix[:2]
-                ),
-            )
-            print(
-                "ouc --> slab: ",
-                get_2d_transform(
-                    ouc.lattice.matrix[:2], slab.lattice.matrix[:2]
-                ),
-            )
-
-            print(np.round(ouc.lattice.matrix, 3))
-            print(np.round(slab.lattice.matrix, 3))
-            # Poscar(ouc).write_file("POSCAR_ouc")
-            # inv_mat = np.round(
-            #     np.linalg.solve(
-            #         ouc.lattice.matrix.T,
-            #         self.bulk_structure.lattice.matrix,
-            #     ),
-            #     4,
-            # ).astype(int)
-            # print(np.round(np.dot(inv_mat, slab.lattice.matrix), 3))
-            # slab2 = slab.copy()
-            # slab2.make_supercell(inv_mat)
-            # Poscar(slab2).write_file("POSCAR_2_test")
-            slab = slab.get_orthogonal_c_slab()
-            Poscar(slab).write_file("POSCAR_slab_compare")
+        for i, slab in enumerate(slabs):
+            # Poscar(slab.get_orthogonal_c_slab()).write_file(f"POSCAR_{i}")
             # Get the inital miller-indices of the lattice
             basis = self._get_reduced_basis(
                 basis=deepcopy(slab.lattice.matrix)

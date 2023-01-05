@@ -1,14 +1,9 @@
-from OgreInterface.generate import (
-    InterfaceGenerator,
-    SurfaceGenerator,
-    TolarenceError,
-)
-from OgreInterface.surface_pymatgen import SlabGenerator
-from pymatgen.core.surface import get_symmetrically_distinct_miller_indices
+from OgreInterface.generate import SurfaceGenerator
+
 from pymatgen.core.structure import Structure
 from pymatgen.io.ase import AseAtomsAdaptor
 from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
-from pymatgen.analysis.interfaces.zsl import ZSLGenerator, reduce_vectors
+from pymatgen.analysis.interfaces.zsl import ZSLGenerator
 
 from ase import Atoms
 import numpy as np
@@ -19,7 +14,7 @@ from matplotlib.colors import Normalize
 from mpl_toolkits.axes_grid1.axes_divider import make_axes_locatable
 
 from functools import reduce
-from itertools import combinations_with_replacement, product
+from itertools import product
 
 
 class MillerSearch(object):
@@ -175,17 +170,13 @@ class MillerSearch(object):
         films = []
 
         for inds in self.substrate_inds:
-            sg_sub = SlabGenerator(
-                initial_structure=self.substrate,
+            sg_sub = SurfaceGenerator(
+                bulk=self.substrate,
                 miller_index=inds,
-                min_slab_size=5,
-                min_vacuum_size=5,
-                lll_reduce=False,
-                center_slab=True,
-                in_unit_planes=True,
-                primitive=False,
-                max_normal_search=2,
-                reorient_lattice=False,
+                layers=5,
+                vacuum=10,
+                generate_all=False,
+                lazy=True,
             )
             sub_inplane_vectors = sg_sub.inplane_vectors
             sub_area = np.linalg.norm(
@@ -194,17 +185,13 @@ class MillerSearch(object):
             substrates.append([sub_inplane_vectors, sub_area])
 
         for inds in self.film_inds:
-            sg_film = SlabGenerator(
-                initial_structure=self.film,
+            sg_film = SurfaceGenerator(
+                bulk=self.film,
                 miller_index=inds,
-                min_slab_size=5,
-                min_vacuum_size=5,
-                lll_reduce=False,
-                center_slab=True,
-                in_unit_planes=True,
-                primitive=False,
-                max_normal_search=2,
-                reorient_lattice=False,
+                layers=5,
+                vacuum=10,
+                generate_all=False,
+                lazy=True,
             )
             film_inplane_vectors = sg_film.inplane_vectors
             film_area = np.linalg.norm(
@@ -273,6 +260,7 @@ class MillerSearch(object):
         labelrotation=20,
         substrate_label=None,
         film_label=None,
+        show_in_colab=False,
     ):
         ylabels = []
         for ylabel in self.film_inds:
@@ -308,14 +296,14 @@ class MillerSearch(object):
         )
 
         if film_label is None:
-            ax.set_ylabel("Film Miller Index", fontsize=fontsize)
-        else:
-            ax.set_ylabel(film_label + " Miller Index", fontsize=fontsize)
+            film_label = self.film.composition.reduced_formula
+
+        ax.set_ylabel(film_label + " Miller Index", fontsize=fontsize)
 
         if substrate_label is None:
-            ax.set_xlabel("Substrate Miller Index", fontsize=fontsize)
-        else:
-            ax.set_xlabel(substrate_label + " Miller Index", fontsize=fontsize)
+            substrate_label = self.substrate.composition.reduced_formula
+
+        ax.set_xlabel(substrate_label + " Miller Index", fontsize=fontsize)
 
         R = 0.85 * s / np.nanmax(s) / 2
         circles = [
@@ -357,8 +345,10 @@ class MillerSearch(object):
 
         ax.set_aspect("equal")
         fig.tight_layout(pad=0.4)
-        fig.savefig(output)
-        plt.close(fig)
+        fig.savefig(output, bbox_inches="tight")
+
+        if not show_in_colab:
+            plt.close(fig)
 
 
 if __name__ == "__main__":

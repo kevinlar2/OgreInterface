@@ -312,7 +312,8 @@ def get_primitive_structure(
                     coords_are_cartesian=False,
                 )
 
-                p = s.get_primitive_structure(
+                p = get_primitive_structure(
+                    s,
                     tolerance=tolerance,
                     use_site_props=use_site_props,
                     constrain_latt=constrain_latt,

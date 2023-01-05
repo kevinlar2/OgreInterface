@@ -2,14 +2,9 @@
 This module will be used to construct the surfaces and interfaces used in this package.
 """
 from pymatgen.core.structure import Structure
-from pymatgen.analysis.structure_matcher import StructureMatcher
 from pymatgen.core.lattice import Lattice
-from pymatgen.core.surface import SlabGenerator
 from pymatgen.io.ase import AseAtomsAdaptor
 from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
-from pymatgen.analysis.interfaces.zsl import ZSLGenerator, reduce_vectors
-from pymatgen.core.operations import SymmOp
-from pymatgen.analysis.ewald import EwaldSummation
 from pymatgen.transformations.standard_transformations import (
     PerturbStructureTransformation,
 )
@@ -21,17 +16,11 @@ from ase.neighborlist import neighbor_list
 from ase.ga.startgenerator import StartGenerator
 
 
-from OgreInterface.surfaces import Surface, Interface
-
-from itertools import combinations, combinations_with_replacement
-from tqdm import tqdm
+from itertools import combinations_with_replacement
 import numpy as np
 import random
 import time
 from copy import deepcopy
-import copy
-from functools import reduce
-from typing import Union, List, Optional
 
 
 class RandomInterfaceGenerator:

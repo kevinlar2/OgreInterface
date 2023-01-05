@@ -478,34 +478,35 @@ class SurfaceGenerator:
                 orthogonal_slabs.append(orthogonal_slab)
                 non_orthogonal_slabs.append(non_orthogonal_slab)
 
-        m = StructureMatcher(
-            ltol=0.1, stol=0.1, primitive_cell=False, scale=False
-        )
+        # TODO work on StructureMatcher when there is an inversion symmetry
+        # m = StructureMatcher(
+        #     ltol=0.1, stol=0.1, primitive_cell=False, scale=False
+        # )
 
-        unique_orthogonal_slabs = []
-        for g in m.group_structures(orthogonal_slabs):
-            unique_orthogonal_slabs.append(g[0])
+        # unique_orthogonal_slabs = []
+        # for g in m.group_structures(orthogonal_slabs):
+        #     unique_orthogonal_slabs.append(g[0])
 
-        match = StructureMatcher(
-            ltol=0.1, stol=0.1, primitive_cell=False, scale=False
-        )
-        unique_orthogonal_slabs = [
-            g[0] for g in match.group_structures(unique_orthogonal_slabs)
-        ]
-        unique_non_orthogonal_slabs = [
-            non_orthogonal_slabs[slab.sort_index]
-            for slab in unique_orthogonal_slabs
-        ]
+        # match = StructureMatcher(
+        #     ltol=0.1, stol=0.1, primitive_cell=False, scale=False
+        # )
+        # unique_orthogonal_slabs = [
+        #     g[0] for g in match.group_structures(unique_orthogonal_slabs)
+        # ]
+        # unique_non_orthogonal_slabs = [
+        #     non_orthogonal_slabs[slab.sort_index]
+        #     for slab in unique_orthogonal_slabs
+        # ]
 
         surfaces = []
 
         # Loop through slabs to ensure that they are all properly oriented and reduced
         # Return Surface objects
-        for i, slab in enumerate(unique_orthogonal_slabs):
+        for i, slab in enumerate(orthogonal_slabs):
             # Create the Surface object
             surface = Surface(
                 orthogonal_slab=slab,
-                non_orthogonal_slab=unique_non_orthogonal_slabs[i],
+                non_orthogonal_slab=non_orthogonal_slabs[i],
                 primitive_oriented_bulk=self.oriented_bulk_atoms,
                 conventional_bulk=self.bulk_structure,
                 miller_index=self.miller_index,

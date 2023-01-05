@@ -3,7 +3,7 @@ import torch.nn as nn
 
 from typing import Union, Dict, Optional
 
-from scatter import scatter_add
+from OgreInterface.score_function.scatter import scatter_add
 import numpy as np
 
 

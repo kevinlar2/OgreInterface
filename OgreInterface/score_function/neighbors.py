@@ -213,3 +213,7 @@ class TorchNeighborList(NeighborListTransform):
                 torch.cartesian_prod(o, o, r3),
             ]
         )
+
+
+if __name__ == "__main__":
+    pass

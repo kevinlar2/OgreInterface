@@ -2,6 +2,7 @@ from ase.neighborlist import neighbor_list
 from typing import Dict, List
 from ase import Atoms
 import torch
+from OgreInterface.score_function.neighbors import TorchNeighborList
 
 
 def _atoms_collate_fn(batch):
@@ -50,7 +51,7 @@ def _atoms_collate_fn(batch):
     return coll_batch
 
 
-def generate_dict(
+def generate_dict_ase(
     atoms: List[Atoms], cutoff: float, charge_dict: Dict[str, float]
 ) -> Dict:
     inputs_batch = []
@@ -95,8 +96,57 @@ def generate_dict(
     return inputs
 
 
+def generate_dict_torch(
+    atoms: List[Atoms], cutoff: float, charge_dict: Dict[str, float]
+) -> Dict:
+
+    tn = TorchNeighborList(cutoff=cutoff)
+    inputs_batch = []
+
+    for at_idx, atom in enumerate(atoms):
+        charges = torch.Tensor(
+            [charge_dict[s] for s in atom.get_chemical_symbols()]
+        )
+        R = torch.from_numpy(atom.get_positions())
+        cell = torch.from_numpy(atom.get_cell().array)
+
+        input_dict = {
+            "n_atoms": torch.tensor([atom.get_global_number_of_atoms()]),
+            "Z": torch.from_numpy(atom.get_atomic_numbers()),
+            "R": R,
+            "cell": cell,
+            "pbc": torch.from_numpy(atom.get_pbc()),
+            "partial_charges": charges,
+        }
+
+        tn.forward(inputs=input_dict)
+
+        Rij = (
+            R[input_dict["idx_j"]]
+            - R[input_dict["idx_i"]]
+            + input_dict["offsets"]
+        )
+
+        input_dict["Rij"] = Rij
+        input_dict["cell"] = input_dict["cell"].view(-1, 3, 3)
+        input_dict["pbc"] = input_dict["pbc"].view(-1, 3)
+
+        inputs_batch.append(input_dict)
+
+    inputs = _atoms_collate_fn(inputs_batch)
+
+    for k, v in inputs.items():
+        if "float" in str(v.dtype):
+            inputs[k] = v.to(dtype=torch.float32)
+        if "idx" in k:
+            inputs[k] = v.to(dtype=torch.long)
+
+    return inputs
+
+
 if __name__ == "__main__":
     from ase.build import bulk
 
     InAs = bulk("InAs", crystalstructure="zincblende", a=5.6)
-    print(generate_dict(InAs, cutoff=10.0))
+    charge_dict = {"In": 0.0, "As": 0.0}
+    print(generate_dict_torch([InAs], cutoff=10.0, charge_dict=charge_dict))

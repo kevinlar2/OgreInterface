@@ -106,6 +106,9 @@ class Surface:
 
         return init_structure, init_atoms
 
+    def write_file(self, output="POSCAR_slab"):
+        Poscar(self.orthogonal_slab_structure).write_file(output)
+
     def remove_layers(self, num_layers, top=False, atol=None):
         group_inds_conv, _ = group_layers(
             structure=self.orthogonal_slab_structure, atol=atol
@@ -283,25 +286,22 @@ class Interface:
 
             frac_shift = self.interface.lattice.get_fractional_coords(shift)
 
-        film_ind = np.where(
-            (self.interface.frac_coords[:, -1] > self.interface_height)
-            & (self.interface.frac_coords[:, -1] < 0.99)
-        )[0]
+        film_ind = np.where(self.interface.site_properties["is_film"])[0]
 
         if inplace:
             self.interface.translate_sites(
                 film_ind,
                 frac_shift,
             )
-            self.film_part.translate_sites(
-                range(len(self.film_part)),
+            self.strained_film.translate_sites(
+                range(len(self.strained_film)),
                 frac_shift,
             )
             self.interface_height += frac_shift[-1] / 2
             self.interfacial_distance += shift[-1]
 
         else:
-            shifted_interface = copy.copy(self.interface)
+            shifted_interface = self.interface.copy()
             shifted_interface.translate_sites(
                 film_ind,
                 frac_shift,
@@ -341,6 +341,7 @@ class Interface:
         strained_film = self.strained_film
 
         sub_matrix = strained_sub.lattice.matrix
+        sub_c = deepcopy(sub_matrix[-1])
 
         strained_sub_coords = deepcopy(strained_sub.cart_coords)
         strained_film_coords = deepcopy(strained_film.cart_coords)
@@ -365,7 +366,7 @@ class Interface:
         frac_int_distance = self.interfacial_distance / interface_c_len
 
         interface_matrix = np.vstack(
-            [sub_matrix[:2], interface_c_len * (sub_matrix[-1] / sub_c_len)]
+            [sub_matrix[:2], interface_c_len * (sub_c / sub_c_len)]
         )
         interface_lattice = Lattice(matrix=interface_matrix)
         interface_inv_matrix = interface_lattice.inv_matrix
@@ -405,6 +406,7 @@ class Interface:
             coords_are_cartesian=False,
             site_properties=interface_site_properties,
         )
+        interface_struc.sort()
 
         if self.center:
             interface_struc.translate_sites(

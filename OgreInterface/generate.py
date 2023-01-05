@@ -221,8 +221,6 @@ class SurfaceGenerator:
         init_oriented_struc = bulk.copy()
         init_oriented_struc.make_supercell(basis)
 
-        Poscar(init_oriented_struc).write_file("POSCAR_init")
-
         primitive_oriented_struc = get_primitive_structure(
             init_oriented_struc,
             constrain_latt={
@@ -231,8 +229,6 @@ class SurfaceGenerator:
                 "beta": init_oriented_struc.lattice.beta,
             },
         )
-
-        Poscar(primitive_oriented_struc).write_file("POSCAR_prim")
 
         primitive_transformation = np.linalg.solve(
             init_oriented_struc.lattice.matrix,

@@ -3,16 +3,19 @@ This module will be used to construct the surfaces and interfaces used in this p
 """
 from OgreInterface.surfaces import Surface, Interface
 from OgreInterface.surface_pymatgen import SlabGenerator
+from OgreInterface.utils import (
+    get_reduced_basis,
+    reduce_vectors_zur_and_mcgill,
+    get_primitive_structure,
+)
 
 from pymatgen.core.structure import Structure
 from pymatgen.analysis.structure_matcher import StructureMatcher
 from pymatgen.core.lattice import Lattice
 from pymatgen.io.vasp.inputs import Poscar
-
-# from pymatgen.core.surface import SlabGenerator
 from pymatgen.io.ase import AseAtomsAdaptor
 from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
-from pymatgen.analysis.interfaces.zsl import ZSLGenerator, reduce_vectors
+from pymatgen.analysis.interfaces.zsl import ZSLGenerator
 from pymatgen.core.operations import SymmOp
 from pymatgen.analysis.ewald import EwaldSummation
 from pymatgen.analysis.interfaces.coherent_interfaces import (
@@ -22,11 +25,15 @@ from pymatgen.analysis.interfaces.coherent_interfaces import (
 
 from tqdm import tqdm
 import numpy as np
+import math
 from copy import deepcopy
 from functools import reduce
 from typing import Union, List, Optional
-from itertools import combinations
+from itertools import combinations, product
 from ase import Atoms
+
+from scipy.cluster.hierarchy import fcluster, linkage
+from scipy.spatial.distance import squareform
 
 
 class TolarenceError(RuntimeError):
@@ -64,6 +71,12 @@ class SurfaceGenerator:
         self.vacuum = vacuum
         self.generate_all = generate_all
         self.filter_ionic_slabs = filter_ionic_slabs
+        (
+            self.oriented_bulk_structure,
+            self.oriented_bulk_atoms,
+            self.uvw_basis,
+            self.inplane_vectors,
+        ) = self._get_oriented_bulk_structure()
         self.slabs = self._generate_slabs()
 
     @classmethod
@@ -103,6 +116,323 @@ class SurfaceGenerator:
 
         return conventional_structure, conventional_atoms
 
+    def _get_oriented_bulk_structure(self):
+        bulk = self.bulk_structure
+        lattice = bulk.lattice
+        recip_lattice = bulk.lattice.reciprocal_lattice_crystallographic
+        miller_index = self.miller_index
+
+        sg = SpacegroupAnalyzer(bulk)
+        bulk.add_site_property(
+            "bulk_wyckoff", sg.get_symmetry_dataset()["wyckoffs"]
+        )
+        bulk.add_site_property(
+            "bulk_equivalent",
+            sg.get_symmetry_dataset()["equivalent_atoms"].tolist(),
+        )
+
+        intercepts = np.array([1 / i if i != 0 else 0 for i in miller_index])
+        non_zero_points = np.where(intercepts != 0)[0]
+
+        d_hkl = lattice.d_hkl(miller_index)
+        normal_vector = recip_lattice.get_cartesian_coords(miller_index)
+        normal_vector /= np.linalg.norm(normal_vector)
+
+        if len(non_zero_points) == 1:
+            basis = np.eye(3)
+            dot_products = basis.dot(normal_vector)
+            sort_inds = np.argsort(dot_products)
+            basis = basis[sort_inds]
+
+            if np.linalg.det(basis) < 0:
+                basis = basis[[1, 0, 2]]
+
+            basis = basis
+
+        if len(non_zero_points) == 2:
+            points = intercepts * np.eye(3)
+            vec1 = points[non_zero_points[1]] - points[non_zero_points[0]]
+            vec2 = np.eye(3)[intercepts == 0]
+
+            basis = np.vstack([vec1, vec2])
+
+        if len(non_zero_points) == 3:
+            points = intercepts * np.eye(3)
+            possible_vecs = []
+            for center_inds in [[0, 1, 2], [1, 0, 2], [2, 0, 1]]:
+                vec1 = (
+                    points[non_zero_points[center_inds[1]]]
+                    - points[non_zero_points[center_inds[0]]]
+                )
+                vec2 = (
+                    points[non_zero_points[center_inds[2]]]
+                    - points[non_zero_points[center_inds[0]]]
+                )
+                cart_vec1 = lattice.get_cartesian_coords(vec1)
+                cart_vec2 = lattice.get_cartesian_coords(vec2)
+                angle = np.arccos(
+                    np.dot(cart_vec1, cart_vec2)
+                    / (np.linalg.norm(cart_vec1) * np.linalg.norm(cart_vec2))
+                )
+                possible_vecs.append((vec1, vec2, angle))
+
+            chosen_vec1, chosen_vec2, angle = min(
+                possible_vecs, key=lambda x: x[-1]
+            )
+
+            basis = np.vstack([chosen_vec1, chosen_vec2])
+
+        basis = get_reduced_basis(basis)
+
+        if len(basis) == 2:
+            max_normal_search = 2
+
+            index_range = sorted(
+                reversed(range(-max_normal_search, max_normal_search + 1)),
+                key=lambda x: abs(x),
+            )
+            candidates = []
+            for uvw in product(index_range, index_range, index_range):
+                if (not any(uvw)) or abs(
+                    np.linalg.det(np.vstack([basis, uvw]))
+                ) < 1e-8:
+                    continue
+
+                vec = lattice.get_cartesian_coords(uvw)
+                proj = np.abs(np.dot(vec, normal_vector) - d_hkl)
+                vec_length = np.linalg.norm(vec)
+                cosine = np.dot(vec / vec_length, normal_vector)
+                candidates.append((uvw, cosine, vec_length, proj))
+                if abs(abs(cosine) - 1) < 1e-8:
+                    # If cosine of 1 is found, no need to search further.
+                    break
+            # We want the indices with the maximum absolute cosine,
+            # but smallest possible length.
+            uvw, cosine, l, diff = max(
+                candidates, key=lambda x: (-x[3], x[1], -x[2])
+            )
+            basis = np.vstack([basis, uvw])
+
+        init_oriented_struc = bulk.copy()
+        init_oriented_struc.make_supercell(basis)
+
+        primitive_oriented_struc = get_primitive_structure(
+            init_oriented_struc,
+            constrain_latt={
+                "c": init_oriented_struc.lattice.c,
+                "alpha": init_oriented_struc.lattice.alpha,
+                "beta": init_oriented_struc.lattice.beta,
+            },
+        )
+
+        primitive_transformation = np.linalg.solve(
+            init_oriented_struc.lattice.matrix,
+            primitive_oriented_struc.lattice.matrix,
+        )
+
+        primitive_basis = basis.dot(primitive_transformation)
+        cart_basis = primitive_oriented_struc.lattice.matrix
+
+        if np.linalg.det(cart_basis) < 0:
+            ab_switch = np.array([[0, 1, 0], [1, 0, 0], [0, 0, 1]])
+            primitive_oriented_struc.make_supercell(ab_switch)
+            primitive_basis = ab_switch.dot(primitive_basis)
+            cart_basis = primitive_oriented_struc.lattice.matrix
+
+        cross_ab = np.cross(cart_basis[0], cart_basis[1])
+        cross_ab /= np.linalg.norm(cross_ab)
+        cross_ac = np.cross(cart_basis[0], cross_ab)
+        cross_ac /= np.linalg.norm(cross_ac)
+
+        ortho_basis = np.vstack(
+            [
+                cart_basis[0] / np.linalg.norm(cart_basis[0]),
+                cross_ac,
+                cross_ab,
+            ]
+        )
+
+        to_planar_operation = SymmOp.from_rotation_and_translation(
+            ortho_basis, translation_vec=np.zeros(3)
+        )
+
+        planar_oriented_struc = primitive_oriented_struc.copy()
+        planar_oriented_struc.apply_operation(to_planar_operation)
+
+        planar_matrix = deepcopy(planar_oriented_struc.lattice.matrix)
+
+        new_a, new_b, mat = reduce_vectors_zur_and_mcgill(
+            planar_matrix[0, :2], planar_matrix[1, :2]
+        )
+
+        planar_oriented_struc.make_supercell(mat)
+
+        a_norm = (
+            planar_oriented_struc.lattice.matrix[0]
+            / planar_oriented_struc.lattice.a
+        )
+        a_to_i = np.array(
+            [[a_norm[0], -a_norm[1], 0], [a_norm[1], a_norm[0], 0], [0, 0, 1]]
+        )
+
+        a_to_i_operation = SymmOp.from_rotation_and_translation(
+            a_to_i.T, translation_vec=np.zeros(3)
+        )
+        planar_oriented_struc.apply_operation(a_to_i_operation)
+        planar_oriented_struc.sort()
+        planar_oriented_atoms = AseAtomsAdaptor().get_atoms(
+            planar_oriented_struc
+        )
+
+        final_matrix = deepcopy(planar_oriented_struc.lattice.matrix)
+
+        final_basis = mat.dot(primitive_basis)
+
+        oriented_primitive_struc = primitive_oriented_struc.copy()
+        oriented_primitive_struc.make_supercell(mat)
+        oriented_primitive_struc.sort()
+
+        final_basis = get_reduced_basis(final_basis)
+        inplane_vectors = final_matrix[:2]
+
+        return (
+            planar_oriented_struc,
+            planar_oriented_atoms,
+            final_basis,
+            inplane_vectors,
+        )
+
+    def _calculate_possible_shifts(self, tol: float = 0.1):
+        frac_coords = self.oriented_bulk_structure.frac_coords
+        n = len(frac_coords)
+
+        if n == 1:
+            # Clustering does not work when there is only one data point.
+            shift = frac_coords[0][2] + 0.5
+            return [shift - math.floor(shift)]
+
+        # We cluster the sites according to the c coordinates. But we need to
+        # take into account PBC. Let's compute a fractional c-coordinate
+        # distance matrix that accounts for PBC.
+        dist_matrix = np.zeros((n, n))
+        h = self.oriented_bulk_structure.lattice.matrix[-1, -1]
+        # Projection of c lattice vector in
+        # direction of surface normal.
+        for i, j in combinations(list(range(n)), 2):
+            if i != j:
+                cdist = frac_coords[i][2] - frac_coords[j][2]
+                cdist = abs(cdist - round(cdist)) * h
+                dist_matrix[i, j] = cdist
+                dist_matrix[j, i] = cdist
+
+        condensed_m = squareform(dist_matrix)
+        z = linkage(condensed_m)
+        clusters = fcluster(z, tol, criterion="distance")
+
+        # Generate dict of cluster# to c val - doesn't matter what the c is.
+        c_loc = {c: frac_coords[i][2] for i, c in enumerate(clusters)}
+
+        # Put all c into the unit cell.
+        possible_c = [c - math.floor(c) for c in sorted(c_loc.values())]
+
+        # Calculate the shifts
+        nshifts = len(possible_c)
+        shifts = []
+        for i in range(nshifts):
+            if i == nshifts - 1:
+                # There is an additional shift between the first and last c
+                # coordinate. But this needs special handling because of PBC.
+                shift = (possible_c[0] + 1 + possible_c[i]) * 0.5
+                if shift > 1:
+                    shift -= 1
+            else:
+                shift = (possible_c[i] + possible_c[i + 1]) * 0.5
+            shifts.append(shift - math.floor(shift))
+        shifts = sorted(shifts)
+
+        return shifts
+
+    def get_slab(self, shift=0, tol: float = 0.1, energy=None):
+        """
+        This method takes in shift value for the c lattice direction and
+        generates a slab based on the given shift. You should rarely use this
+        method. Instead, it is used by other generation algorithms to obtain
+        all slabs.
+
+        Arg:
+            shift (float): A shift value in Angstrom that determines how much a
+                slab should be shifted.
+            tol (float): Tolerance to determine primitive cell.
+            energy (float): An energy to assign to the slab.
+
+        Returns:
+            (Slab) A Slab object with a particular shifted oriented unit cell.
+        """
+        slab_base = self.oriented_bulk_structure.copy()
+        slab_base.translate_sites(
+            indices=range(len(slab_base)),
+            vector=[0, 0, -shift],
+            frac_coords=True,
+            to_unit_cell=True,
+        )
+        slab_base.make_supercell([1, 1, self.layers])
+        slab_base_c = slab_base.lattice.c
+
+        vacuum_matrix = deepcopy(slab_base.lattice.matrix)
+        c_norm = vacuum_matrix[-1] / np.linalg.norm(vacuum_matrix[-1])
+        vacuum_scale = self.vacuum / c_norm[-1]
+        vacuum_matrix[-1] += vacuum_scale * c_norm
+
+        non_orthogonal_slab = Structure(
+            lattice=Lattice(matrix=vacuum_matrix),
+            species=slab_base.species,
+            coords=slab_base.cart_coords,
+            coords_are_cartesian=True,
+            to_unit_cell=True,
+            site_properties=slab_base.site_properties,
+        )
+        non_orthogonal_slab.sort()
+        non_orthogonal_min_atom = non_orthogonal_slab.frac_coords[
+            np.argmin(non_orthogonal_slab.frac_coords[:, -1])
+        ]
+        non_orthogonal_slab.translate_sites(
+            indices=range(len(non_orthogonal_slab)),
+            vector=[
+                non_orthogonal_min_atom[0],
+                non_orthogonal_min_atom[1],
+                0.5 - (0.5 * slab_base_c / (vacuum_scale + slab_base_c)),
+            ],
+            frac_coords=True,
+            to_unit_cell=True,
+        )
+
+        a, b, c = non_orthogonal_slab.lattice.matrix
+        new_c = np.array([0.0, 0.0, 1.0])
+        new_c = np.dot(c, new_c) * new_c
+
+        orthogonal_matrix = np.vstack([a, b, new_c])
+        orthogonal_slab = Structure(
+            lattice=Lattice(matrix=orthogonal_matrix),
+            species=non_orthogonal_slab.species,
+            coords=non_orthogonal_slab.cart_coords,
+            coords_are_cartesian=True,
+            to_unit_cell=True,
+            site_properties=non_orthogonal_slab.site_properties,
+        )
+        orthogonal_slab.sort()
+        orthogonal_min_atom = orthogonal_slab.frac_coords[
+            np.argmin(orthogonal_slab.frac_coords[:, -1])
+        ]
+        orthogonal_min_atom[-1] = 0
+        orthogonal_slab.translate_sites(
+            indices=range(len(orthogonal_slab)),
+            vector=-orthogonal_min_atom,
+            frac_coords=True,
+            to_unit_cell=True,
+        )
+
+        return orthogonal_slab, non_orthogonal_slab
+
     # def _get_ewald_energy(self, slab):
     #     slab = deepcopy(slab)
     #     bulk = deepcopy(self.pmg_structure)
@@ -112,95 +442,6 @@ class SurfaceGenerator:
     #     E_bulk = EwaldSummation(bulk).total_energy
     #     return E_slab, E_bulk
 
-    def _float_gcd(self, a, b, rtol=1e-05, atol=1e-08):
-        t = min(abs(a), abs(b))
-        while abs(b) > rtol * t + atol:
-            a, b = b, a % b
-        return a
-
-    def _check_oriented_cell(
-        self, slab_generator: SlabGenerator, miller_index: np.ndarray
-    ):
-        """
-        This function is used to ensure that the c-vector of the oriented bulk
-        unit cell in the SlabGenerator matches with the given miller index.
-        This is required to properly determine the in-plane lattice vectors for
-        the epitaxial match.
-
-        Parameters:
-            slab_generator (SlabGenerator): SlabGenerator object from PyMatGen
-            miller_index (np.ndarray): Miller index of the plane
-
-        Returns:
-            SlabGenerator with proper orientation of c-vector
-        """
-        if np.isclose(
-            slab_generator.slab_scale_factor[-1],
-            -miller_index / np.min(np.abs(miller_index[miller_index != 0])),
-        ).all():
-            slab_generator.slab_scale_factor *= -1
-            single = self.bulk_structure.copy()
-            single.make_supercell(slab_generator.slab_scale_factor)
-            slab_generator.oriented_unit_cell = Structure.from_sites(
-                single, to_unit_cell=True
-            )
-
-        return slab_generator
-
-    def _get_reduced_basis(self, basis: np.ndarray):
-        """
-        This function is used to find the miller indices of the slab structure
-        basis vectors in their most reduced form. i.e.
-
-        |  2  4  0 |     | 1  2  0 |
-        |  0 -2  4 | ==> | 0 -1  2 |
-        | 10 10 10 |     | 1  1  1 |
-
-        Parameters:
-            basis (np.ndarray): 3x3 matrix defining the lattice vectors
-
-        Returns:
-            Reduced integer basis in the form of miller indices
-        """
-        basis /= np.linalg.norm(basis, axis=1)[:, None]
-
-        for i, b in enumerate(basis):
-            abs_b = np.abs(b)
-            basis[i] /= abs_b[abs_b > 0.001].min()
-            basis[i] /= np.abs(reduce(self._float_gcd, basis[i]))
-
-        return basis
-
-    def _get_properly_oriented_slab(
-        self, basis: np.ndarray, miller_index: np.ndarray, slab: Structure
-    ):
-        """
-        This function is used to flip the structure if the c-vector and miller
-        index are negatives of each other. This happens during the process of
-        making the primitive slab. To resolve this, the structure will be
-        rotated 180 degrees.
-
-        Parameters:
-            basis (np.ndarray): 3x3 matrix defining the lattice vectors
-            miller_index (np.ndarray): Miller index of surface
-            slab (Structure): PyMatGen Structure object
-
-        Return:
-            Properly oriented slab
-        """
-        if (
-            basis[-1]
-            == -miller_index / np.min(np.abs(miller_index[miller_index != 0]))
-        ).all():
-            operation = SymmOp.from_origin_axis_angle(
-                origin=[0.5, 0.5, 0.5],
-                axis=[1, 1, 0],
-                angle=180,
-            )
-            slab.apply_operation(operation, fractional=True)
-
-        return slab
-
     def _generate_slabs(self):
         """
         This function is used to generate slab structures with all unique
@@ -209,44 +450,60 @@ class SurfaceGenerator:
         Returns:
             A list of Surface classes
         """
-        # Initialize the SlabGenerator
-        sg = SlabGenerator(
-            initial_structure=self.bulk_structure,
-            miller_index=self.miller_index,
-            min_slab_size=self.layers,
-            min_vacuum_size=self.vacuum,
-            in_unit_planes=True,
-            primitive=False,
-            lll_reduce=False,
-            reorient_lattice=False,
-            # max_normal_search=int(max(np.abs(self.miller_index))),
-            # max_normal_search=5,
-            center_slab=True,
+        # Determine if all possible terminations are generated
+        possible_shifts = self._calculate_possible_shifts()
+        orthogonal_slabs = []
+        non_orthogonal_slabs = []
+        if not self.generate_all:
+            orthogonal_slab, non_orthogonal_slab = self.get_slab(
+                shift=possible_shifts[0]
+            )
+            orthogonal_slab.sort_index = 0
+            non_orthogonal_slab.sort_index = 0
+            orthogonal_slabs.append(orthogonal_slab)
+            non_orthogonal_slabs.append(non_orthogonal_slab)
+        else:
+            for i, possible_shift in enumerate(possible_shifts):
+                orthogonal_slab, non_orthogonal_slab = self.get_slab(
+                    shift=possible_shift
+                )
+                orthogonal_slab.sort_index = i
+                non_orthogonal_slab.sort_index = i
+                orthogonal_slabs.append(orthogonal_slab)
+                non_orthogonal_slabs.append(non_orthogonal_slab)
+
+        m = StructureMatcher(
+            ltol=0.1, stol=0.1, primitive_cell=False, scale=False
         )
 
-        # Determine if all possible terminations are generated
-        if self.generate_all:
-            slabs = sg.get_slabs(tol=0.25)
-        else:
-            possible_shifts = sg._calculate_possible_shifts()
-            slabs = [sg.get_slab(shift=possible_shifts[0])]
+        unique_orthogonal_slabs = []
+        for g in m.group_structures(orthogonal_slabs):
+            unique_orthogonal_slabs.append(g[0])
+
+        match = StructureMatcher(
+            ltol=0.1, stol=0.1, primitive_cell=False, scale=False
+        )
+        unique_orthogonal_slabs = [
+            g[0] for g in match.group_structures(unique_orthogonal_slabs)
+        ]
+        unique_non_orthogonal_slabs = [
+            non_orthogonal_slabs[slab.sort_index]
+            for slab in unique_orthogonal_slabs
+        ]
 
         surfaces = []
 
         # Loop through slabs to ensure that they are all properly oriented and reduced
         # Return Surface objects
-        for i, slab in enumerate(slabs):
-            c_slab = slab.get_orthogonal_c_slab()
-            c_slab.sort()
-
+        for i, slab in enumerate(unique_orthogonal_slabs):
             # Create the Surface object
             surface = Surface(
-                slab=c_slab,
+                slab=slab,
                 bulk=self.bulk_structure,
                 miller_index=self.miller_index,
                 layers=self.layers,
                 vacuum=self.vacuum,
-                uvw_basis=sg.basis,
+                uvw_basis=self.uvw_basis,
             )
             surfaces.append(surface)
 

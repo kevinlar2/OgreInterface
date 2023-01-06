@@ -181,6 +181,12 @@ class IonicSurfaceMatcher:
         born_adh_energy = (
             sub_born_energy + film_born_energy
         ) - interface_born_energy
+        both = (
+            sub_coulomb_energy
+            + film_coulomb_energy
+            + sub_born_energy
+            + film_born_energy
+        ) - (interface_coulomb_energy + interface_born_energy)
 
         X_plot, Y_plot, Z_born = self._get_interpolated_data(
             self.X, self.Y, born_adh_energy
@@ -227,8 +233,8 @@ class IonicSurfaceMatcher:
             ax=ax3,
             X=X_plot,
             Y=Y_plot,
-            # Z=Z_born + (1 / self.d_interface**2) * Z_coulomb,
-            Z=Z_born + Z_coulomb,
+            Z=Z_born + (1 / self.d_interface) * Z_coulomb,
+            # Z=Z_born + Z_coulomb,
             borders=borders,
             cmap=cmap,
             fontsize=fontsize,

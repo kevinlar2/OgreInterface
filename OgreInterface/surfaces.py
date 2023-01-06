@@ -188,7 +188,7 @@ class Interface:
         self.interface_height = None
         self.strained_sub = self.substrate_supercell
         self.strained_film = self._strain_and_orient_film()
-        self.interface = self._stack_interface()
+        self.interface, self.sub_part, self.film_part = self._stack_interface()
 
     @property
     def area(self):
@@ -293,8 +293,8 @@ class Interface:
                 film_ind,
                 frac_shift,
             )
-            self.strained_film.translate_sites(
-                range(len(self.strained_film)),
+            self.film_part.translate_sites(
+                range(len(self.film_part)),
                 frac_shift,
             )
             self.interface_height += frac_shift[-1] / 2
@@ -415,7 +415,16 @@ class Interface:
             )
             self.interface_height = 0.5
 
-        return interface_struc
+        film_inds = np.where(interface_struc.site_properties["is_film"])[0]
+        sub_inds = np.where(interface_struc.site_properties["is_sub"])[0]
+
+        film_part = interface_struc.copy()
+        film_part.remove_sites(sub_inds)
+
+        sub_part = interface_struc.copy()
+        sub_part.remove_sites(film_inds)
+
+        return interface_struc, sub_part, film_part
 
     @property
     def _metallic_elements(self):

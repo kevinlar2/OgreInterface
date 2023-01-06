@@ -31,6 +31,7 @@ class MillerSearch(object):
         angle_tol=0.01,
         length_tol=0.01,
         max_area=500,
+        convert_to_conventional=True,
     ):
         if type(substrate) == str:
             self.substrate = Structure.from_file(substrate)
@@ -60,6 +61,7 @@ class MillerSearch(object):
         self.angle_tol = angle_tol
         self.length_tol = length_tol
         self.max_area = max_area
+        self.convert_to_conventional = convert_to_conventional
         self.substrate_inds = self._get_unique_miller_indices(
             self.substrate, self.max_substrate_index
         )
@@ -177,6 +179,7 @@ class MillerSearch(object):
                 vacuum=10,
                 generate_all=False,
                 lazy=True,
+                convert_to_conventional=self.convert_to_conventional,
             )
             sub_inplane_vectors = sg_sub.inplane_vectors
             sub_area = np.linalg.norm(
@@ -192,6 +195,7 @@ class MillerSearch(object):
                 vacuum=10,
                 generate_all=False,
                 lazy=True,
+                convert_to_conventional=self.convert_to_conventional,
             )
             film_inplane_vectors = sg_film.inplane_vectors
             film_area = np.linalg.norm(

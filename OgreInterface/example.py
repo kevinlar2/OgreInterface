@@ -15,7 +15,7 @@ ms = MillerSearch(
     max_area=200,
 )
 ms.run_scan()
-ms.plot_misfits(fontsize=14, labelrotation=-20)
+ms.plot_misfits(fontsize=14, labelrotation=-20, figure_scale=1)
 
 # Generate a list of InAs(111) Surface classes with different terminations
 subs = SurfaceGenerator.from_file(

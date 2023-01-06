@@ -57,6 +57,7 @@ class SurfaceGenerator:
         filter_ionic_slabs: bool = False,
         lazy: bool = False,
     ):
+        self.convert_to_conventional = convert_to_conventional
         self.bulk_structure, self.bulk_atoms = self._get_bulk(
             atoms_or_struc=bulk
         )
@@ -64,7 +65,6 @@ class SurfaceGenerator:
         self.miller_index = miller_index
         self.layers = layers
         self.vacuum = vacuum
-        self.convert_to_conventional = convert_to_conventional
         self.generate_all = generate_all
         self.filter_ionic_slabs = filter_ionic_slabs
         self.lazy = lazy

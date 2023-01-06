@@ -13,6 +13,7 @@ ms = MillerSearch(
     angle_tol=0.01,
     area_tol=0.01,
     max_area=200,
+    convert_to_conventional=False,
 )
 ms.run_scan()
 ms.plot_misfits(fontsize=14, labelrotation=-20, figure_scale=1)

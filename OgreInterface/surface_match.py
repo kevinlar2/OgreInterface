@@ -29,6 +29,7 @@ class IonicSurfaceMatcher:
         self.interface = interface
         self.matrix = deepcopy(interface.interface.lattice.matrix)
         self._vol = np.linalg.det(self.matrix)
+        self._struc_vol = self.interface.structure_volume
 
         if self._vol < 0:
             self.matrix *= -1
@@ -37,7 +38,7 @@ class IonicSurfaceMatcher:
         self._accf = np.sqrt(np.log(10**4))
         self._w = 1 / 2**0.5
         self.alpha = np.pi * (
-            len(self.interface.interface) * self._w / (self._vol**2)
+            len(self.interface.interface) * self._w / (self._struc_vol**2)
         ) ** (1 / 3)
         self.cutoff = self._accf / np.sqrt(self.alpha)
         self.k_max = 2 * np.sqrt(self.alpha) * self._accf

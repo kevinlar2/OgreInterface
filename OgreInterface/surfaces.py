@@ -202,6 +202,21 @@ class Interface:
         return area
 
     @property
+    def structure_volume(self):
+        matrix = deepcopy(self.interface.lattice.matrix)
+        vac_matrix = np.vstack(
+            [
+                matrix[:2],
+                self.vacuum * (matrix[-1] / np.linalg.norm(matrix[-1])),
+            ]
+        )
+
+        total_volume = np.abs(np.linalg.det(matrix))
+        vacuum_volume = np.abs(np.linalg.det(vac_matrix))
+
+        return total_volume - vacuum_volume
+
+    @property
     def substrate_basis(self):
         return self.substrate_supercell_uvw
 

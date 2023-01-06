@@ -1,10 +1,8 @@
-import torch
-import torch.nn as nn
-
-from typing import Union, Dict, Optional
-
 from OgreInterface.score_function.scatter import scatter_add
+from typing import Dict
 import numpy as np
+import torch.nn as nn
+import torch
 
 
 class EnergyEwaldError(Exception):

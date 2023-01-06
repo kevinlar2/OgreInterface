@@ -149,4 +149,5 @@ if __name__ == "__main__":
 
     InAs = bulk("InAs", crystalstructure="zincblende", a=5.6)
     charge_dict = {"In": 0.0, "As": 0.0}
-    print(generate_dict_torch([InAs], cutoff=10.0, charge_dict=charge_dict))
+    inputs = generate_dict_torch([InAs], cutoff=10.0, charge_dict=charge_dict)
+    print(inputs["n_atoms"])

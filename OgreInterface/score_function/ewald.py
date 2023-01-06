@@ -191,7 +191,7 @@ class EnergyEwald(nn.Module):
         # Bring everything together
         y_ewald = self.ke * (y_ewald - self_interaction)
 
-        return y_ewald
+        return y_ewald.numpy()
 
 
 if __name__ == "__main__":

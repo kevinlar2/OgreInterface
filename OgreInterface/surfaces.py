@@ -273,7 +273,9 @@ class Interface:
     def write_file(self, output="POSCAR_interface"):
         Poscar(self.interface).write_file(output)
 
-    def shift_film(self, shift, fractional=False, inplace=False):
+    def shift_film(
+        self, shift, fractional=False, inplace=False, return_atoms=False
+    ):
         if fractional:
             frac_shift = np.array(shift)
         else:
@@ -307,7 +309,10 @@ class Interface:
                 frac_shift,
             )
 
-            return shifted_interface
+            if return_atoms:
+                return AseAtomsAdaptor().get_atoms(shifted_interface)
+            else:
+                return shifted_interface
 
     def _prepare_slab(self, slab, sl_vec, uvw):
         matrix = np.round(

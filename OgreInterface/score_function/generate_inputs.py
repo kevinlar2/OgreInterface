@@ -52,7 +52,11 @@ def _atoms_collate_fn(batch):
 
 
 def generate_dict_ase(
-    atoms: List[Atoms], cutoff: float, charge_dict: Dict[str, float]
+    atoms: List[Atoms],
+    cutoff: float,
+    charge_dict: Dict[str, float],
+    radius_dict: Dict[str, float],
+    ns_dict: Dict[str, float],
 ) -> Dict:
     inputs_batch = []
 
@@ -60,6 +64,10 @@ def generate_dict_ase(
         charges = torch.Tensor(
             [charge_dict[s] for s in atom.get_chemical_symbols()]
         )
+        r0s = torch.Tensor(
+            [radius_dict[s] for s in atom.get_chemical_symbols()]
+        )
+        ns = torch.Tensor([ns_dict[s] for s in atom.get_chemical_symbols()])
         R = torch.from_numpy(atom.get_positions())
         cell = torch.from_numpy(atom.get_cell().array).view(-1, 3, 3)
         idx_i, idx_j, S = neighbor_list(
@@ -81,6 +89,8 @@ def generate_dict_ase(
             "Rij": Rij,
             "pbc": torch.from_numpy(atom.get_pbc()).view(-1, 3),
             "partial_charges": charges,
+            "r0s": r0s,
+            "ns": ns,
         }
 
         inputs_batch.append(input_dict)
@@ -97,7 +107,11 @@ def generate_dict_ase(
 
 
 def generate_dict_torch(
-    atoms: List[Atoms], cutoff: float, charge_dict: Dict[str, float]
+    atoms: List[Atoms],
+    cutoff: float,
+    charge_dict: Dict[str, float],
+    radius_dict: Dict[str, float],
+    ns_dict: Dict[str, float],
 ) -> Dict:
 
     tn = TorchNeighborList(cutoff=cutoff)
@@ -107,6 +121,10 @@ def generate_dict_torch(
         charges = torch.Tensor(
             [charge_dict[s] for s in atom.get_chemical_symbols()]
         )
+        r0s = torch.Tensor(
+            [radius_dict[s] for s in atom.get_chemical_symbols()]
+        )
+        ns = torch.Tensor([ns_dict[s] for s in atom.get_chemical_symbols()])
         R = torch.from_numpy(atom.get_positions())
         cell = torch.from_numpy(atom.get_cell().array)
 
@@ -117,6 +135,8 @@ def generate_dict_torch(
             "cell": cell,
             "pbc": torch.from_numpy(atom.get_pbc()),
             "partial_charges": charges,
+            "r0s": r0s,
+            "ns": ns,
         }
 
         tn.forward(inputs=input_dict)

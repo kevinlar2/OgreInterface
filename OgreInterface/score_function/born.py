@@ -21,7 +21,6 @@ class EnergyBorn(nn.Module):
 
     def __init__(
         self,
-        coulomb_potential: nn.Module,
         cutoff: Optional[float] = None,
     ):
         super(EnergyBorn, self).__init__()
@@ -49,17 +48,18 @@ class EnergyBorn(nn.Module):
             dict(str, torch.Tensor): results with Coulomb energy.
         """
         z = inputs["Z"]
+        ns = inputs["ns"]
+        r0s = inputs["r0s"]
         idx_m = inputs["idx_m"]
 
         r_ij = inputs["Rij"]
         idx_i = inputs["idx_i"]
         idx_j = inputs["idx_j"]
-        z_i = z[idx_i]
-        z_j = z[idx_j]
 
         d_ij = torch.norm(r_ij, dim=1)
-        n_ij = None  # TODO
-        B_ij = None  # TODO
+        n_ij = ns[idx_i] + ns[idx_j] / 2
+        r0_ij = r0s[idx_i] + r0s[idx_j] / 2
+        B_ij = (r0_ij ** (n_ij - 1)) / n_ij
 
         n_atoms = z.shape[0]
         n_molecules = int(idx_m[-1]) + 1
@@ -76,4 +76,4 @@ class EnergyBorn(nn.Module):
         y = scatter_add(y, idx_m, dim_size=n_molecules)
         y = 0.5 * self.ke * torch.squeeze(y, -1)
 
-        return y
+        return y.numpy()

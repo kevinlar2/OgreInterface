@@ -52,6 +52,7 @@ class SurfaceGenerator:
         miller_index: List[int],
         layers: int,
         vacuum: float,
+        convert_to_conventional: bool = True,
         generate_all: bool = True,
         filter_ionic_slabs: bool = False,
         lazy: bool = False,
@@ -63,6 +64,7 @@ class SurfaceGenerator:
         self.miller_index = miller_index
         self.layers = layers
         self.vacuum = vacuum
+        self.convert_to_conventional = convert_to_conventional
         self.generate_all = generate_all
         self.filter_ionic_slabs = filter_ionic_slabs
         self.lazy = lazy
@@ -88,11 +90,13 @@ class SurfaceGenerator:
     def from_file(
         cls,
         filename,
-        miller_index,
-        layers,
-        vacuum,
-        generate_all=True,
-        filter_ionic_slabs=False,
+        miller_index: List[int],
+        layers: int,
+        vacuum: float,
+        convert_to_conventional: bool = True,
+        generate_all: bool = True,
+        filter_ionic_slabs: bool = False,
+        lazy: bool = False,
     ):
         structure = Structure.from_file(filename=filename)
 
@@ -101,8 +105,10 @@ class SurfaceGenerator:
             miller_index,
             layers,
             vacuum,
+            convert_to_conventional,
             generate_all,
             filter_ionic_slabs,
+            lazy,
         )
 
     def _get_bulk(self, atoms_or_struc):
@@ -115,11 +121,18 @@ class SurfaceGenerator:
                 f"structure accepts 'pymatgen.core.structure.Structure' or 'ase.Atoms' not '{type(atoms_or_struc).__name__}'"
             )
 
-        sg = SpacegroupAnalyzer(init_structure)
-        conventional_structure = sg.get_conventional_standard_structure()
-        conventional_atoms = AseAtomsAdaptor.get_atoms(conventional_structure)
+        if self.convert_to_conventional:
+            sg = SpacegroupAnalyzer(init_structure)
+            conventional_structure = sg.get_conventional_standard_structure()
+            conventional_atoms = AseAtomsAdaptor.get_atoms(
+                conventional_structure
+            )
 
-        return conventional_structure, conventional_atoms
+            return conventional_structure, conventional_atoms
+        else:
+            init_atoms = AseAtomsAdaptor().get_atoms(init_structure)
+
+            return init_structure, init_atoms
 
     def _get_oriented_bulk_structure(self):
         bulk = self.bulk_structure

@@ -256,6 +256,7 @@ class MillerSearch(object):
         dpi=400,
         output="misfit_plot.png",
         fontsize=12,
+        figure_scale=1,
         # figsize=(5.5, 4),
         labelrotation=20,
         substrate_label=None,
@@ -284,7 +285,7 @@ class MillerSearch(object):
         s = self.areas
         c = self.misfits * 100
 
-        figsize = (5 * (M / N), 4)
+        figsize = (figure_scale * 5 * (M / N), figure_scale * 4)
 
         fig, ax = plt.subplots(figsize=figsize, dpi=dpi)
         ax_divider = make_axes_locatable(ax)

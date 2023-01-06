@@ -47,7 +47,9 @@ class EnergyBorn(nn.Module):
         Returns:
             dict(str, torch.Tensor): results with Coulomb energy.
         """
+        q = inputs["partial_charges"].squeeze(-1)
         z = inputs["Z"]
+
         ns = inputs["ns"]
         r0s = inputs["r0s"]
         idx_m = inputs["idx_m"]
@@ -56,10 +58,11 @@ class EnergyBorn(nn.Module):
         idx_i = inputs["idx_i"]
         idx_j = inputs["idx_j"]
 
+        q_ij = torch.abs(q[idx_i] * q[idx_j])
         d_ij = torch.norm(r_ij, dim=1)
         n_ij = ns[idx_i] + ns[idx_j] / 2
         r0_ij = r0s[idx_i] + r0s[idx_j] / 2
-        B_ij = (r0_ij ** (n_ij - 1)) / n_ij
+        B_ij = q_ij * (r0_ij ** (n_ij - 1)) / n_ij
 
         n_atoms = z.shape[0]
         n_molecules = int(idx_m[-1]) + 1

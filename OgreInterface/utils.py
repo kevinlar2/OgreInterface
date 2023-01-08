@@ -10,6 +10,10 @@ import math
 import collections
 
 
+def conv_a_to_b(struc_a: Structure, struc_b: Structure) -> np.ndarray:
+    return struc_b.lattice.matrix @ struc_a.lattice.inv_matrix
+
+
 def group_layers(structure, atol=None):
     """
     This function will find the atom indices belonging to each unique atomic layer.

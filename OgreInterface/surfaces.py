@@ -188,7 +188,7 @@ class Interface:
         self.interface_height = None
         self.strained_sub = self.substrate_supercell
         self.strained_film = self._strain_and_orient_film()
-        self.interface = self._stack_interface()
+        self.interface, self.sub_part, self.film_part = self._stack_interface()
 
     @property
     def area(self):
@@ -200,6 +200,21 @@ class Interface:
         )
 
         return area
+
+    @property
+    def structure_volume(self):
+        matrix = deepcopy(self.interface.lattice.matrix)
+        vac_matrix = np.vstack(
+            [
+                matrix[:2],
+                self.vacuum * (matrix[-1] / np.linalg.norm(matrix[-1])),
+            ]
+        )
+
+        total_volume = np.abs(np.linalg.det(matrix))
+        vacuum_volume = np.abs(np.linalg.det(vac_matrix))
+
+        return total_volume - vacuum_volume
 
     @property
     def substrate_basis(self):
@@ -273,7 +288,9 @@ class Interface:
     def write_file(self, output="POSCAR_interface"):
         Poscar(self.interface).write_file(output)
 
-    def shift_film(self, shift, fractional=False, inplace=False):
+    def shift_film(
+        self, shift, fractional=False, inplace=False, return_atoms=False
+    ):
         if fractional:
             frac_shift = np.array(shift)
         else:
@@ -293,8 +310,8 @@ class Interface:
                 film_ind,
                 frac_shift,
             )
-            self.strained_film.translate_sites(
-                range(len(self.strained_film)),
+            self.film_part.translate_sites(
+                range(len(self.film_part)),
                 frac_shift,
             )
             self.interface_height += frac_shift[-1] / 2
@@ -307,7 +324,10 @@ class Interface:
                 frac_shift,
             )
 
-            return shifted_interface
+            if return_atoms:
+                return AseAtomsAdaptor().get_atoms(shifted_interface)
+            else:
+                return shifted_interface
 
     def _prepare_slab(self, slab, sl_vec, uvw):
         matrix = np.round(
@@ -415,7 +435,16 @@ class Interface:
             )
             self.interface_height = 0.5
 
-        return interface_struc
+        film_inds = np.where(interface_struc.site_properties["is_film"])[0]
+        sub_inds = np.where(interface_struc.site_properties["is_sub"])[0]
+
+        film_part = interface_struc.copy()
+        film_part.remove_sites(sub_inds)
+
+        sub_part = interface_struc.copy()
+        sub_part.remove_sites(film_inds)
+
+        return interface_struc, sub_part, film_part
 
     @property
     def _metallic_elements(self):

@@ -89,7 +89,7 @@ class EnergyEwald(nn.Module):
 
         y = y_real + y_reciprocal
 
-        return y
+        return y.numpy()
 
     def _real_space(
         self,
@@ -191,7 +191,7 @@ class EnergyEwald(nn.Module):
         # Bring everything together
         y_ewald = self.ke * (y_ewald - self_interaction)
 
-        return y_ewald.numpy()
+        return y_ewald
 
 
 if __name__ == "__main__":

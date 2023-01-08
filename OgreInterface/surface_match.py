@@ -3,6 +3,7 @@ from OgreInterface.score_function.born import EnergyBorn
 from OgreInterface.score_function.generate_inputs import generate_dict_torch
 from OgreInterface.surfaces import Interface
 from pymatgen.io.ase import AseAtomsAdaptor
+from pymatgen.core.periodic_table import Element
 from ase.data import atomic_numbers
 from typing import Dict
 import numpy as np
@@ -17,44 +18,55 @@ class IonicSurfaceMatcher:
     def __init__(
         self,
         interface: Interface,
-        charge_dict: Dict[str, float],
-        radius_dict: Dict[str, float],
-        ns_dict: Dict[str, float],
-        # cutoff: float = 10.0,
-        # alpha: float = 0.5,
-        # k_max: int = 20,
-        grid_density_x: int = 10,
-        grid_density_y: int = 10,
+        grid_density_x: int = 15,
+        grid_density_y: int = 15,
     ):
         self.interface = interface
         self.matrix = deepcopy(interface.interface.lattice.matrix)
         self._vol = np.linalg.det(self.matrix)
-        self._struc_vol = self.interface.structure_volume
 
         if self._vol < 0:
             self.matrix *= -1
             self._vol *= -1
 
-        self._accf = np.sqrt(np.log(10**4))
-        self._w = 1 / 2**0.5
-        self.alpha = np.pi * (
-            len(self.interface.interface) * self._w / (self._struc_vol**2)
-        ) ** (1 / 3)
-        self.cutoff = self._accf / np.sqrt(self.alpha)
-        self.k_max = 2 * np.sqrt(self.alpha) * self._accf
-
-        print(self.alpha, self.k_max, self.cutoff)
+        self.cutoff, self.alpha, self.k_max = self._get_ewald_parameters()
+        self.charge_dict, self.radius_dict = self._get_charges_and_radii()
+        self.ns_dict = {element: 5.0 for element in self.charge_dict}
 
         self.d_interface = self.interface.interfacial_distance
         self.film_part = self.interface.film_part
         self.sub_part = self.interface.sub_part
-        self.charge_dict = charge_dict
-        self.radius_dict = radius_dict
-        self.ns_dict = ns_dict
         self.grid_density_x = grid_density_x
         self.grid_density_y = grid_density_y
 
         self.shifts, self.X, self.Y = self._generate_shifts()
+
+    def _get_charges_and_radii(self):
+        sub = self.interface.substrate.conventional_bulk_structure
+        film = self.interface.film.conventional_bulk_structure
+        sub_oxidation_state = sub.composition.oxi_state_guesses()[0]
+        film_oxidation_state = film.composition.oxi_state_guesses()[0]
+
+        sub_oxidation_state.update(film_oxidation_state)
+
+        radii = {
+            element: Element(element).ionic_radii[charge]
+            for element, charge in sub_oxidation_state.items()
+        }
+
+        return sub_oxidation_state, radii
+
+    def _get_ewald_parameters(self):
+        struc_vol = self.interface.structure_volume
+        accf = np.sqrt(np.log(10**4))
+        w = 1 / 2**0.5
+        alpha = np.pi * (
+            len(self.interface.interface) * w / (struc_vol**2)
+        ) ** (1 / 3)
+        cutoff = accf / np.sqrt(alpha)
+        k_max = 2 * np.sqrt(alpha) * accf
+
+        return cutoff, alpha, k_max
 
     def _generate_shifts(self):
         grid_x = np.linspace(0, 1, self.grid_density_x)
@@ -65,14 +77,14 @@ class IonicSurfaceMatcher:
 
         return shifts, X, Y
 
-    def _get_shifted_atoms(self):
+    def _get_shifted_atoms(self, shifts):
 
         atoms = [
             AseAtomsAdaptor().get_atoms(self.sub_part),
             AseAtomsAdaptor().get_atoms(self.film_part),
         ]
 
-        for shift in self.shifts:
+        for shift in shifts:
             shifted_atoms = self.interface.shift_film(
                 shift, fractional=True, inplace=False, return_atoms=True
             )
@@ -80,8 +92,8 @@ class IonicSurfaceMatcher:
 
         return atoms
 
-    def _generate_inputs(self):
-        atoms_list = self._get_shifted_atoms()
+    def _generate_inputs(self, shifts):
+        atoms_list = self._get_shifted_atoms(shifts)
         inputs = generate_dict_torch(
             atoms=atoms_list,
             cutoff=self.cutoff,
@@ -161,9 +173,14 @@ class IonicSurfaceMatcher:
         ax.set_aspect("equal")
 
     def run_surface_matching(
-        self, cmap: str = "jet", fontsize: int = 14, output: str = "PES.png"
-    ):
-        inputs = self._generate_inputs()
+        self,
+        cmap: str = "jet",
+        fontsize: int = 14,
+        output: str = "PES.png",
+        shift: bool = True,
+    ) -> None:
+        shifts = self.shifts
+        inputs = self._generate_inputs(shifts)
         coulomb_energy = self._calculate_coulomb(inputs)
         born_energy = self._calculate_born(inputs)
 
@@ -181,12 +198,6 @@ class IonicSurfaceMatcher:
         born_adh_energy = (
             sub_born_energy + film_born_energy
         ) - interface_born_energy
-        both = (
-            sub_coulomb_energy
-            + film_coulomb_energy
-            + sub_born_energy
-            + film_born_energy
-        ) - (interface_coulomb_energy + interface_born_energy)
 
         X_plot, Y_plot, Z_born = self._get_interpolated_data(
             self.X, self.Y, born_adh_energy
@@ -194,6 +205,8 @@ class IonicSurfaceMatcher:
         _, _, Z_coulomb = self._get_interpolated_data(
             self.X, self.Y, coulomb_adh_energy
         )
+
+        Z_both = Z_born + Z_coulomb
 
         a = self.matrix[0, :2]
         b = self.matrix[1, :2]
@@ -233,12 +246,72 @@ class IonicSurfaceMatcher:
             ax=ax3,
             X=X_plot,
             Y=Y_plot,
-            Z=Z_born + (1 / self.d_interface) * Z_coulomb,
-            # Z=Z_born + Z_coulomb,
+            Z=Z_both,
             borders=borders,
             cmap=cmap,
             fontsize=fontsize,
         )
 
+        frac_shifts = np.c_[
+            X_plot.ravel(), Y_plot.ravel(), np.zeros(Y_plot.shape).ravel()
+        ].dot(np.linalg.inv(self.matrix))
+        opt_shift = frac_shifts[np.argmax(Z_both.ravel())]
+        plot_shift = opt_shift.dot(self.matrix)
+
+        ax3.scatter(
+            [plot_shift[0]],
+            [plot_shift[1]],
+            fc="white",
+            ec="black",
+            marker="X",
+            s=100,
+            zorder=10,
+        )
+
+        if shift:
+            self.interface.shift_film(
+                shift=opt_shift, fractional=True, inplace=True
+            )
+
         fig.tight_layout()
         fig.savefig(output, bbox_inches="tight")
+
+    def run_z_shifts(
+        self,
+        interfacial_distances: np.ndarray = np.linspace(2.0, 4.0, 101),
+        fontsize: int = 12,
+        output: str = "z_shift.png",
+    ) -> None:
+        z_shifts = interfacial_distances - self.d_interface
+        shifts = np.c_[
+            np.zeros((len(z_shifts), 2)), z_shifts
+        ] / np.linalg.norm(self.matrix[-1])
+        inputs = self._generate_inputs(shifts)
+        coulomb_energy = self._calculate_coulomb(inputs)
+        born_energy = self._calculate_born(inputs)
+
+        sub_coulomb_energy = coulomb_energy[0]
+        film_coulomb_energy = coulomb_energy[1]
+        interface_coulomb_energy = coulomb_energy[2:]
+
+        sub_born_energy = born_energy[0]
+        film_born_energy = born_energy[1]
+        interface_born_energy = born_energy[2:]
+
+        coulomb_adh_energy = (
+            sub_coulomb_energy + film_coulomb_energy
+        ) - interface_coulomb_energy
+        born_adh_energy = (
+            sub_born_energy + film_born_energy
+        ) - interface_born_energy
+
+        both_adh_energy = born_adh_energy + coulomb_adh_energy
+
+        fig, ax = plt.subplots(figsize=(4, 4), dpi=400)
+        ax.set_xlabel("Interfacial Distance ($\\AA$)", fontsize=fontsize)
+        ax.set_ylabel("$E_{adh}$", fontsize=fontsize)
+        ax.plot(interfacial_distances, both_adh_energy, color="red")
+        ax.set_xlim(interfacial_distances.min(), interfacial_distances.max())
+
+        fig.tight_layout(pad=0.4)
+        fig.savefig(output)

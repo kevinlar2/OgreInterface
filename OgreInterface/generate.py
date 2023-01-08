@@ -6,6 +6,7 @@ from OgreInterface.utils import (
     get_reduced_basis,
     reduce_vectors_zur_and_mcgill,
     get_primitive_structure,
+    conv_a_to_b,
 )
 
 from pymatgen.core.structure import Structure
@@ -230,12 +231,12 @@ class SurfaceGenerator:
             },
         )
 
-        primitive_transformation = np.linalg.solve(
-            init_oriented_struc.lattice.matrix,
-            primitive_oriented_struc.lattice.matrix,
+        primitive_transformation = conv_a_to_b(
+            init_oriented_struc, primitive_oriented_struc
         )
 
-        primitive_basis = basis.dot(primitive_transformation)
+        primitive_basis = primitive_transformation.dot(basis)
+
         cart_basis = primitive_oriented_struc.lattice.matrix
 
         if np.linalg.det(cart_basis) < 0:

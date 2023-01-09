@@ -1,6 +1,59 @@
 import numpy as np
 
 
+class ZurMcGill:
+    def __init__(
+        self,
+        film_vectors: np.ndarray,
+        substrate_vectors: np.ndarray,
+        max_area: float = 400.0,
+        max_linear_strain: float = 0.01,
+        max_angle_strain: float = 0.01,
+        max_area_mismatch: float = 0.09,
+    ):
+        self.film_vectors = film_vectors
+        self.substrate_vectors = substrate_vectors
+        self.max_area = max_area
+        self.max_linear_strain = max_linear_strain
+        self.max_angle_strain = max_angle_strain
+        self.max_area_mismatch = max_area_mismatch
+
+        self.film_area = self._get_area(film_vectors)
+        self.substrate_area = self._get_area(substrate_vectors)
+        self.area_ratio = self.film_area / self.substrate_area
+        self.film_rs, self.substrate_rs = self._get_rs()
+
+    def _get_area(self, vectors: np.ndarray) -> np.ndarray:
+        return np.linalg.norm(np.cross(vectors[0], vectors[1]))
+
+    def _get_rs(self):
+        film_rs = np.arange(1, self.max_area // self.film_area)
+        substrate_rs = np.arange(1, self.max_area // self.substrate_area)
+
+        return film_rs, substrate_rs
+
+    def _get_transformation_matrices(self, n):
+        mats = [
+            (i, j)
+            for i in self.film_rs
+            for j in self.substrate_rs
+            if np.absolute(self.film_area / self.substrate_area - float(j) / i)
+            < self.max_area_mismatch
+        ]
+        for m in mats:
+            print(m)
+        # factors = self._get_factors(n)
+        # print(factors)
+
+    def _get_factors(self, n):
+        factors = []
+        for i in range(1, n + 1):
+            if n % i == 0:
+                factors.append(i)
+
+        return factors
+
+
 def reduce_vectors_zur_and_mcgill(vectors: np.ndarray):
     n_vectors = len(vectors)
     reduced = np.zeros(n_vectors).astype(bool)
@@ -63,22 +116,7 @@ def reduce_vectors_zur_and_mcgill(vectors: np.ndarray):
 
 
 if __name__ == "__main__":
-    from pymatgen.analysis.interfaces.zsl import reduce_vectors
-    import time
-
-    vec1 = np.array([[1, 0, 0], [-1, 1, 0]])
-    vec2 = np.array([[2, 0, 0], [-1, 1, 0]])
-    vec3 = np.array([[4, 0, 0], [-1, 1, 0]])
-    vecs = np.stack([vec1, vec2, vec3], axis=0)
-    vecs = np.repeat(vecs, 1000, axis=0)
-
-    s = time.time()
-    for i in range(100):
-        vecs_out, mats_out = reduce_vectors_zur_and_mcgill(np.copy(vecs))
-    print((time.time() - s) / 100)
-
-    s = time.time()
-    for i in range(100):
-        for v in vecs:
-            reduce_vectors(v[0], v[1])
-    print((time.time() - s) / 100)
+    vectors1 = np.array([[5, 0, 0], [0, 5, 0]])
+    vectors2 = np.array([[7.5, 0, 0], [0, 7.5, 0]])
+    zm = ZurMcGill(film_vectors=vectors1, substrate_vectors=vectors2)
+    zm._get_transformation_matrices(12)

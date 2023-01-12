@@ -4,6 +4,7 @@ from OgreInterface.lattice_match import ZurMcGill
 from pymatgen.core.structure import Structure
 from pymatgen.io.ase import AseAtomsAdaptor
 from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
+from pymatgen.core.surface import get_symmetrically_distinct_miller_indices
 
 from ase import Atoms
 import numpy as np
@@ -16,6 +17,8 @@ from mpl_toolkits.axes_grid1.axes_divider import make_axes_locatable
 from functools import reduce
 from itertools import product
 
+from typing import Union
+
 
 class MillerSearch(object):
 
@@ -23,37 +26,26 @@ class MillerSearch(object):
 
     def __init__(
         self,
-        substrate,
-        film,
-        max_substrate_index=1,
-        max_film_index=1,
-        area_tol=0.01,
-        angle_tol=0.01,
-        length_tol=0.01,
-        max_area=500,
-        convert_to_conventional=True,
-    ):
+        substrate: Union[Structure, Atoms, str],
+        film: Union[Structure, Atoms, str],
+        max_substrate_index: int = 1,
+        max_film_index: int = 1,
+        area_tol: float = 0.01,
+        angle_tol: float = 0.01,
+        length_tol: float = 0.01,
+        max_area: float = 500.0,
+        convert_to_conventional: bool = True,
+    ) -> None:
+        self.convert_to_conventional = convert_to_conventional
         if type(substrate) == str:
-            self.substrate = Structure.from_file(substrate)
-        elif type(substrate) == Structure:
-            self.substrate = substrate
-        elif type(substrate) == Atoms:
-            self.substrate = AseAtomsAdaptor().get_structure(substrate)
+            self.substrate, _ = self._get_bulk(Structure.from_file(substrate))
         else:
-            raise TypeError(
-                f"MillerSearch accepts 'pymatgen.core.structure.Structure', 'ase.Atoms', or 'str', not '{type(substrate).__name__}'"
-            )
+            self.substrate, _ = self._get_bulk(substrate)
 
         if type(film) == str:
-            self.film = Structure.from_file(film)
-        elif type(film) == Structure:
-            self.film = film
-        elif type(film) == Atoms:
-            self.film = AseAtomsAdaptor().get_structure(film)
+            self.film, _ = self._get_bulk(Structure.from_file(film))
         else:
-            raise TypeError(
-                f"MillerSearch accepts 'pymatgen.core.structure.Structure', 'ase.Atoms', or 'str', not '{type(film).__name__}'"
-            )
+            self.film, _ = self._get_bulk(film)
 
         self.max_film_index = max_film_index
         self.max_substrate_index = max_substrate_index
@@ -61,17 +53,40 @@ class MillerSearch(object):
         self.angle_tol = angle_tol
         self.length_tol = length_tol
         self.max_area = max_area
-        self.convert_to_conventional = convert_to_conventional
+        print("Substrate")
         self.substrate_inds = self._get_unique_miller_indices(
             self.substrate, self.max_substrate_index
         )
+        print("Film")
         self.film_inds = self._get_unique_miller_indices(
             self.film, self.max_film_index
         )
-        # self.substrate_inds, self.film_inds = self._get_unique_miller_indices()
         self.misfit_data = None
         self.area_data = None
         self.count_data = None
+
+    def _get_bulk(self, atoms_or_struc):
+        if type(atoms_or_struc) == Atoms:
+            init_structure = AseAtomsAdaptor.get_structure(atoms_or_struc)
+        elif type(atoms_or_struc) == Structure:
+            init_structure = atoms_or_struc
+        else:
+            raise TypeError(
+                f"structure accepts 'pymatgen.core.structure.Structure' or 'ase.Atoms' not '{type(atoms_or_struc).__name__}'"
+            )
+
+        if self.convert_to_conventional:
+            sg = SpacegroupAnalyzer(init_structure)
+            conventional_structure = sg.get_conventional_standard_structure()
+            conventional_atoms = AseAtomsAdaptor.get_atoms(
+                conventional_structure
+            )
+
+            return conventional_structure, conventional_atoms
+        else:
+            init_atoms = AseAtomsAdaptor().get_atoms(init_structure)
+
+            return init_structure, init_atoms
 
     def _float_gcd(self, a, b, rtol=1e-05, atol=1e-08):
         t = min(abs(a), abs(b))
@@ -103,6 +118,76 @@ class MillerSearch(object):
         return output.astype(int)
 
     def _get_unique_miller_indices(self, struc, max_index):
+        struc_sg = SpacegroupAnalyzer(struc)
+        lattice = struc.lattice
+        recip_lattice = lattice.reciprocal_lattice_crystallographic
+        symmops = struc_sg.get_symmetry_operations(cartesian=False)
+        recip_symmops = lattice.get_recp_symmetry_operation()
+        planes = set(list(product(range(-max_index, max_index + 1), repeat=3)))
+        planes.remove((0, 0, 0))
+
+        reduced_planes = []
+        for plane in planes:
+            gcd = np.abs(reduce(self._float_gcd, plane))
+            reduced_plane = tuple((plane / gcd).astype(int))
+            reduced_planes.append(reduced_plane)
+
+        reduced_planes = set(reduced_planes)
+
+        planes_dict = {p: [] for p in reduced_planes}
+
+        for plane in reduced_planes:
+            if plane in planes_dict.keys():
+                for i, symmop in enumerate(recip_symmops):
+                    origin = symmop.operate((0, 0, 0))
+                    point_out = symmop.operate(plane) - origin
+                    gcd = np.abs(reduce(self._float_gcd, point_out))
+                    point_out = tuple((point_out / gcd).astype(int))
+                    planes_dict[plane].append(point_out)
+                    if point_out != plane:
+                        if point_out in planes_dict.keys():
+                            del planes_dict[point_out]
+
+        unique_planes = []
+
+        for k in planes_dict:
+            print(k)
+            print(list(set(planes_dict[k])))
+            print("")
+            equivalent_planes = np.array(list(set(planes_dict[k])))
+            diff = np.abs(np.sum(np.sign(equivalent_planes), axis=1))
+            like_signs = equivalent_planes[diff == np.max(diff)]
+            if len(like_signs) == 1:
+                unique_planes.append(like_signs[0])
+            else:
+                first_max = like_signs[
+                    np.abs(like_signs)[:, 0]
+                    == np.max(np.abs(like_signs)[:, 0])
+                ]
+                if len(first_max) == 1:
+                    unique_planes.append(first_max[0])
+                else:
+                    second_max = first_max[
+                        np.abs(first_max)[:, 1]
+                        == np.max(np.abs(first_max)[:, 1])
+                    ]
+                    if len(second_max) == 1:
+                        unique_planes.append(second_max[0])
+                    else:
+                        unique_planes.append(
+                            second_max[
+                                np.argmax(np.sign(second_max).sum(axis=1))
+                            ]
+                        )
+
+        unique_planes = np.vstack(unique_planes)
+        sorted_planes = sorted(
+            unique_planes, key=lambda x: (np.linalg.norm(x), -np.sign(x).sum())
+        )
+
+        return np.vstack(sorted_planes)
+
+    def _get_unique_miller_indices_old(self, struc, max_index):
         struc_sg = SpacegroupAnalyzer(struc)
         # struc_conv_cell = struc_sg.get_conventional_standard_structure()
         symmops = struc_sg.get_symmetry_operations(cartesian=False)

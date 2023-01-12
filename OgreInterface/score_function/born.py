@@ -60,9 +60,9 @@ class EnergyBorn(nn.Module):
 
         q_ij = torch.abs(q[idx_i] * q[idx_j])
         d_ij = torch.norm(r_ij, dim=1)
-        n_ij = ns[idx_i] + ns[idx_j] / 2
-        r0_ij = r0s[idx_i] + r0s[idx_j] / 2
-        B_ij = 1 * q_ij * (r0_ij ** (n_ij - 1)) / n_ij
+        n_ij = ns[idx_i] + ns[idx_j] / 2.0
+        r0_ij = r0s[idx_i] + r0s[idx_j]
+        B_ij = (1 / 3) * q_ij * (r0_ij ** (n_ij - 1.0)) / n_ij
 
         n_atoms = z.shape[0]
         n_molecules = int(idx_m[-1]) + 1

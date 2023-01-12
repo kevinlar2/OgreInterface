@@ -1,4 +1,5 @@
 from OgreInterface.generate import SurfaceGenerator
+from OgreInterface.lattice_match import ZurMcGill
 
 from pymatgen.core.structure import Structure
 from pymatgen.io.ase import AseAtomsAdaptor
@@ -210,45 +211,22 @@ class MillerSearch(object):
 
         for i, substrate in enumerate(substrates):
             for j, film in enumerate(films):
-                zsl = ZSLGenerator(
-                    max_area_ratio_tol=self.area_tol,
-                    max_angle_tol=self.angle_tol,
-                    max_length_tol=self.length_tol,
+                zm = ZurMcGill(
+                    film_vectors=film[0],
+                    substrate_vectors=substrate[0],
                     max_area=self.max_area,
+                    max_linear_strain=self.length_tol,
+                    max_angle_strain=self.angle_tol,
+                    max_area_mismatch=self.area_tol,
                 )
-                matches = zsl(film[0], substrate[0])
-                match_list = list(matches)
+                matches = zm.run()
 
-                if len(match_list) > 0:
-                    match_area = np.array(
-                        [match.match_area for match in match_list]
-                    )
-                    min_area_ind = np.argmin(match_area)
-
-                    min_area_match = match_list[min_area_ind]
-
-                    film_a_norm = np.linalg.norm(
-                        min_area_match.film_sl_vectors[0]
-                    )
-                    film_b_norm = np.linalg.norm(
-                        min_area_match.film_sl_vectors[1]
-                    )
-
-                    sub_a_norm = np.linalg.norm(
-                        min_area_match.substrate_sl_vectors[0]
-                    )
-                    sub_b_norm = np.linalg.norm(
-                        min_area_match.substrate_sl_vectors[1]
-                    )
-
-                    a_strain = (film_a_norm / sub_a_norm) - 1
-                    b_strain = (film_b_norm / sub_b_norm) - 1
-
-                    min_area = match_area[min_area_ind]
-                    min_strain = max(a_strain, b_strain)
-
-                    misfits[i, j] = min_strain
-                    areas[i, j] = min_area / np.sqrt(substrate[1] * film[1])
+                if len(matches) > 0:
+                    min_area_match = matches[0]
+                    area = min_area_match.area
+                    strain = min_area_match.linear_strain
+                    misfits[i, j] = strain.max()
+                    areas[i, j] = area / np.sqrt(substrate[1] * film[1])
 
         self.misfits = np.round(misfits.T, 8)
         self.areas = areas.T

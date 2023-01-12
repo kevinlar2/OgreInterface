@@ -11,10 +11,6 @@ from pymatgen.io.vasp.inputs import Poscar
 from pymatgen.io.ase import AseAtomsAdaptor
 from pymatgen.symmetry.analyzer import SymmOp
 from pymatgen.analysis.molecule_structure_comparator import CovalentRadius
-from pymatgen.analysis.interfaces.coherent_interfaces import (
-    get_2d_transform,
-    from_2d_to_3d,
-)
 
 import matplotlib.pyplot as plt
 from matplotlib.patches import Polygon
@@ -134,60 +130,33 @@ class Interface:
         self,
         substrate,
         film,
-        film_transformation,
-        substrate_transformation,
-        stack_transformation,
-        strain,
-        angle_diff,
-        sub_strain_frac,
+        match,
         interfacial_distance,
-        film_vecs,
-        sub_vecs,
-        film_sl_vecs,
-        sub_sl_vecs,
         vacuum,
         center=False,
     ):
         self.center = center
         self.substrate = substrate
         self.film = film
-        self.film_transformation = film_transformation
-        self.substrate_transformation = substrate_transformation
-        self.stack_transformation = stack_transformation
-        self.film_vecs = film_vecs
-        self.sub_vecs = sub_vecs
-        self.film_sl_vecs = film_sl_vecs
-        self.sub_sl_vecs = sub_sl_vecs
-        self.strain = strain
-        self.angle_diff = angle_diff
-        self.sub_strain_frac = sub_strain_frac
+        self.match = match
         self.vacuum = vacuum
         (
             self.substrate_supercell,
-            self.substrate_matrix,
-            self.substrate_rot_sl_vecs,
             self.substrate_supercell_uvw,
             self.substrate_supercell_scale_factors,
-        ) = self._prepare_slab(
-            self.substrate.orthogonal_slab_structure,
-            self.sub_sl_vecs,
-            self.substrate.uvw_basis,
-        )
+        ) = self._prepare_substrate()
         (
             self.film_supercell,
-            self.film_matrix,
-            self.film_rot_sl_vecs,
             self.film_supercell_uvw,
             self.film_supercell_scale_factors,
-        ) = self._prepare_slab(
-            self.film.orthogonal_slab_structure,
-            self.film_sl_vecs,
-            self.film.uvw_basis,
-        )
+        ) = self._prepare_film()
         self.interfacial_distance = interfacial_distance
         self.interface_height = None
         self.strained_sub = self.substrate_supercell
-        self.strained_film = self._strain_and_orient_film()
+        (
+            self.strained_film,
+            self.stack_transformation,
+        ) = self._strain_and_orient_film()
         self.interface, self.sub_part, self.film_part = self._stack_interface()
 
     @property
@@ -329,32 +298,48 @@ class Interface:
             else:
                 return shifted_interface
 
-    def _prepare_slab(self, slab, sl_vec, uvw):
-        matrix = np.round(
-            from_2d_to_3d(get_2d_transform(slab.lattice.matrix[:2], sl_vec))
-        ).astype(int)
-
-        supercell_slab = copy.copy(slab)
+    def _prepare_substrate(self):
+        matrix = self.match.substrate_sl_transform
+        supercell_slab = self.substrate.orthogonal_slab_structure.copy()
         supercell_slab.make_supercell(scaling_matrix=matrix)
 
-        uvw_supercell = matrix @ uvw
+        uvw_supercell = matrix @ self.substrate.uvw_basis
         scale_factors = []
         for i, b in enumerate(uvw_supercell):
             scale = np.abs(reduce(_float_gcd, b))
             uvw_supercell[i] = uvw_supercell[i] / scale
             scale_factors.append(scale)
 
-        return supercell_slab, matrix, sl_vec, uvw_supercell, scale_factors
+        return supercell_slab, uvw_supercell, scale_factors
+
+    def _prepare_film(self):
+        matrix = self.match.film_sl_transform
+        supercell_slab = self.film.orthogonal_slab_structure.copy()
+        supercell_slab.make_supercell(scaling_matrix=matrix)
+
+        uvw_supercell = matrix @ self.film.uvw_basis
+        scale_factors = []
+        for i, b in enumerate(uvw_supercell):
+            scale = np.abs(reduce(_float_gcd, b))
+            uvw_supercell[i] = uvw_supercell[i] / scale
+            scale_factors.append(scale)
+
+        return supercell_slab, uvw_supercell, scale_factors
 
     def _strain_and_orient_film(self):
+        sub_in_plane_vecs = self.substrate_supercell.lattice.matrix[:2]
+        film_out_of_plane = self.film_supercell.lattice.matrix[-1]
+        film_inv_matrix = self.film_supercell.lattice.inv_matrix
+        new_matrix = np.vstack([sub_in_plane_vecs, film_out_of_plane])
+        transform = (film_inv_matrix @ new_matrix).T
         op = SymmOp.from_rotation_and_translation(
-            self.stack_transformation, translation_vec=np.zeros(3)
+            transform, translation_vec=np.zeros(3)
         )
 
         strained_film = deepcopy(self.film_supercell)
         strained_film.apply_operation(op)
 
-        return strained_film
+        return strained_film, transform
 
     def _stack_interface(self):
         strained_sub = self.strained_sub
@@ -693,12 +678,12 @@ class Interface:
 
         sub_struc, sub_inv_matrix = self._generate_sc_for_interface_view(
             struc=self.substrate.orthogonal_slab_structure,
-            transformation_matrix=self.substrate_matrix,
+            transformation_matrix=self.match.substrate_sl_transform,
         )
 
         film_struc, film_inv_matrix = self._generate_sc_for_interface_view(
             struc=self.film.orthogonal_slab_structure,
-            transformation_matrix=self.film_matrix,
+            transformation_matrix=self.match.film_sl_transform,
         )
 
         fig, ax = plt.subplots(figsize=(4, 4), dpi=dpi)

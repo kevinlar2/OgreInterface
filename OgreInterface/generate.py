@@ -1,13 +1,14 @@
 """
 This module will be used to construct the surfaces and interfaces used in this package.
 """
-from OgreInterface.surfaces import Surface, Interface
+from OgreInterface.surfaces_new import Surface, Interface
 from OgreInterface.utils import (
     get_reduced_basis,
     reduce_vectors_zur_and_mcgill,
     get_primitive_structure,
     conv_a_to_b,
 )
+from OgreInterface.lattice_match import ZurMcGill
 
 from pymatgen.core.structure import Structure
 from pymatgen.analysis.structure_matcher import StructureMatcher
@@ -591,182 +592,25 @@ class InterfaceGenerator:
         self.interfacial_distance = interfacial_distance
         self.sub_strain_frac = sub_strain_frac
         self.vacuum = vacuum
-        # try:
-        (
-            self.film_sl_vecs,
-            self.sub_sl_vecs,
-            self.match_area,
-            self.film_vecs,
-            self.sub_vecs,
-            self.film_transformations,
-            self.substrate_transformations,
-            self.stack_transformations,
-        ) = self._generate_interface_props()
-        # except TolarenceError:
-        # print("No interfaces were found, please increase the tolarences.")
-
-        self._film_norms = self._get_norm(self.film_sl_vecs, ein="ijk,ijk->ij")
-        self._sub_norms = self._get_norm(self.sub_sl_vecs, ein="ijk,ijk->ij")
-        self.strain = self._get_strain()
-        self.angle_diff = self._get_angle_diff()
-        self.area_diff = self._get_area_diff()
-        self.area_ratio = self._get_area_ratios()
-        self.substrate_areas = self._get_area(
-            self.sub_sl_vecs[:, 0], self.sub_sl_vecs[:, 1]
-        )
-        self.rotation_mat = self._get_rotation_mat()
-
-    def _get_norm(self, a, ein):
-        a_norm = np.sqrt(np.einsum(ein, a, a))
-
-        return a_norm
-
-    def _get_angle(self, a, b):
-        ein = "ij,ij->i"
-        a_norm = self._get_norm(a, ein=ein)
-        b_norm = self._get_norm(b, ein=ein)
-        dot_prod = np.einsum("ij,ij->i", a, b)
-        angles = np.arccos(dot_prod / (a_norm * b_norm))
-
-        return angles
-
-    def _get_area(self, a, b):
-        cross_prod = np.cross(a, b)
-        area = self._get_norm(cross_prod, ein="ij,ij->i")
-
-        return area
-
-    def _get_strain(self):
-        a_strain = (self._film_norms[:, 0] / self._sub_norms[:, 0]) - 1
-        b_strain = (self._film_norms[:, 1] / self._sub_norms[:, 1]) - 1
-
-        return np.c_[a_strain, b_strain]
-
-    def _get_angle_diff(self):
-        sub_angles = self._get_angle(
-            self.sub_sl_vecs[:, 0], self.sub_sl_vecs[:, 1]
-        )
-        film_angles = self._get_angle(
-            self.film_sl_vecs[:, 0], self.film_sl_vecs[:, 1]
-        )
-        angle_diff = (film_angles / sub_angles) - 1
-
-        return angle_diff
-
-    def _get_area_diff(self):
-        sub_areas = self._get_area(
-            self.sub_sl_vecs[:, 0], self.sub_sl_vecs[:, 1]
-        )
-        film_areas = self._get_area(
-            self.film_sl_vecs[:, 0], self.film_sl_vecs[:, 1]
-        )
-        area_diff = (film_areas / sub_areas) - 1
-
-        return area_diff
-
-    def _get_area_ratios(self):
-        q = (
-            self.film_transformations[:, 0, 0]
-            * self.film_transformations[:, 1, 1]
-        )
-        p = (
-            self.substrate_transformations[:, 0, 0]
-            * self.substrate_transformations[:, 1, 1]
-        )
-        area_ratio = np.abs((p / q) - (self.film.area / self.substrate.area))
-
-        return area_ratio
-
-    def _get_rotation_mat(self):
-        dot_prod = np.divide(
-            np.einsum(
-                "ij,ij->i", self.sub_sl_vecs[:, 0], self.film_sl_vecs[:, 0]
-            ),
-            np.multiply(self._sub_norms[:, 0], self._film_norms[:, 0]),
-        )
-
-        mag_cross = np.divide(
-            self._get_area(self.sub_sl_vecs[:, 0], self.film_sl_vecs[:, 0]),
-            np.multiply(self._sub_norms[:, 0], self._film_norms[:, 0]),
-        )
-
-        rot_mat = np.c_[
-            dot_prod,
-            -mag_cross,
-            np.zeros(len(dot_prod)),
-            mag_cross,
-            dot_prod,
-            np.zeros(len(dot_prod)),
-            np.zeros(len(dot_prod)),
-            np.zeros(len(dot_prod)),
-            np.ones(len(dot_prod)),
-        ].reshape(-1, 3, 3)
-
-        return rot_mat
+        self.match_list = self._generate_interface_props()
 
     def _generate_interface_props(self):
-        zsl = ZSLGenerator(
-            max_area_ratio_tol=self.area_tol,
-            max_angle_tol=self.angle_tol,
-            max_length_tol=self.length_tol,
+        zm = ZurMcGill(
+            film_vectors=self.film.inplane_vectors,
+            substrate_vectors=self.substrate.inplane_vectors,
             max_area=self.max_area,
+            max_linear_strain=self.length_tol,
+            max_angle_strain=self.angle_tol,
+            max_area_mismatch=self.area_tol,
         )
-        film_vectors = self.film.inplane_vectors
-        substrate_vectors = self.substrate.inplane_vectors
-        matches = zsl(film_vectors, substrate_vectors)
-        match_list = list(matches)
+        match_list = zm.run()
 
         if len(match_list) == 0:
             raise TolarenceError(
                 "No interfaces were found, please increase the tolarences."
             )
         else:
-            film_sl_vecs = np.array(
-                [match.film_sl_vectors for match in match_list]
-            )
-            sub_sl_vecs = np.array(
-                [match.substrate_sl_vectors for match in match_list]
-            )
-            match_area = np.array([match.match_area for match in match_list])
-            film_vecs = np.array([match.film_vectors for match in match_list])
-            sub_vecs = np.array(
-                [match.substrate_vectors for match in match_list]
-            )
-            film_transformations = np.array(
-                [match.film_transformation for match in match_list]
-            )
-            substrate_transformations = np.array(
-                [match.substrate_transformation for match in match_list]
-            )
-
-            film_3x3_transformations = np.array(
-                [np.eye(3, 3) for _ in range(film_transformations.shape[0])]
-            )
-            substrate_3x3_transformations = np.array(
-                [
-                    np.eye(3, 3)
-                    for _ in range(substrate_transformations.shape[0])
-                ]
-            )
-            stack_transforms = np.array(
-                [match.match_transformation for match in match_list]
-            )
-
-            film_3x3_transformations[:, :2, :2] = film_transformations
-            substrate_3x3_transformations[
-                :, :2, :2
-            ] = substrate_transformations
-
-            return [
-                film_sl_vecs,
-                sub_sl_vecs,
-                match_area,
-                film_vecs,
-                sub_vecs,
-                film_3x3_transformations,
-                substrate_3x3_transformations,
-                stack_transforms,
-            ]
+            return match_list
 
     def _is_equal(self, structure1, structure2):
         structure_matcher = StructureMatcher(
@@ -821,75 +665,18 @@ class InterfaceGenerator:
 
         return reduced_inds
 
-    def _is_equal_fast(self, structure1, structure2):
-        if len(structure1) != len(structure2):
-            return False
-        else:
-            coords1 = np.round(structure1.frac_coords, 4)
-            coords1[:, -1] = coords1[:, -1] - np.min(coords1[:, -1])
-            coords1.dtype = [
-                ("a", "float64"),
-                ("b", "float64"),
-                ("c", "float64"),
-            ]
-            coords1_inds = np.squeeze(
-                np.argsort(coords1, axis=0, order=("c", "b", "a"))
-            )
-            coords1.dtype = "float64"
-
-            coords2 = np.round(structure2.frac_coords, 4)
-            coords2[:, -1] = coords2[:, -1] - np.min(coords2[:, -1])
-            coords2.dtype = [
-                ("a", "float64"),
-                ("b", "float64"),
-                ("c", "float64"),
-            ]
-            coords2_inds = np.squeeze(
-                np.argsort(coords2, axis=0, order=("c", "b", "a"))
-            )
-            coords2.dtype = "float64"
-
-            coords1_sorted = coords1[coords1_inds]
-            coords2_sorted = coords2[coords2_inds]
-            species1_sorted = np.array(structure1.species).astype(str)[
-                coords1_inds
-            ]
-            species2_sorted = np.array(structure2.species).astype(str)[
-                coords2_inds
-            ]
-
-            coords = np.isclose(
-                coords1_sorted, coords2_sorted, rtol=1e-2, atol=1e-2
-            ).all()
-            species = (species1_sorted == species2_sorted).all()
-
-            if coords and species:
-                return True
-            else:
-                return False
-
     def generate_interfaces(self):
         interfaces = []
         print("Generating Interfaces:")
-        for i in tqdm(range(self.substrate_transformations.shape[0])):
+        for match in tqdm(self.match_list):
             interface = Interface(
                 substrate=self.substrate,
                 film=self.film,
-                film_transformation=self.film_transformations[i],
-                substrate_transformation=self.substrate_transformations[i],
-                stack_transformation=self.stack_transformations[i],
-                strain=self.strain[i],
-                angle_diff=self.angle_diff[i],
-                sub_strain_frac=self.sub_strain_frac,
                 interfacial_distance=self.interfacial_distance,
-                film_vecs=self.film_vecs[i],
-                sub_vecs=self.sub_vecs[i],
-                film_sl_vecs=self.film_sl_vecs[i],
-                sub_sl_vecs=self.sub_sl_vecs[i],
+                match=match,
                 vacuum=self.vacuum,
                 center=self.center,
             )
-            #  interface.shift_film([0.3, 0.6, 0])
             interfaces.append(interface)
 
         interfaces = np.array(interfaces)
@@ -931,8 +718,7 @@ class InterfaceGenerator:
         areas = []
 
         for interface in unique_interfaces:
-            matrix = interface.interface.lattice.matrix
-            area = self._get_area([matrix[0]], [matrix[1]])[0]
+            area = interface.match.area
             areas.append(area)
 
         sort = np.argsort(areas)

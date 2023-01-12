@@ -1,7 +1,5 @@
 import numpy as np
-from itertools import product
-import time
-from typing import List
+from typing import List, Tuple, Iterable, Union
 from dataclasses import dataclass
 
 
@@ -29,7 +27,7 @@ class ZurMcGill:
         max_linear_strain: float = 0.01,
         max_angle_strain: float = 0.01,
         max_area_mismatch: float = 0.01,
-    ):
+    ) -> None:
         self.film_vectors = film_vectors
         self.substrate_vectors = substrate_vectors
         self.max_area = max_area
@@ -42,10 +40,10 @@ class ZurMcGill:
         self.area_ratio = self.film_area / self.substrate_area
         self.film_rs, self.substrate_rs = self._get_rs()
 
-    def _get_area(self, vectors: np.ndarray) -> np.ndarray:
+    def _get_area(self, vectors: np.ndarray) -> float:
         return np.linalg.norm(np.cross(vectors[0], vectors[1]))
 
-    def _get_rs(self):
+    def _get_rs(self) -> Iterable[np.ndarray]:
         film_rs = np.arange(1, self.max_area // self.film_area).astype(int)
         substrate_rs = np.arange(
             1, self.max_area // self.substrate_area
@@ -92,6 +90,7 @@ class ZurMcGill:
                     eq_film_inds
                 ]
                 eq_reduced_sub_sl_vectors = reduced_sub_sl_vectors[eq_sub_inds]
+
                 eq_film_reduction_matrices = film_reduction_matrices[
                     eq_film_inds
                 ]
@@ -104,23 +103,23 @@ class ZurMcGill:
                     )
                 )
 
-                total_film_transforms_2d = np.einsum(
+                eq_total_film_transforms_2d = np.einsum(
                     "...ij,...jk",
                     eq_film_reduction_matrices,
                     eq_film_transforms,
                 )
-                total_sub_transforms_2d = np.einsum(
+                eq_total_sub_transforms_2d = np.einsum(
                     "...ij,...jk", eq_sub_reduction_matrices, eq_sub_transforms
                 )
 
                 total_film_transforms = np.repeat(
                     np.eye(3).reshape(1, 3, 3), n_matches, axis=0
                 )
-                total_film_transforms[:, :2, :2] = total_film_transforms_2d
+                total_film_transforms[:, :2, :2] = eq_total_film_transforms_2d
                 total_sub_transforms = np.repeat(
                     np.eye(3).reshape(1, 3, 3), n_matches, axis=0
                 )
-                total_sub_transforms[:, :2, :2] = total_sub_transforms_2d
+                total_sub_transforms[:, :2, :2] = eq_total_sub_transforms_2d
 
                 for i in range(n_matches):
                     match = OgreMatch(
@@ -138,9 +137,13 @@ class ZurMcGill:
                     )
                     matches.append(match)
 
+        matches = sorted(matches, key=lambda x: x.area)
+
         return matches
 
-    def _is_same(self, film_vectors, sub_vectors):
+    def _is_same(
+        self, film_vectors: np.ndarray, sub_vectors: np.ndarray
+    ) -> Iterable[np.ndarray]:
         film_a_norm = self._vec_norm(film_vectors[:, 0])
         film_b_norm = self._vec_norm(film_vectors[:, 1])
 
@@ -179,20 +182,20 @@ class ZurMcGill:
             eq_sub_inds,
         )
 
-    def _vec_norm(self, vecs):
+    def _vec_norm(self, vecs: np.ndarray) -> np.ndarray:
         dot_str = "ij,ij->i"
         norms = np.sqrt(np.einsum(dot_str, vecs, vecs))
 
         return norms
 
-    def _vec_angle(self, a_vecs, b_vecs):
+    def _vec_angle(self, a_vecs: np.ndarray, b_vecs: np.ndarray) -> np.ndarray:
         dot_str = "ij,ij->i"
         cosang = np.einsum(dot_str, a_vecs, b_vecs)
         sinang = self._vec_norm(np.cross(a_vecs, b_vecs, axis=1))
 
         return np.arctan2(sinang, cosang)
 
-    def _get_matching_areas(self):
+    def _get_matching_areas(self) -> np.ndarray:
         X, Y = np.meshgrid(self.film_rs, self.substrate_rs)
         prod_array = np.c_[X.ravel(), Y.ravel()]
         film_over_sub = prod_array[:, 0] / prod_array[:, 1]
@@ -213,7 +216,7 @@ class ZurMcGill:
 
         return matching_areas
 
-    def _get_transformation_matrices(self):
+    def _get_transformation_matrices(self) -> Iterable[np.ndarray]:
         matching_areas = self._get_matching_areas()
         factor_dict = {
             n: self._get_factors(n) for n in np.unique(matching_areas)
@@ -232,7 +235,9 @@ class ZurMcGill:
 
         return film_sl_vectors, sub_sl_vectors
 
-    def _get_reduced_vectors(self, film_sl_vectors, sub_sl_vectors):
+    def _get_reduced_vectors(
+        self, film_sl_vectors: np.ndarray, sub_sl_vectors: np.ndarray
+    ) -> Iterable[np.ndarray]:
         (
             reduced_film_sl_vectors,
             film_reduction_matrix,
@@ -249,13 +254,13 @@ class ZurMcGill:
             sub_reduction_matrix,
         )
 
-    def _get_factors(self, n):
+    def _get_factors(self, n: int) -> np.ndarray:
         factors = []
         upper_right = []
         for i in range(1, n + 1):
             if n % i == 0:
-                factors.extend(i * [[i, n // i]])
-                upper_right.extend(list(range(i)))
+                factors.extend((n // i) * [[i, n // i]])
+                upper_right.extend(list(range(n // i)))
 
         x = np.c_[factors, upper_right]
 
@@ -273,10 +278,12 @@ class ZurMcGill:
         return matrices
 
 
-def reduce_vectors_zur_and_mcgill(vectors: np.ndarray):
+def reduce_vectors_zur_and_mcgill(vectors: np.ndarray) -> Iterable[np.ndarray]:
     n_vectors = len(vectors)
     reduced = np.zeros(n_vectors).astype(bool)
-    mats = np.repeat(np.eye(2).reshape((1, 2, 2)), n_vectors, axis=0)
+    mats = np.repeat(
+        np.eye(2).reshape((1, 2, 2)).astype(int), n_vectors, axis=0
+    )
 
     while not reduced.all():
         ui = np.where(np.logical_not(reduced))[0]
@@ -332,10 +339,3 @@ def reduce_vectors_zur_and_mcgill(vectors: np.ndarray):
         mats[ui] = umats
 
     return vectors, mats
-
-
-if __name__ == "__main__":
-    vectors1 = np.array([[5, 0, 0], [0, 5, 0]])
-    vectors2 = np.array([[7.5, 0, 0], [0, 7.5, 0]])
-    zm = ZurMcGill(film_vectors=vectors1, substrate_vectors=vectors2)
-    zm._get_transformation_matrices(12)

@@ -1,7 +1,7 @@
 """
 This module will be used to construct the surfaces and interfaces used in this package.
 """
-from OgreInterface.surfaces_new import Surface, Interface
+from OgreInterface.surfaces import Surface, Interface
 from OgreInterface.utils import (
     get_reduced_basis,
     reduce_vectors_zur_and_mcgill,

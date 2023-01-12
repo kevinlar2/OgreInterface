@@ -4,7 +4,6 @@ from OgreInterface.lattice_match import ZurMcGill
 from pymatgen.core.structure import Structure
 from pymatgen.io.ase import AseAtomsAdaptor
 from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
-from pymatgen.analysis.interfaces.zsl import ZSLGenerator
 
 from ase import Atoms
 import numpy as np

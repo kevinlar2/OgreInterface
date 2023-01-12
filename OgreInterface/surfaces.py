@@ -161,14 +161,7 @@ class Interface:
 
     @property
     def area(self):
-        area = np.linalg.norm(
-            np.cross(
-                self.interface.lattice.matrix[0],
-                self.interface.lattice.matrix[1],
-            )
-        )
-
-        return area
+        return self.match.area
 
     @property
     def structure_volume(self):
@@ -245,9 +238,12 @@ class Interface:
             + f"({match_a_film} || {match_a_sub})",
             "Epitaxial Match Along \\vec{b} (film || sub): "
             + f"({match_b_film} || {match_b_sub})",
-            "Strain Along \\vec{a} (%): " + f"{100*self.strain[0]:.3f}",
-            "Strain Along \\vec{b} (%): " + f"{100*self.strain[1]:.3f}",
-            "In-plane Angle Mismatch (%): " + f"{100*self.angle_diff:.3f}",
+            "Strain Along \\vec{a} (%): "
+            + f"{100*self.match.linear_strain[0]:.3f}",
+            "Strain Along \\vec{b} (%): "
+            + f"{100*self.match.linear_strain[1]:.3f}",
+            "In-plane Angle Mismatch (%): "
+            + f"{100*self.match.angle_strain:.3f}",
             "Cross Section Area (Ang^2): " + f"{self.area:.3f}",
         ]
         return_str = "\n".join(return_info)

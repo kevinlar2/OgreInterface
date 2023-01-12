@@ -113,11 +113,11 @@ class ZurMcGill:
                 )
 
                 total_film_transforms = np.repeat(
-                    np.eye(3).reshape(1, 3, 3), n_matches, axis=0
+                    np.eye(3).reshape(1, 3, 3).astype(int), n_matches, axis=0
                 )
                 total_film_transforms[:, :2, :2] = eq_total_film_transforms_2d
                 total_sub_transforms = np.repeat(
-                    np.eye(3).reshape(1, 3, 3), n_matches, axis=0
+                    np.eye(3).reshape(1, 3, 3).astype(int), n_matches, axis=0
                 )
                 total_sub_transforms[:, :2, :2] = eq_total_sub_transforms_2d
 

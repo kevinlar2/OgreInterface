@@ -24,7 +24,7 @@ import numpy as np
 import math
 from copy import deepcopy
 from typing import Union, List
-from itertools import combinations, product
+from itertools import combinations, product, groupby
 from ase import Atoms
 
 from scipy.cluster.hierarchy import fcluster, linkage
@@ -598,34 +598,54 @@ class InterfaceGenerator:
         zm = ZurMcGill(
             film_vectors=self.film.inplane_vectors,
             substrate_vectors=self.substrate.inplane_vectors,
+            film_basis=self.film.uvw_basis,
+            substrate_basis=self.substrate.uvw_basis,
             max_area=self.max_area,
             max_linear_strain=self.length_tol,
             max_angle_strain=self.angle_tol,
             max_area_mismatch=self.area_tol,
         )
-        match_list = zm.run()
+        match_list = zm.run(return_all=True)
 
         if len(match_list) == 0:
             raise TolarenceError(
                 "No interfaces were found, please increase the tolarences."
             )
         else:
-            return match_list
+            test_return = []
+            for match in match_list:
+                test_return.extend(match)
+
+            return test_return
+            # group_list = []
+            # for i, match in enumerate(match_list):
+            #     groups = groupby(
+            #         match,
+            #         key=lambda x: (
+            #             round(x.substrate_a_norm, 3),
+            #             round(x.substrate_b_norm, 3),
+            #             round(x.substrate_angle, 3),
+            #         ),
+            #     )
+            #     for group in groups:
+            #         group_list.append(group[1])
+
+            # return group_list
 
     def _is_equal(self, structure1, structure2):
         structure_matcher = StructureMatcher(
-            ltol=0.001,
-            stol=0.001,
-            angle_tol=0.001,
+            ltol=0.01,
+            stol=0.01,
+            angle_tol=0.01,
             primitive_cell=False,
             scale=False,
         )
-        #  is_fit = structure_matcher.fit(structure1, structure2)
-        match = structure_matcher._match(structure1, structure2, 1)
-        if match is None:
-            is_fit = False
-        else:
-            is_fit = match[0] <= 0.001
+        is_fit = structure_matcher.fit(structure1, structure2)
+        # match = structure_matcher._match(structure1, structure2, 1)
+        # if match is None:
+        #     is_fit = False
+        # else:
+        #     is_fit = match[0] <= 0.001
 
         return is_fit
 
@@ -668,16 +688,17 @@ class InterfaceGenerator:
     def generate_interfaces(self):
         interfaces = []
         print("Generating Interfaces:")
-        for match in tqdm(self.match_list):
-            interface = Interface(
-                substrate=self.substrate,
-                film=self.film,
-                interfacial_distance=self.interfacial_distance,
-                match=match,
-                vacuum=self.vacuum,
-                center=self.center,
-            )
-            interfaces.append(interface)
+        for group_matches in tqdm(self.match_list):
+            for match in group_matches:
+                interface = Interface(
+                    substrate=self.substrate,
+                    film=self.film,
+                    interfacial_distance=self.interfacial_distance,
+                    match=match,
+                    vacuum=self.vacuum,
+                    center=self.center,
+                )
+                interfaces.append(interface)
 
         interfaces = np.array(interfaces)
 

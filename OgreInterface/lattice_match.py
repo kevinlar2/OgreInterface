@@ -6,6 +6,12 @@ from dataclasses import dataclass
 @dataclass
 class OgreMatch:
     area: float
+    substrate_a_norm: float
+    substrate_b_norm: float
+    substrate_angle: float
+    film_a_norm: float
+    film_b_norm: float
+    film_angle: float
     linear_strain: np.ndarray
     angle_strain: float
     film_vectors: np.ndarray
@@ -16,20 +22,40 @@ class OgreMatch:
     substrate_sl_vectors: np.ndarray
     substrate_zur_mcgill_transform: np.ndarray
     substrate_sl_transform: np.ndarray
+    substrate_sl_basis: np.ndarray
+    substrate_sl_scale_factors: np.ndarray
+    film_sl_basis: np.ndarray
+    film_sl_scale_factors: np.ndarray
+
+    @property
+    def sort_key(self):
+        key = np.concatenate(
+            [
+                self.substrate_sl_scale_factors,
+                self.substrate_sl_basis.ravel(),
+                self.film_sl_scale_factors,
+                self.film_sl_basis.ravel(),
+            ]
+        )
+        return tuple(key)
 
 
 class ZurMcGill:
     def __init__(
         self,
         film_vectors: np.ndarray,
+        film_basis: np.ndarray,
         substrate_vectors: np.ndarray,
+        substrate_basis: np.ndarray,
         max_area: float = 400.0,
         max_linear_strain: float = 0.01,
         max_angle_strain: float = 0.01,
         max_area_mismatch: float = 0.01,
     ) -> None:
         self.film_vectors = film_vectors
+        self.film_basis = film_basis
         self.substrate_vectors = substrate_vectors
+        self.substrate_basis = substrate_basis
         self.max_area = max_area
         self.max_linear_strain = max_linear_strain
         self.max_angle_strain = max_angle_strain
@@ -51,7 +77,7 @@ class ZurMcGill:
 
         return film_rs, substrate_rs
 
-    def run(self) -> List[OgreMatch]:
+    def run(self, return_all: bool = True) -> List[OgreMatch]:
         matches = []
         for transforms in self._get_transformation_matrices():
             film_transforms = transforms[0]
@@ -76,6 +102,12 @@ class ZurMcGill:
                 eq_angle_strain,
                 eq_film_inds,
                 eq_sub_inds,
+                eq_sub_a_norm,
+                eq_sub_b_norm,
+                eq_sub_angle,
+                eq_film_a_norm,
+                eq_film_b_norm,
+                eq_film_angle,
             ) = self._is_same(
                 film_vectors=reduced_film_sl_vectors,
                 sub_vectors=reduced_sub_sl_vectors,
@@ -112,6 +144,15 @@ class ZurMcGill:
                     "...ij,...jk", eq_sub_reduction_matrices, eq_sub_transforms
                 )
 
+                (
+                    film_sl_basis,
+                    film_sl_scale_factors,
+                    sub_sl_basis,
+                    sub_sl_scale_factors,
+                ) = self._get_sl_basis(
+                    eq_total_film_transforms_2d, eq_total_sub_transforms_2d
+                )
+
                 total_film_transforms = np.repeat(
                     np.eye(3).reshape(1, 3, 3).astype(int), n_matches, axis=0
                 )
@@ -121,9 +162,16 @@ class ZurMcGill:
                 )
                 total_sub_transforms[:, :2, :2] = eq_total_sub_transforms_2d
 
+                same_area_matches = []
                 for i in range(n_matches):
                     match = OgreMatch(
                         area=eq_areas[i],
+                        substrate_a_norm=eq_sub_a_norm[i],
+                        substrate_b_norm=eq_sub_b_norm[i],
+                        substrate_angle=eq_sub_angle[i],
+                        film_a_norm=eq_film_a_norm[i],
+                        film_b_norm=eq_film_b_norm[i],
+                        film_angle=eq_film_angle[i],
                         linear_strain=strains[i],
                         angle_strain=eq_angle_strain[i],
                         film_vectors=self.film_vectors,
@@ -134,10 +182,26 @@ class ZurMcGill:
                         substrate_sl_vectors=eq_reduced_sub_sl_vectors[i],
                         substrate_zur_mcgill_transform=eq_sub_transforms[i],
                         substrate_sl_transform=total_sub_transforms[i],
+                        substrate_sl_basis=sub_sl_basis[i],
+                        substrate_sl_scale_factors=sub_sl_scale_factors[i],
+                        film_sl_basis=film_sl_basis[i],
+                        film_sl_scale_factors=film_sl_scale_factors[i],
                     )
-                    matches.append(match)
+                    same_area_matches.append(match)
 
-        matches = sorted(matches, key=lambda x: x.area)
+                matches.append(
+                    sorted(
+                        same_area_matches,
+                        key=lambda x: (
+                            round(x.substrate_a_norm, 3),
+                            round(x.substrate_b_norm, 3),
+                            round(x.substrate_angle, 3),
+                        ),
+                    )
+                )
+
+                if not return_all:
+                    break
 
         return matches
 
@@ -173,6 +237,12 @@ class ZurMcGill:
         eq_angle_strain = angle_strain[is_equal]
         eq_film_inds = film_inds[is_equal]
         eq_sub_inds = sub_inds[is_equal]
+        eq_sub_a_norm = sub_a_norm[eq_sub_inds]
+        eq_sub_b_norm = sub_b_norm[eq_sub_inds]
+        eq_sub_angle = sub_angle[eq_sub_inds]
+        eq_film_a_norm = film_a_norm[eq_film_inds]
+        eq_film_b_norm = film_b_norm[eq_film_inds]
+        eq_film_angle = film_angle[eq_film_inds]
 
         return (
             eq_a_strain,
@@ -180,6 +250,12 @@ class ZurMcGill:
             eq_angle_strain,
             eq_film_inds,
             eq_sub_inds,
+            eq_sub_a_norm,
+            eq_sub_b_norm,
+            eq_sub_angle,
+            eq_film_a_norm,
+            eq_film_b_norm,
+            eq_film_angle,
         )
 
     def _vec_norm(self, vecs: np.ndarray) -> np.ndarray:
@@ -234,6 +310,25 @@ class ZurMcGill:
         )
 
         return film_sl_vectors, sub_sl_vectors
+
+    def _get_sl_basis(self, film_transforms, sub_transforms):
+        film_sl_basis = np.einsum(
+            "...ij,jk", film_transforms, self.film_basis[:2]
+        )
+        film_sl_scale_factors = np.gcd.reduce(film_sl_basis, axis=2)
+        sub_sl_basis = np.einsum(
+            "...ij,jk", sub_transforms, self.substrate_basis[:2]
+        )
+        sub_sl_scale_factors = np.gcd.reduce(sub_sl_basis, axis=2)
+        sub_sl_basis //= sub_sl_scale_factors[:, :, None]
+        film_sl_basis //= film_sl_scale_factors[:, :, None]
+
+        return (
+            film_sl_basis,
+            film_sl_scale_factors,
+            sub_sl_basis,
+            sub_sl_scale_factors,
+        )
 
     def _get_reduced_vectors(
         self, film_sl_vectors: np.ndarray, sub_sl_vectors: np.ndarray

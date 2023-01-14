@@ -63,6 +63,7 @@ class SurfaceGenerator:
         self.bulk_structure, self.bulk_atoms = self._get_bulk(
             atoms_or_struc=bulk
         )
+        self.point_group_operations = self._get_point_group_operations()
 
         self.miller_index = miller_index
         self.layers = layers
@@ -135,6 +136,16 @@ class SurfaceGenerator:
             init_atoms = AseAtomsAdaptor().get_atoms(init_structure)
 
             return init_structure, init_atoms
+
+    def _get_point_group_operations(self):
+        sg = SpacegroupAnalyzer(self.bulk_structure)
+        point_group_operations = sg.get_point_group_operations(cartesian=False)
+        operation_array = np.array(
+            [p.rotation_matrix for p in point_group_operations]
+        ).astype(np.int8)
+        unique_operations = np.unique(operation_array, axis=0)
+
+        return unique_operations
 
     def _get_oriented_bulk_structure(self):
         bulk = self.bulk_structure
@@ -528,6 +539,7 @@ class SurfaceGenerator:
                 layers=self.layers,
                 vacuum=self.vacuum,
                 uvw_basis=self.uvw_basis,
+                point_group_operations=self.point_group_operations,
             )
             surfaces.append(surface)
 
@@ -612,11 +624,72 @@ class InterfaceGenerator:
                 "No interfaces were found, please increase the tolarences."
             )
         else:
-            test_return = []
-            for match in match_list:
-                test_return.extend(match)
+            film_basis_vectors = []
+            sub_basis_vectors = []
+            film_scale_factors = []
+            sub_scale_factors = []
+            match_inds = []
+            for i, group_match in enumerate(match_list):
+                for j, match in enumerate(group_match):
+                    film_basis_vectors.append(match.film_sl_basis)
+                    sub_basis_vectors.append(match.substrate_sl_basis)
+                    film_scale_factors.append(match.film_sl_scale_factors)
+                    sub_scale_factors.append(match.substrate_sl_scale_factors)
+                    match_inds.append((i, j))
 
-            return test_return
+            film_basis_vectors = np.vstack(film_basis_vectors).astype(np.int8)
+            sub_basis_vectors = np.vstack(sub_basis_vectors).astype(np.int8)
+            film_scale_factors = np.concatenate(film_scale_factors).astype(
+                np.int8
+            )
+            sub_scale_factors = np.concatenate(sub_scale_factors).astype(
+                np.int8
+            )
+
+            film_map = self._get_miller_index_map(
+                self.film.point_group_operations, film_basis_vectors
+            )
+            sub_map = self._get_miller_index_map(
+                self.substrate.point_group_operations, sub_basis_vectors
+            )
+
+            split_film_basis_vectors = np.vsplit(
+                film_basis_vectors, len(match_inds)
+            )
+            split_sub_basis_vectors = np.vsplit(
+                sub_basis_vectors, len(match_inds)
+            )
+            split_film_scale_factors = np.vsplit(
+                film_scale_factors, len(match_inds)
+            )
+            split_sub_scale_factors = np.vsplit(
+                sub_scale_factors, len(match_inds)
+            )
+
+            sort_vecs = []
+
+            for i in range(split_film_basis_vectors):
+                fb = split_film_basis_vectors[i]
+                sb = split_sub_basis_vectors[i]
+                fs = split_film_scale_factors[i]
+                ss = split_sub_scale_factors[i]
+                sort_vec = np.concatenate(
+                    [
+                        ss[0],
+                        sub_map[tuple(sb[0])],
+                        ss[1],
+                        sub_map[tuple(sb[1])],
+                        fs[0],
+                        film_map[tuple(fb[0])],
+                        fs[1],
+                        film_map[tuple(fb[1])],
+                    ]
+                )
+                sort_vecs.append(sort_vecs)
+
+            print(sort_vecs)
+
+            # return test_return
             # group_list = []
             # for i, match in enumerate(match_list):
             #     groups = groupby(
@@ -631,6 +704,54 @@ class InterfaceGenerator:
             #         group_list.append(group[1])
 
             # return group_list
+
+    def _get_miller_index_map(self, operations, miller_indices):
+        miller_indices = np.unique(miller_indices, axis=0)
+        not_used = np.ones(miller_indices.shape[0]).astype(bool)
+        op = np.einsum("...ij,jk", operations, miller_indices.T)
+        op = op.transpose(2, 0, 1)
+        unique_vecs = {}
+
+        for i, vec in enumerate(miller_indices):
+            if not_used[i]:
+                same_inds = (op == vec).all(axis=2).sum(axis=1) > 0
+
+                if not_used[same_inds].all():
+                    same_vecs = miller_indices[same_inds]
+                    optimal_vec = self._get_optimal_miller_index(same_vecs)
+                    unique_vecs[tuple(optimal_vec)] = list(
+                        map(tuple, same_vecs)
+                    )
+                    not_used[same_inds] = False
+
+        mapping = {}
+        for key, value in unique_vecs.items():
+            for v in value:
+                mapping[v] = key
+
+        return mapping
+
+    def _get_optimal_miller_index(self, vecs):
+        diff = np.abs(np.sum(np.sign(vecs), axis=1))
+        like_signs = vecs[diff == np.max(diff)]
+        if len(like_signs) == 1:
+            return like_signs[0]
+        else:
+            first_max = like_signs[
+                np.abs(like_signs)[:, 0] == np.max(np.abs(like_signs)[:, 0])
+            ]
+            if len(first_max) == 1:
+                return first_max[0]
+            else:
+                second_max = first_max[
+                    np.abs(first_max)[:, 1] == np.max(np.abs(first_max)[:, 1])
+                ]
+                if len(second_max) == 1:
+                    return second_max[0]
+                else:
+                    return second_max[
+                        np.argmax(np.sign(second_max).sum(axis=1))
+                    ]
 
     def _is_equal(self, structure1, structure2):
         structure_matcher = StructureMatcher(

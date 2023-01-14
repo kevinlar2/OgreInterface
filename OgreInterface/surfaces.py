@@ -38,6 +38,7 @@ class Surface:
         layers,
         vacuum,
         uvw_basis,
+        point_group_operations,
     ):
         (
             self.orthogonal_slab_structure,
@@ -59,6 +60,7 @@ class Surface:
         self.layers = layers
         self.vacuum = vacuum
         self.uvw_basis = uvw_basis
+        self.point_group_operations = point_group_operations
 
     @property
     def formula(self):

@@ -53,11 +53,9 @@ class MillerSearch(object):
         self.angle_tol = angle_tol
         self.length_tol = length_tol
         self.max_area = max_area
-        print("Substrate")
         self.substrate_inds = self._get_unique_miller_indices(
             self.substrate, self.max_substrate_index
         )
-        print("Film")
         self.film_inds = self._get_unique_miller_indices(
             self.film, self.max_film_index
         )
@@ -151,9 +149,6 @@ class MillerSearch(object):
         unique_planes = []
 
         for k in planes_dict:
-            print(k)
-            print(list(set(planes_dict[k])))
-            print("")
             equivalent_planes = np.array(list(set(planes_dict[k])))
             diff = np.abs(np.sum(np.sign(equivalent_planes), axis=1))
             like_signs = equivalent_planes[diff == np.max(diff)]
@@ -270,7 +265,9 @@ class MillerSearch(object):
             sub_area = np.linalg.norm(
                 np.cross(sub_inplane_vectors[0], sub_inplane_vectors[1])
             )
-            substrates.append([sub_inplane_vectors, sub_area])
+            substrates.append(
+                [sub_inplane_vectors, sub_area, sg_sub.uvw_basis]
+            )
 
         for inds in self.film_inds:
             sg_film = SurfaceGenerator(
@@ -287,7 +284,7 @@ class MillerSearch(object):
                 np.cross(film_inplane_vectors[0], film_inplane_vectors[1])
             )
 
-            films.append([film_inplane_vectors, film_area])
+            films.append([film_inplane_vectors, film_area, sg_film.uvw_basis])
 
         misfits = np.ones((len(substrates), len(films))) * np.nan
         areas = np.ones((len(substrates), len(films))) * np.nan
@@ -298,6 +295,8 @@ class MillerSearch(object):
                 zm = ZurMcGill(
                     film_vectors=film[0],
                     substrate_vectors=substrate[0],
+                    film_basis=film[2],
+                    substrate_basis=substrate[2],
                     max_area=self.max_area,
                     max_linear_strain=self.length_tol,
                     max_angle_strain=self.angle_tol,

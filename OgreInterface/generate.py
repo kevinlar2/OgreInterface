@@ -26,6 +26,8 @@ from copy import deepcopy
 from typing import Union, List
 from itertools import combinations, product, groupby
 from ase import Atoms
+from multiprocessing import Pool, cpu_count
+import time
 
 from scipy.cluster.hierarchy import fcluster, linkage
 from scipy.spatial.distance import squareform
@@ -623,19 +625,18 @@ class InterfaceGenerator:
             raise TolarenceError(
                 "No interfaces were found, please increase the tolarences."
             )
+        elif len(match_list) == 1:
+            return match_list
         else:
             film_basis_vectors = []
             sub_basis_vectors = []
             film_scale_factors = []
             sub_scale_factors = []
-            match_inds = []
-            for i, group_match in enumerate(match_list):
-                for j, match in enumerate(group_match):
-                    film_basis_vectors.append(match.film_sl_basis)
-                    sub_basis_vectors.append(match.substrate_sl_basis)
-                    film_scale_factors.append(match.film_sl_scale_factors)
-                    sub_scale_factors.append(match.substrate_sl_scale_factors)
-                    match_inds.append((i, j))
+            for i, match in enumerate(match_list):
+                film_basis_vectors.append(match.film_sl_basis)
+                sub_basis_vectors.append(match.substrate_sl_basis)
+                film_scale_factors.append(match.film_sl_scale_factors)
+                sub_scale_factors.append(match.substrate_sl_scale_factors)
 
             film_basis_vectors = np.vstack(film_basis_vectors).astype(np.int8)
             sub_basis_vectors = np.vstack(sub_basis_vectors).astype(np.int8)
@@ -654,56 +655,51 @@ class InterfaceGenerator:
             )
 
             split_film_basis_vectors = np.vsplit(
-                film_basis_vectors, len(match_inds)
+                film_basis_vectors, len(match_list)
             )
             split_sub_basis_vectors = np.vsplit(
-                sub_basis_vectors, len(match_inds)
+                sub_basis_vectors, len(match_list)
             )
-            split_film_scale_factors = np.vsplit(
-                film_scale_factors, len(match_inds)
+            split_film_scale_factors = np.split(
+                film_scale_factors, len(match_list)
             )
-            split_sub_scale_factors = np.vsplit(
-                sub_scale_factors, len(match_inds)
+            split_sub_scale_factors = np.split(
+                sub_scale_factors, len(match_list)
             )
 
             sort_vecs = []
 
-            for i in range(split_film_basis_vectors):
+            for i in range(len(split_film_basis_vectors)):
                 fb = split_film_basis_vectors[i]
                 sb = split_sub_basis_vectors[i]
                 fs = split_film_scale_factors[i]
                 ss = split_sub_scale_factors[i]
                 sort_vec = np.concatenate(
                     [
-                        ss[0],
+                        [ss[0]],
                         sub_map[tuple(sb[0])],
-                        ss[1],
+                        [ss[1]],
                         sub_map[tuple(sb[1])],
-                        fs[0],
+                        [fs[0]],
                         film_map[tuple(fb[0])],
-                        fs[1],
+                        [fs[1]],
                         film_map[tuple(fb[1])],
                     ]
                 )
-                sort_vecs.append(sort_vecs)
+                sort_vecs.append(sort_vec)
 
-            print(sort_vecs)
+            sort_vecs = np.vstack(sort_vecs)
+            unique_sort_vecs, unique_sort_inds = np.unique(
+                sort_vecs, axis=0, return_index=True
+            )
+            unique_matches = [match_list[i] for i in unique_sort_inds]
 
-            # return test_return
-            # group_list = []
-            # for i, match in enumerate(match_list):
-            #     groups = groupby(
-            #         match,
-            #         key=lambda x: (
-            #             round(x.substrate_a_norm, 3),
-            #             round(x.substrate_b_norm, 3),
-            #             round(x.substrate_angle, 3),
-            #         ),
-            #     )
-            #     for group in groups:
-            #         group_list.append(group[1])
+            sorted_matches = sorted(
+                unique_matches,
+                key=lambda x: (x.area, max(x.linear_strain), x.angle_strain),
+            )
 
-            # return group_list
+            return sorted_matches
 
     def _get_miller_index_map(self, operations, miller_indices):
         miller_indices = np.unique(miller_indices, axis=0)
@@ -753,117 +749,29 @@ class InterfaceGenerator:
                         np.argmax(np.sign(second_max).sum(axis=1))
                     ]
 
-    def _is_equal(self, structure1, structure2):
-        structure_matcher = StructureMatcher(
-            ltol=0.01,
-            stol=0.01,
-            angle_tol=0.01,
-            primitive_cell=False,
-            scale=False,
+    def _build_interface(self, match):
+        interface = Interface(
+            substrate=self.substrate,
+            film=self.film,
+            interfacial_distance=self.interfacial_distance,
+            match=match,
+            vacuum=self.vacuum,
+            center=self.center,
         )
-        is_fit = structure_matcher.fit(structure1, structure2)
-        # match = structure_matcher._match(structure1, structure2, 1)
-        # if match is None:
-        #     is_fit = False
-        # else:
-        #     is_fit = match[0] <= 0.001
-
-        return is_fit
-
-    def _find_exact_matches(self, structures):
-        all_coords = np.array([i.interface.frac_coords for i in structures])
-        all_species = np.array([i.interface.species for i in structures])
-
-        for i in range(len(structures)):
-            coords = np.round(all_coords[i], 6)
-            coords[:, -1] = coords[:, -1] - np.min(coords[:, -1])
-            coords.dtype = [
-                ("a", "float64"),
-                ("b", "float64"),
-                ("c", "float64"),
-            ]
-            coords_inds = np.squeeze(
-                np.argsort(coords, axis=0, order=("c", "b", "a"))
-            )
-            coords.dtype = "float64"
-
-            coords_sorted = coords[coords_inds]
-            species_sorted = np.array(all_species[i]).astype(str)[coords_inds]
-
-            all_coords[i] = coords_sorted
-            all_species[i] = species_sorted
-
-        equal_coords = np.array(
-            [
-                np.isclose(all_coords[i], all_coords).all(axis=1).all(axis=1)
-                for i in range(all_coords.shape[0])
-            ]
-        )
-        unique_eq = np.unique(equal_coords, axis=0)
-
-        inds = [np.where(unique_eq[i])[0] for i in range(unique_eq.shape[0])]
-        reduced_inds = [np.min(i) for i in inds]
-
-        return reduced_inds
+        return interface
 
     def generate_interfaces(self):
         interfaces = []
         print("Generating Interfaces:")
-        for group_matches in tqdm(self.match_list):
-            for match in group_matches:
-                interface = Interface(
-                    substrate=self.substrate,
-                    film=self.film,
-                    interfacial_distance=self.interfacial_distance,
-                    match=match,
-                    vacuum=self.vacuum,
-                    center=self.center,
-                )
-                interfaces.append(interface)
+        for match in tqdm(self.match_list, dynamic_ncols=True):
+            interface = Interface(
+                substrate=self.substrate,
+                film=self.film,
+                interfacial_distance=self.interfacial_distance,
+                match=match,
+                vacuum=self.vacuum,
+                center=self.center,
+            )
+            interfaces.append(interface)
 
-        interfaces = np.array(interfaces)
-
-        interface_sizes = np.array(
-            [len(interfaces[i].interface) for i in range(len(interfaces))]
-        )
-        unique_inds = np.array(
-            [np.isin(interface_sizes, i) for i in np.unique(interface_sizes)]
-        )
-        possible_alike_strucs = [
-            interfaces[unique_inds[i]] for i in range(unique_inds.shape[0])
-        ]
-
-        interfaces = []
-
-        for strucs in possible_alike_strucs:
-            inds = self._find_exact_matches(strucs)
-            reduced_strucs = strucs[inds]
-            interfaces.extend(reduced_strucs)
-
-        combos = combinations(range(len(interfaces)), 2)
-        same_slab_indices = []
-        print("Finding Symmetrically Equivalent Interfaces:")
-        for combo in tqdm(combos):
-            if self._is_equal(
-                interfaces[combo[0]].interface, interfaces[combo[1]].interface
-            ):
-                same_slab_indices.append(combo)
-
-        to_delete = [
-            np.min(same_slab_index) for same_slab_index in same_slab_indices
-        ]
-        unique_slab_indices = [
-            i for i in range(len(interfaces)) if i not in to_delete
-        ]
-        unique_interfaces = [interfaces[i] for i in unique_slab_indices]
-
-        areas = []
-
-        for interface in unique_interfaces:
-            area = interface.match.area
-            areas.append(area)
-
-        sort = np.argsort(areas)
-        sorted_unique_interfaces = [unique_interfaces[i] for i in sort]
-
-        return sorted_unique_interfaces
+        return interfaces

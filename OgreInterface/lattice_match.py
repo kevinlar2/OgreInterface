@@ -189,21 +189,17 @@ class ZurMcGill:
                     )
                     same_area_matches.append(match)
 
-                matches.append(
-                    sorted(
-                        same_area_matches,
-                        key=lambda x: (
-                            round(x.substrate_a_norm, 3),
-                            round(x.substrate_b_norm, 3),
-                            round(x.substrate_angle, 3),
-                        ),
-                    )
-                )
+                matches.extend(same_area_matches)
 
                 if not return_all:
                     break
 
-        return matches
+        sorted_matches = sorted(
+            matches,
+            key=lambda x: (x.area, max(x.linear_strain), x.angle_strain),
+        )
+
+        return sorted_matches
 
     def _is_same(
         self, film_vectors: np.ndarray, sub_vectors: np.ndarray

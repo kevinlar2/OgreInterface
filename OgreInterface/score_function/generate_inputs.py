@@ -67,6 +67,7 @@ def generate_dict_ase(
         r0s = torch.Tensor(
             [radius_dict[s] for s in atom.get_chemical_symbols()]
         )
+        is_film = torch.from_numpy(atom.get_array("is_film", copy=True))
         ns = torch.Tensor([ns_dict[s] for s in atom.get_chemical_symbols()])
         R = torch.from_numpy(atom.get_positions())
         cell = torch.from_numpy(atom.get_cell().array).view(-1, 3, 3)
@@ -91,6 +92,7 @@ def generate_dict_ase(
             "partial_charges": charges,
             "r0s": r0s,
             "ns": ns,
+            "is_film": is_film,
         }
 
         inputs_batch.append(input_dict)
@@ -124,6 +126,7 @@ def generate_dict_torch(
         r0s = torch.Tensor(
             [radius_dict[s] for s in atom.get_chemical_symbols()]
         )
+        is_film = torch.from_numpy(atom.get_array("is_film", copy=True))
         ns = torch.Tensor([ns_dict[s] for s in atom.get_chemical_symbols()])
         R = torch.from_numpy(atom.get_positions())
         cell = torch.from_numpy(atom.get_cell().array)
@@ -137,6 +140,7 @@ def generate_dict_torch(
             "partial_charges": charges,
             "r0s": r0s,
             "ns": ns,
+            "is_film": is_film,
         }
 
         tn.forward(inputs=input_dict)

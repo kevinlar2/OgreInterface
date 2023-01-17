@@ -118,11 +118,17 @@ class IonicSurfaceMatcher:
                 inplace=False,
                 return_atoms=True,
             )
+            shifted_atoms.set_array(
+                "is_film", self.interface.interface.site_properties["is_film"]
+            )
             z_shifted_atoms = self.interface.shift_film(
                 shift + z_shift,
                 fractional=True,
                 inplace=False,
                 return_atoms=True,
+            )
+            z_shifted_atoms.set_array(
+                "is_film", self.interface.interface.site_properties["is_film"]
             )
             atoms.append(shifted_atoms)
             z_atoms.append(z_shifted_atoms)
@@ -139,6 +145,9 @@ class IonicSurfaceMatcher:
                 return_atoms=True,
             )
         ]
+        atoms[0].set_array(
+            "is_film", self.interface.interface.site_properties["is_film"]
+        )
 
         for shift in shifts:
             shifted_atoms = self.interface.shift_film(
@@ -146,6 +155,9 @@ class IonicSurfaceMatcher:
                 fractional=True,
                 inplace=False,
                 return_atoms=True,
+            )
+            shifted_atoms.set_array(
+                "is_film", self.interface.interface.site_properties["is_film"]
             )
             atoms.append(shifted_atoms)
 

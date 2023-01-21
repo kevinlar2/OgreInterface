@@ -174,7 +174,9 @@ class SurfaceGenerator:
         prim_miller_index = prim_recip_lattice.get_fractional_coords(
             normal_vector
         )
-        prim_miller_index = utils._get_reduced_vector(prim_miller_index)
+        prim_miller_index = utils._get_reduced_vector(
+            prim_miller_index
+        ).astype(int)
 
         normal_vector /= np.linalg.norm(normal_vector)
 
@@ -198,8 +200,16 @@ class SurfaceGenerator:
             sg.get_symmetry_dataset()["equivalent_atoms"][prim_inds].tolist(),
         )
 
-        intercepts = np.array([1 / i if i != 0 else 0 for i in miller_index])
-        non_zero_points = np.where(intercepts != 0)[0]
+        if len(bulk) == len(prim_bulk):
+            intercepts = np.array(
+                [1 / i if i != 0 else 0 for i in miller_index]
+            )
+            non_zero_points = np.where(intercepts != 0)[0]
+        else:
+            intercepts = np.array(
+                [1 / i if i != 0 else 0 for i in prim_miller_index]
+            )
+            non_zero_points = np.where(intercepts != 0)[0]
 
         if len(bulk) == len(prim_bulk):
             lattice_for_slab = lattice

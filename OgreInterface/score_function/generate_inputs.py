@@ -112,7 +112,7 @@ def generate_dict_torch(
     atoms: List[Atoms],
     cutoff: float,
     charge_dict: Dict[str, float],
-    radius_dict: Dict[str, float],
+    # radius_dict: Dict[str, float],
     ns_dict: Dict[str, float],
 ) -> Dict:
 
@@ -123,10 +123,12 @@ def generate_dict_torch(
         charges = torch.Tensor(
             [charge_dict[s] for s in atom.get_chemical_symbols()]
         )
-        r0s = torch.Tensor(
-            [radius_dict[s] for s in atom.get_chemical_symbols()]
+        # r0s = torch.Tensor(
+        #     [radius_dict[s] for s in atom.get_chemical_symbols()]
+        # )
+        is_film = torch.from_numpy(
+            atom.get_array("is_film", copy=True).astype(int)
         )
-        is_film = torch.from_numpy(atom.get_array("is_film", copy=True))
         ns = torch.Tensor([ns_dict[s] for s in atom.get_chemical_symbols()])
         R = torch.from_numpy(atom.get_positions())
         cell = torch.from_numpy(atom.get_cell().array)
@@ -138,7 +140,7 @@ def generate_dict_torch(
             "cell": cell,
             "pbc": torch.from_numpy(atom.get_pbc()),
             "partial_charges": charges,
-            "r0s": r0s,
+            # "r0s": r0s,
             "ns": ns,
             "is_film": is_film,
         }

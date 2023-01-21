@@ -61,9 +61,13 @@ class EnergyBorn(nn.Module):
         idx_j = inputs["idx_j"]
         is_film = inputs["is_film"]
 
-        r0_key_array = torch.stack(
-            [is_film[idx_i], is_film[idx_j], z[idx_i], z[idx_j]], dim=1
-        ).numpy.astype(int)
+        r0_key_array = (
+            torch.stack(
+                [is_film[idx_i], is_film[idx_j], z[idx_i], z[idx_j]], dim=1
+            )
+            .numpy()
+            .astype(int)
+        )
         r0_keys = list(map(tuple, r0_key_array))
 
         q_ij = torch.abs(q[idx_i] * q[idx_j])
@@ -71,8 +75,7 @@ class EnergyBorn(nn.Module):
         n_ij = ns[idx_i] + ns[idx_j] / 2.0
         r0_ij = torch.tensor([r0_dict[k] for k in r0_keys]).to(torch.float32)
         r0_ij = r0_ij.view(q_ij.shape)
-        # r0_ij = r0s[idx_i] + r0s[idx_j]
-        B_ij = (1 / 3) * q_ij * (r0_ij ** (n_ij - 1.0)) / n_ij
+        B_ij = q_ij * (r0_ij ** (n_ij - 1.0)) / n_ij
 
         n_atoms = z.shape[0]
         n_molecules = int(idx_m[-1]) + 1

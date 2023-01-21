@@ -4,15 +4,16 @@ from OgreInterface.score_function.generate_inputs import generate_dict_torch
 from OgreInterface.surfaces import Interface
 from pymatgen.io.ase import AseAtomsAdaptor
 from pymatgen.core.periodic_table import Element
-from ase.data import atomic_numbers
+from pymatgen.analysis.local_env import CrystalNN
+from ase.data import atomic_numbers, chemical_symbols
 from typing import Dict
 import numpy as np
 from matplotlib.colors import Normalize
 import matplotlib.pyplot as plt
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 from scipy.interpolate import RectBivariateSpline, CubicSpline
-from pymatgen.analysis.ewald import EwaldSummation
 from copy import deepcopy
+from itertools import groupby, combinations_with_replacement, product
 
 
 class IonicSurfaceMatcher:
@@ -32,10 +33,13 @@ class IonicSurfaceMatcher:
 
         self.cutoff, self.alpha, self.k_max = self._get_ewald_parameters()
         self.k_max = 10
-        # print(self.cutoff, self.alpha, self.k_max)
-        self.charge_dict, self.radius_dict = self._get_charges_and_radii()
-        self.ns_dict = {element: 5.0 for element in self.charge_dict}
-
+        self.charge_dict = self._get_charges()
+        self.r0_dict = self._get_r0s(
+            sub=self.interface.substrate.conventional_bulk_structure,
+            film=self.interface.film.conventional_bulk_structure,
+            charge_dict=self.charge_dict,
+        )
+        self.ns_dict = {element: 6.0 for element in self.charge_dict}
         self.d_interface = self.interface.interfacial_distance
         self.film_part = self.interface.film_part
         self.sub_part = self.interface.sub_part
@@ -53,7 +57,22 @@ class IonicSurfaceMatcher:
             shift=opt_shift, fractional=True, inplace=True
         )
 
-    def _get_charges_and_radii(self):
+    # def _get_charges_and_radii(self):
+    #     sub = self.interface.substrate.conventional_bulk_structure
+    #     film = self.interface.film.conventional_bulk_structure
+    #     sub_oxidation_state = sub.composition.oxi_state_guesses()[0]
+    #     film_oxidation_state = film.composition.oxi_state_guesses()[0]
+
+    #     sub_oxidation_state.update(film_oxidation_state)
+
+    #     radii = {
+    #         element: Element(element).ionic_radii[charge]
+    #         for element, charge in sub_oxidation_state.items()
+    #     }
+
+    #     return sub_oxidation_state, radii
+
+    def _get_charges(self):
         sub = self.interface.substrate.conventional_bulk_structure
         film = self.interface.film.conventional_bulk_structure
         sub_oxidation_state = sub.composition.oxi_state_guesses()[0]
@@ -61,12 +80,127 @@ class IonicSurfaceMatcher:
 
         sub_oxidation_state.update(film_oxidation_state)
 
-        radii = {
-            element: Element(element).ionic_radii[charge]
-            for element, charge in sub_oxidation_state.items()
-        }
+        return sub_oxidation_state
 
-        return sub_oxidation_state, radii
+    def _get_neighborhood_info(self, struc, charge_dict):
+        struc.add_oxidation_state_by_element(charge_dict)
+        Zs = np.unique(struc.atomic_numbers)
+        combos = combinations_with_replacement(Zs, 2)
+        neighbor_dict = {c: None for c in combos}
+
+        neighbor_list = []
+
+        cnn = CrystalNN()
+        for i, site in enumerate(struc.sites):
+            info_dict = cnn.get_nn_info(struc, i)
+            for neighbor in info_dict:
+                dist = site.distance(neighbor["site"])
+                species = tuple(
+                    sorted([site.specie.Z, neighbor["site"].specie.Z])
+                )
+                neighbor_list.append([species, dist])
+
+        sorted_neighbor_list = sorted(neighbor_list, key=lambda x: x[0])
+        groups = groupby(sorted_neighbor_list, key=lambda x: x[0])
+
+        for group in groups:
+            nn = list(zip(*group[1]))[1]
+            neighbor_dict[group[0]] = np.min(nn)
+
+        for n, d in neighbor_dict.items():
+            if d is None:
+                s1 = chemical_symbols[n[0]]
+                s2 = chemical_symbols[n[1]]
+                d1 = float(Element(s1).ionic_radii[charge_dict[s1]])
+                d2 = float(Element(s2).ionic_radii[charge_dict[s2]])
+
+                neighbor_dict[n] = d1 + d2
+
+        return neighbor_dict
+
+    def _get_r0s(self, sub, film, charge_dict):
+        sub_dict = self._get_neighborhood_info(sub, charge_dict)
+        film_dict = self._get_neighborhood_info(film, charge_dict)
+
+        interface_atomic_numbers = np.unique(
+            np.concatenate([sub.atomic_numbers, film.atomic_numbers])
+        )
+
+        ionic_radius_dict = {
+            n: Element(chemical_symbols[n]).ionic_radii[
+                charge_dict[chemical_symbols[n]]
+            ]
+            for n in interface_atomic_numbers
+        }
+        interface_combos = product(interface_atomic_numbers, repeat=2)
+        interface_neighbor_dict = {}
+        for c in interface_combos:
+            interface_neighbor_dict[(0, 0) + c] = None
+            interface_neighbor_dict[(1, 1) + c] = None
+            interface_neighbor_dict[(0, 1) + c] = None
+            interface_neighbor_dict[(1, 0) + c] = None
+
+        all_keys = np.array(list(sub_dict.keys()) + list(film_dict.keys()))
+        unique_keys = np.unique(all_keys, axis=0)
+        unique_keys = list(map(tuple, unique_keys))
+
+        for key in unique_keys:
+            rev_key = tuple(reversed(key))
+            sum_d = ionic_radius_dict[key[0]] + ionic_radius_dict[key[1]]
+            if key in sub_dict and key in film_dict:
+                sub_d = sub_dict[key]
+                film_d = film_dict[key]
+                interface_neighbor_dict[(0, 0) + key] = sub_d
+                interface_neighbor_dict[(1, 1) + key] = film_d
+                interface_neighbor_dict[(0, 1) + key] = (sub_d + film_d) / 2
+                interface_neighbor_dict[(1, 0) + key] = (sub_d + film_d) / 2
+                interface_neighbor_dict[(0, 0) + rev_key] = sub_d
+                interface_neighbor_dict[(1, 1) + rev_key] = film_d
+                interface_neighbor_dict[(0, 1) + rev_key] = (
+                    sub_d + film_d
+                ) / 2
+                interface_neighbor_dict[(1, 0) + rev_key] = (
+                    sub_d + film_d
+                ) / 2
+
+            if key in sub_dict and key not in film_dict:
+                sub_d = sub_dict[key]
+                interface_neighbor_dict[(0, 0) + key] = sub_d
+                interface_neighbor_dict[(1, 1) + key] = sum_d
+                interface_neighbor_dict[(0, 1) + key] = sub_d
+                interface_neighbor_dict[(1, 0) + key] = sub_d
+                interface_neighbor_dict[(0, 0) + rev_key] = sub_d
+                interface_neighbor_dict[(1, 1) + rev_key] = sum_d
+                interface_neighbor_dict[(0, 1) + rev_key] = sub_d
+                interface_neighbor_dict[(1, 0) + rev_key] = sub_d
+
+            if key not in sub_dict and key in film_dict:
+                film_d = film_dict[key]
+                interface_neighbor_dict[(1, 1) + key] = film_d
+                interface_neighbor_dict[(0, 0) + key] = sum_d
+                interface_neighbor_dict[(0, 1) + key] = film_d
+                interface_neighbor_dict[(1, 0) + key] = film_d
+                interface_neighbor_dict[(1, 1) + rev_key] = film_d
+                interface_neighbor_dict[(0, 0) + rev_key] = sum_d
+                interface_neighbor_dict[(0, 1) + rev_key] = film_d
+                interface_neighbor_dict[(1, 0) + rev_key] = film_d
+
+            if key not in sub_dict and key not in film_dict:
+                interface_neighbor_dict[(0, 0) + key] = sub_d
+                interface_neighbor_dict[(1, 1) + key] = sum_d
+                interface_neighbor_dict[(0, 1) + key] = sum_d
+                interface_neighbor_dict[(1, 0) + key] = sum_d
+                interface_neighbor_dict[(0, 0) + rev_key] = sub_d
+                interface_neighbor_dict[(1, 1) + rev_key] = sum_d
+                interface_neighbor_dict[(0, 1) + rev_key] = sum_d
+                interface_neighbor_dict[(1, 0) + rev_key] = sum_d
+
+        for key, val in interface_neighbor_dict.items():
+            if val is None:
+                sum_d = ionic_radius_dict[key[2]] + ionic_radius_dict[key[3]]
+                interface_neighbor_dict[key] = sub_d
+
+        return interface_neighbor_dict
 
     def _get_ewald_parameters(self):
         struc_vol = self.interface.structure_volume
@@ -183,7 +317,7 @@ class IonicSurfaceMatcher:
             atoms=atoms_list,
             cutoff=self.cutoff,
             charge_dict=self.charge_dict,
-            radius_dict=self.radius_dict,
+            # radius_dict=self.radius_dict,
             ns_dict=self.ns_dict,
         )
 
@@ -197,7 +331,7 @@ class IonicSurfaceMatcher:
 
     def _calculate_born(self, inputs):
         born = EnergyBorn(cutoff=self.cutoff)
-        born_energy = born.forward(inputs)
+        born_energy = born.forward(inputs, r0_dict=self.r0_dict)
 
         return born_energy
 
@@ -473,11 +607,6 @@ class IonicSurfaceMatcher:
 
         self.opt_xy_shift = opt_shift
 
-        # if shift:
-        #     self.interface.shift_film(
-        #         shift=opt_shift, fractional=True, inplace=True
-        #     )
-
         fig.tight_layout()
         fig.savefig(output, bbox_inches="tight")
         plt.close(fig)
@@ -543,17 +672,8 @@ class IonicSurfaceMatcher:
         fig, ax = plt.subplots(figsize=(4, 4), dpi=400)
         ax.set_xlabel("Interfacial Distance ($\\AA$)", fontsize=fontsize)
         ax.set_ylabel("$E_{adh}$", fontsize=fontsize)
-        # ax.plot(new_x, new_y, color="black")
-        # ax.plot(interfacial_distances, interface_coulomb_energy, color="blue")
-        # ax.plot(interfacial_distances, interface_born_energy, color="red")
-        ax.plot(
-            interfacial_distances,
-            interface_born_energy + interface_coulomb_energy,
-            color="black",
-        )
-        # ax.plot(interfacial_distances, coulomb_adh_energy, color="blue")
-        # ax.plot(interfacial_distances, pmg_coulomb_adh_energy, color="green")
-        # ax.scatter([max_x], [max_y], color="black", marker="o", s=20)
+        ax.plot(new_x, new_y, color="black")
+        ax.scatter([max_x], [max_y], color="black", marker="o", s=20)
         ax.set_xlim(interfacial_distances.min(), interfacial_distances.max())
 
         fig.tight_layout(pad=0.4)
@@ -596,18 +716,10 @@ class IonicSurfaceMatcher:
         max_shift = shifts[max_ind]
 
         self.opt_z_shift = max_shift
-        # if shift:
-        #     self.interface.shift_film(
-        #         shift=max_shift, fractional=True, inplace=True
-        #     )
-
-        np.save("score_function_z.npy", both_adh_energy)
 
         fig, ax = plt.subplots(figsize=(4, 4), dpi=400)
         ax.set_xlabel("Interfacial Distance ($\\AA$)", fontsize=fontsize)
         ax.set_ylabel("$E_{adh}$", fontsize=fontsize)
-        # ax.plot(interfacial_distances, coulomb_adh_energy, color="blue")
-        # ax.plot(interfacial_distances, born_adh_energy, color="red")
         ax.plot(
             interfacial_distances,
             both_adh_energy,

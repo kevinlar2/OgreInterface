@@ -65,6 +65,10 @@ class SurfaceGenerator:
             self.primitive_atoms,
         ) = self._get_bulk(atoms_or_struc=bulk)
 
+        self.use_prim = len(self.bulk_structure) != len(
+            self.primitive_structure
+        )
+
         self.point_group_operations = self._get_point_group_operations()
 
         self.miller_index = miller_index
@@ -77,7 +81,10 @@ class SurfaceGenerator:
             self.oriented_bulk_structure,
             self.oriented_bulk_atoms,
             self.uvw_basis,
+            self.transformation_matrix,
             self.inplane_vectors,
+            self.surface_normal,
+            self.surface_normal_projection,
         ) = self._get_oriented_bulk_structure()
 
         if not self.lazy:
@@ -115,6 +122,14 @@ class SurfaceGenerator:
             filter_ionic_slabs,
             lazy,
         )
+
+    # @property
+    # def primitive_transformation_matrix(self):
+    #     return self._transformation_matrix
+
+    # @property
+    # def conventional_transformation_matrix(self):
+    #     return self.uvw_basis
 
     def _get_bulk(self, atoms_or_struc):
         if type(atoms_or_struc) == Atoms:
@@ -200,21 +215,19 @@ class SurfaceGenerator:
             sg.get_symmetry_dataset()["equivalent_atoms"][prim_inds].tolist(),
         )
 
-        if len(bulk) == len(prim_bulk):
+        if not self.use_prim:
             intercepts = np.array(
                 [1 / i if i != 0 else 0 for i in miller_index]
             )
             non_zero_points = np.where(intercepts != 0)[0]
+            lattice_for_slab = lattice
+            struc_for_slab = bulk
         else:
             intercepts = np.array(
                 [1 / i if i != 0 else 0 for i in prim_miller_index]
             )
             non_zero_points = np.where(intercepts != 0)[0]
-
-        if len(bulk) == len(prim_bulk):
-            lattice_for_slab = lattice
-            struc_for_slab = bulk
-        else:
+            d_hkl = lattice.d_hkl(miller_index)
             lattice_for_slab = prim_lattice
             struc_for_slab = prim_bulk
 
@@ -296,21 +309,6 @@ class SurfaceGenerator:
         init_oriented_struc = struc_for_slab.copy()
         init_oriented_struc.make_supercell(basis)
 
-        # primitive_oriented_struc = utils.get_primitive_structure(
-        #     init_oriented_struc,
-        #     constrain_latt={
-        #         "c": init_oriented_struc.lattice.c,
-        #         "alpha": init_oriented_struc.lattice.alpha,
-        #         "beta": init_oriented_struc.lattice.beta,
-        #     },
-        # )
-
-        # primitive_transformation = utils.conv_a_to_b(
-        #     init_oriented_struc, primitive_oriented_struc
-        # )
-
-        # primitive_basis = primitive_transformation.dot(basis)
-
         cart_basis = init_oriented_struc.lattice.matrix
 
         if np.linalg.det(cart_basis) < 0:
@@ -370,7 +368,9 @@ class SurfaceGenerator:
         final_basis = mat.dot(basis)
         final_basis = utils.get_reduced_basis(final_basis).astype(int)
 
-        if len(bulk) != len(prim_bulk):
+        transformation_matrix = np.copy(final_basis)
+
+        if self.use_prim:
             for i, b in enumerate(final_basis):
                 cart_coords = prim_lattice.get_cartesian_coords(b)
                 conv_frac_coords = lattice.get_fractional_coords(cart_coords)
@@ -379,11 +379,22 @@ class SurfaceGenerator:
 
         inplane_vectors = final_matrix[:2]
 
+        norm = np.cross(final_matrix[0], final_matrix[1])
+        norm /= np.linalg.norm(norm)
+
+        if np.dot(norm, final_matrix[-1]) < 0:
+            norm *= -1
+
+        norm_proj = np.dot(norm, final_matrix[-1])
+
         return (
             planar_oriented_struc,
             planar_oriented_atoms,
             final_basis,
+            transformation_matrix,
             inplane_vectors,
+            norm,
+            norm_proj,
         )
 
     def _calculate_possible_shifts(self, tol: float = 0.1):
@@ -399,7 +410,8 @@ class SurfaceGenerator:
         # take into account PBC. Let's compute a fractional c-coordinate
         # distance matrix that accounts for PBC.
         dist_matrix = np.zeros((n, n))
-        h = self.oriented_bulk_structure.lattice.matrix[-1, -1]
+        # h = self.oriented_bulk_structure.lattice.matrix[-1, -1]
+        h = self.surface_normal_projection
         # Projection of c lattice vector in
         # direction of surface normal.
         for i, j in combinations(list(range(n)), 2):
@@ -452,6 +464,7 @@ class SurfaceGenerator:
         Returns:
             (Slab) A Slab object with a particular shifted oriented unit cell.
         """
+        init_matrix = deepcopy(self.oriented_bulk_structure.lattice.matrix)
         slab_base = self.oriented_bulk_structure.copy()
         slab_base.translate_sites(
             indices=range(len(slab_base)),
@@ -460,12 +473,24 @@ class SurfaceGenerator:
             to_unit_cell=True,
         )
         slab_base.make_supercell([1, 1, self.layers])
-        slab_base_c = slab_base.lattice.c
+        slab_base.sort()
 
-        vacuum_matrix = deepcopy(slab_base.lattice.matrix)
-        c_norm = vacuum_matrix[-1] / np.linalg.norm(vacuum_matrix[-1])
-        vacuum_scale = self.vacuum / c_norm[-1]
-        vacuum_matrix[-1] += vacuum_scale * c_norm
+        vacuum_scale = self.vacuum // self.surface_normal_projection
+
+        if vacuum_scale % 2:
+            vacuum_scale += 1
+
+        vacuum_transform = np.eye(3)
+        vacuum_transform[-1, -1] = self.layers + vacuum_scale
+        vacuum_matrix = vacuum_transform @ init_matrix
+
+        # c_zero_inds = np.where(
+        #     np.isclose(
+        #         slab_base.frac_coords[:, -1],
+        #         slab_base.frac_coords[:, -1].min(),
+        #     )
+        # )[0]
+        # print(slab_base.frac_coords[c_zero_inds])
 
         non_orthogonal_slab = Structure(
             lattice=Lattice(matrix=vacuum_matrix),
@@ -481,18 +506,13 @@ class SurfaceGenerator:
         ]
         non_orthogonal_slab.translate_sites(
             indices=range(len(non_orthogonal_slab)),
-            vector=[
-                non_orthogonal_min_atom[0],
-                non_orthogonal_min_atom[1],
-                0.5 - (0.5 * slab_base_c / (vacuum_scale + slab_base_c)),
-            ],
+            vector=-non_orthogonal_min_atom,
             frac_coords=True,
             to_unit_cell=True,
         )
 
         a, b, c = non_orthogonal_slab.lattice.matrix
-        new_c = np.array([0.0, 0.0, 1.0])
-        new_c = np.dot(c, new_c) * new_c
+        new_c = np.dot(c, self.surface_normal) * self.surface_normal
 
         orthogonal_matrix = np.vstack([a, b, new_c])
         orthogonal_slab = Structure(
@@ -504,13 +524,17 @@ class SurfaceGenerator:
             site_properties=non_orthogonal_slab.site_properties,
         )
         orthogonal_slab.sort()
-        orthogonal_min_atom = orthogonal_slab.frac_coords[
-            np.argmin(orthogonal_slab.frac_coords[:, -1])
-        ]
-        orthogonal_min_atom[-1] = 0
+
+        shift = 0.5 * (vacuum_scale / (vacuum_scale + self.layers))
+        non_orthogonal_slab.translate_sites(
+            indices=range(len(non_orthogonal_slab)),
+            vector=[0, 0, shift],
+            frac_coords=True,
+            to_unit_cell=True,
+        )
         orthogonal_slab.translate_sites(
             indices=range(len(orthogonal_slab)),
-            vector=-orthogonal_min_atom,
+            vector=[0, 0, shift],
             frac_coords=True,
             to_unit_cell=True,
         )
@@ -556,27 +580,12 @@ class SurfaceGenerator:
                 orthogonal_slabs.append(orthogonal_slab)
                 non_orthogonal_slabs.append(non_orthogonal_slab)
 
-        # TODO work on StructureMatcher when there is an inversion symmetry
-        # m = StructureMatcher(
-        #     ltol=0.1, stol=0.1, primitive_cell=False, scale=False
-        # )
-
-        # unique_orthogonal_slabs = []
-        # for g in m.group_structures(orthogonal_slabs):
-        #     unique_orthogonal_slabs.append(g[0])
-
-        # match = StructureMatcher(
-        #     ltol=0.1, stol=0.1, primitive_cell=False, scale=False
-        # )
-        # unique_orthogonal_slabs = [
-        #     g[0] for g in match.group_structures(unique_orthogonal_slabs)
-        # ]
-        # unique_non_orthogonal_slabs = [
-        #     non_orthogonal_slabs[slab.sort_index]
-        #     for slab in unique_orthogonal_slabs
-        # ]
-
         surfaces = []
+
+        if self.use_prim:
+            base_structure = self.primitive_structure
+        else:
+            base_structure = self.bulk_structure
 
         # Loop through slabs to ensure that they are all properly oriented and reduced
         # Return Surface objects
@@ -585,8 +594,10 @@ class SurfaceGenerator:
             surface = Surface(
                 orthogonal_slab=slab,
                 non_orthogonal_slab=non_orthogonal_slabs[i],
-                primitive_oriented_bulk=self.oriented_bulk_atoms,
+                primitive_oriented_bulk=self.oriented_bulk_structure,
                 conventional_bulk=self.bulk_structure,
+                base_structure=base_structure,
+                transformation_matrix=self.transformation_matrix,
                 miller_index=self.miller_index,
                 layers=self.layers,
                 vacuum=self.vacuum,

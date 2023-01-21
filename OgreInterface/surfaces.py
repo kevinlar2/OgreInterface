@@ -34,6 +34,8 @@ class Surface:
         non_orthogonal_slab,
         primitive_oriented_bulk,
         conventional_bulk,
+        base_structure,
+        transformation_matrix,
         miller_index,
         layers,
         vacuum,
@@ -56,6 +58,9 @@ class Surface:
             self.conventional_bulk_structure,
             self.conventional_bulk_atoms,
         ) = self._get_atoms_and_struc(conventional_bulk)
+
+        self.base_structure = base_structure
+        self.transformation_matrix = transformation_matrix
         self.miller_index = miller_index
         self.layers = layers
         self.vacuum = vacuum

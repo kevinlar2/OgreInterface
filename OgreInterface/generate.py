@@ -2,12 +2,7 @@
 This module will be used to construct the surfaces and interfaces used in this package.
 """
 from OgreInterface.surfaces import Surface, Interface
-from OgreInterface.utils import (
-    get_reduced_basis,
-    reduce_vectors_zur_and_mcgill,
-    get_primitive_structure,
-    conv_a_to_b,
-)
+from OgreInterface import utils
 from OgreInterface.lattice_match import ZurMcGill
 
 from pymatgen.core.structure import Structure
@@ -62,9 +57,14 @@ class SurfaceGenerator:
         lazy: bool = False,
     ):
         self.convert_to_conventional = convert_to_conventional
-        self.bulk_structure, self.bulk_atoms = self._get_bulk(
-            atoms_or_struc=bulk
-        )
+
+        (
+            self.bulk_structure,
+            self.bulk_atoms,
+            self.primitive_structure,
+            self.primitive_atoms,
+        ) = self._get_bulk(atoms_or_struc=bulk)
+
         self.point_group_operations = self._get_point_group_operations()
 
         self.miller_index = miller_index
@@ -126,18 +126,26 @@ class SurfaceGenerator:
                 f"structure accepts 'pymatgen.core.structure.Structure' or 'ase.Atoms' not '{type(atoms_or_struc).__name__}'"
             )
 
+        sg = SpacegroupAnalyzer(init_structure)
+        prim_structure = sg.get_primitive_standard_structure()
+        prim_atoms = AseAtomsAdaptor.get_atoms(prim_structure)
+
         if self.convert_to_conventional:
-            sg = SpacegroupAnalyzer(init_structure)
             conventional_structure = sg.get_conventional_standard_structure()
             conventional_atoms = AseAtomsAdaptor.get_atoms(
                 conventional_structure
             )
 
-            return conventional_structure, conventional_atoms
+            return (
+                conventional_structure,
+                conventional_atoms,
+                prim_structure,
+                prim_atoms,
+            )
         else:
             init_atoms = AseAtomsAdaptor().get_atoms(init_structure)
 
-            return init_structure, init_atoms
+            return init_structure, init_atoms, prim_structure, prim_atoms
 
     def _get_point_group_operations(self):
         sg = SpacegroupAnalyzer(self.bulk_structure)
@@ -151,11 +159,29 @@ class SurfaceGenerator:
 
     def _get_oriented_bulk_structure(self):
         bulk = self.bulk_structure
+        prim_bulk = self.primitive_structure
+
         lattice = bulk.lattice
-        recip_lattice = bulk.lattice.reciprocal_lattice_crystallographic
+        prim_lattice = prim_bulk.lattice
+
+        recip_lattice = lattice.reciprocal_lattice_crystallographic
+        prim_recip_lattice = prim_lattice.reciprocal_lattice_crystallographic
+
         miller_index = self.miller_index
 
+        d_hkl = lattice.d_hkl(miller_index)
+        normal_vector = recip_lattice.get_cartesian_coords(miller_index)
+        prim_miller_index = prim_recip_lattice.get_fractional_coords(
+            normal_vector
+        )
+        prim_miller_index = utils._get_reduced_vector(prim_miller_index)
+
+        normal_vector /= np.linalg.norm(normal_vector)
+
         sg = SpacegroupAnalyzer(bulk)
+        prim_mapping = sg.get_symmetry_dataset()["mapping_to_primitive"]
+        _, prim_inds = np.unique(prim_mapping, return_index=True)
+
         bulk.add_site_property(
             "bulk_wyckoff", sg.get_symmetry_dataset()["wyckoffs"]
         )
@@ -163,13 +189,24 @@ class SurfaceGenerator:
             "bulk_equivalent",
             sg.get_symmetry_dataset()["equivalent_atoms"].tolist(),
         )
+        prim_bulk.add_site_property(
+            "bulk_wyckoff",
+            [sg.get_symmetry_dataset()["wyckoffs"][i] for i in prim_inds],
+        )
+        prim_bulk.add_site_property(
+            "bulk_equivalent",
+            sg.get_symmetry_dataset()["equivalent_atoms"][prim_inds].tolist(),
+        )
 
         intercepts = np.array([1 / i if i != 0 else 0 for i in miller_index])
         non_zero_points = np.where(intercepts != 0)[0]
 
-        d_hkl = lattice.d_hkl(miller_index)
-        normal_vector = recip_lattice.get_cartesian_coords(miller_index)
-        normal_vector /= np.linalg.norm(normal_vector)
+        if len(bulk) == len(prim_bulk):
+            lattice_for_slab = lattice
+            struc_for_slab = bulk
+        else:
+            lattice_for_slab = prim_lattice
+            struc_for_slab = prim_bulk
 
         if len(non_zero_points) == 1:
             basis = np.eye(3)
@@ -201,8 +238,8 @@ class SurfaceGenerator:
                     points[non_zero_points[center_inds[2]]]
                     - points[non_zero_points[center_inds[0]]]
                 )
-                cart_vec1 = lattice.get_cartesian_coords(vec1)
-                cart_vec2 = lattice.get_cartesian_coords(vec2)
+                cart_vec1 = lattice_for_slab.get_cartesian_coords(vec1)
+                cart_vec2 = lattice_for_slab.get_cartesian_coords(vec2)
                 angle = np.arccos(
                     np.dot(cart_vec1, cart_vec2)
                     / (np.linalg.norm(cart_vec1) * np.linalg.norm(cart_vec2))
@@ -210,12 +247,12 @@ class SurfaceGenerator:
                 possible_vecs.append((vec1, vec2, angle))
 
             chosen_vec1, chosen_vec2, angle = min(
-                possible_vecs, key=lambda x: x[-1]
+                possible_vecs, key=lambda x: abs(x[-1])
             )
 
             basis = np.vstack([chosen_vec1, chosen_vec2])
 
-        basis = get_reduced_basis(basis)
+        basis = utils.get_reduced_basis(basis)
 
         if len(basis) == 2:
             max_normal_search = 2
@@ -231,7 +268,7 @@ class SurfaceGenerator:
                 ) < 1e-8:
                     continue
 
-                vec = lattice.get_cartesian_coords(uvw)
+                vec = lattice_for_slab.get_cartesian_coords(uvw)
                 proj = np.abs(np.dot(vec, normal_vector) - d_hkl)
                 vec_length = np.linalg.norm(vec)
                 cosine = np.dot(vec / vec_length, normal_vector)
@@ -246,31 +283,31 @@ class SurfaceGenerator:
             )
             basis = np.vstack([basis, uvw])
 
-        init_oriented_struc = bulk.copy()
+        init_oriented_struc = struc_for_slab.copy()
         init_oriented_struc.make_supercell(basis)
 
-        primitive_oriented_struc = get_primitive_structure(
-            init_oriented_struc,
-            constrain_latt={
-                "c": init_oriented_struc.lattice.c,
-                "alpha": init_oriented_struc.lattice.alpha,
-                "beta": init_oriented_struc.lattice.beta,
-            },
-        )
+        # primitive_oriented_struc = utils.get_primitive_structure(
+        #     init_oriented_struc,
+        #     constrain_latt={
+        #         "c": init_oriented_struc.lattice.c,
+        #         "alpha": init_oriented_struc.lattice.alpha,
+        #         "beta": init_oriented_struc.lattice.beta,
+        #     },
+        # )
 
-        primitive_transformation = conv_a_to_b(
-            init_oriented_struc, primitive_oriented_struc
-        )
+        # primitive_transformation = utils.conv_a_to_b(
+        #     init_oriented_struc, primitive_oriented_struc
+        # )
 
-        primitive_basis = primitive_transformation.dot(basis)
+        # primitive_basis = primitive_transformation.dot(basis)
 
-        cart_basis = primitive_oriented_struc.lattice.matrix
+        cart_basis = init_oriented_struc.lattice.matrix
 
         if np.linalg.det(cart_basis) < 0:
             ab_switch = np.array([[0, 1, 0], [1, 0, 0], [0, 0, 1]])
-            primitive_oriented_struc.make_supercell(ab_switch)
-            primitive_basis = ab_switch.dot(primitive_basis)
-            cart_basis = primitive_oriented_struc.lattice.matrix
+            init_oriented_struc.make_supercell(ab_switch)
+            basis = ab_switch.dot(basis)
+            cart_basis = init_oriented_struc.lattice.matrix
 
         cross_ab = np.cross(cart_basis[0], cart_basis[1])
         cross_ab /= np.linalg.norm(cross_ab)
@@ -289,12 +326,12 @@ class SurfaceGenerator:
             ortho_basis, translation_vec=np.zeros(3)
         )
 
-        planar_oriented_struc = primitive_oriented_struc.copy()
+        planar_oriented_struc = init_oriented_struc.copy()
         planar_oriented_struc.apply_operation(to_planar_operation)
 
         planar_matrix = deepcopy(planar_oriented_struc.lattice.matrix)
 
-        new_a, new_b, mat = reduce_vectors_zur_and_mcgill(
+        new_a, new_b, mat = utils.reduce_vectors_zur_and_mcgill(
             planar_matrix[0, :2], planar_matrix[1, :2]
         )
 
@@ -320,13 +357,16 @@ class SurfaceGenerator:
 
         final_matrix = deepcopy(planar_oriented_struc.lattice.matrix)
 
-        final_basis = mat.dot(primitive_basis)
+        final_basis = mat.dot(basis)
+        final_basis = utils.get_reduced_basis(final_basis).astype(int)
 
-        oriented_primitive_struc = primitive_oriented_struc.copy()
-        oriented_primitive_struc.make_supercell(mat)
-        oriented_primitive_struc.sort()
+        if len(bulk) != len(prim_bulk):
+            for i, b in enumerate(final_basis):
+                cart_coords = prim_lattice.get_cartesian_coords(b)
+                conv_frac_coords = lattice.get_fractional_coords(cart_coords)
+                conv_frac_coords = utils._get_reduced_vector(conv_frac_coords)
+                final_basis[i] = conv_frac_coords
 
-        final_basis = get_reduced_basis(final_basis).astype(int)
         inplane_vectors = final_matrix[:2]
 
         return (

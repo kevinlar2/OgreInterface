@@ -59,7 +59,7 @@ def group_layers(structure, atol=None):
     return groups, np.array(group_heights)
 
 
-def get_reduced_basis(basis: np.ndarray):
+def get_reduced_basis(basis: np.ndarray) -> np.ndarray:
     """
     This function is used to find the miller indices of the slab structure
     basis vectors in their most reduced form. i.e.
@@ -77,11 +77,18 @@ def get_reduced_basis(basis: np.ndarray):
     basis /= np.linalg.norm(basis, axis=1)[:, None]
 
     for i, b in enumerate(basis):
-        abs_b = np.abs(b)
-        basis[i] /= abs_b[abs_b > 0.001].min()
-        basis[i] /= np.abs(reduce(_float_gcd, basis[i]))
+        basis[i] = _get_reduced_vector(b)
 
     return basis
+
+
+def _get_reduced_vector(vector: np.ndarry) -> np.ndarray:
+    """ """
+    abs_b = np.abs(vector)
+    vector /= abs_b[abs_b > 0.001].min()
+    vector /= np.abs(reduce(_float_gcd, vector))
+
+    return vector
 
 
 def _float_gcd(a, b, rtol=1e-05, atol=1e-08):

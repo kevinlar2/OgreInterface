@@ -480,6 +480,9 @@ class SurfaceGenerator:
         if vacuum_scale % 2:
             vacuum_scale += 1
 
+        if vacuum_scale == 0:
+            vacuum_scale = 1
+
         vacuum_transform = np.eye(3)
         vacuum_transform[-1, -1] = self.layers + vacuum_scale
         vacuum_matrix = vacuum_transform @ init_matrix

@@ -444,6 +444,7 @@ class SurfaceGenerator:
             else:
                 shift = (possible_c[i] + possible_c[i + 1]) * 0.5
             shifts.append(shift - math.floor(shift))
+
         shifts = sorted(shifts)
 
         return shifts
@@ -472,6 +473,13 @@ class SurfaceGenerator:
             frac_coords=True,
             to_unit_cell=True,
         )
+
+        z_coords = slab_base.frac_coords[:, -1]
+        bot_z = z_coords.min()
+        top_z = z_coords.max()
+        bottom_layer_dist = np.abs(bot_z - (top_z - 1)) * init_matrix[-1, -1]
+        top_layer_dist = np.abs((bot_z + 1) - top_z) * init_matrix[-1, -1]
+
         slab_base.make_supercell([1, 1, self.layers])
         slab_base.sort()
 
@@ -542,7 +550,12 @@ class SurfaceGenerator:
             to_unit_cell=True,
         )
 
-        return orthogonal_slab, non_orthogonal_slab
+        return (
+            orthogonal_slab,
+            non_orthogonal_slab,
+            bottom_layer_dist,
+            top_layer_dist,
+        )
 
     # def _get_ewald_energy(self, slab):
     #     slab = deepcopy(slab)
@@ -565,23 +578,35 @@ class SurfaceGenerator:
         possible_shifts = self._calculate_possible_shifts()
         orthogonal_slabs = []
         non_orthogonal_slabs = []
+        bottom_layer_dists = []
+        top_layer_dists = []
         if not self.generate_all:
-            orthogonal_slab, non_orthogonal_slab = self.get_slab(
-                shift=possible_shifts[0]
-            )
+            (
+                orthogonal_slab,
+                non_orthogonal_slab,
+                bottom_layer_dist,
+                top_layer_dist,
+            ) = self.get_slab(shift=possible_shifts[0])
             orthogonal_slab.sort_index = 0
             non_orthogonal_slab.sort_index = 0
             orthogonal_slabs.append(orthogonal_slab)
             non_orthogonal_slabs.append(non_orthogonal_slab)
+            bottom_layer_dists.append(bottom_layer_dist)
+            top_layer_dists.append(top_layer_dist)
         else:
             for i, possible_shift in enumerate(possible_shifts):
-                orthogonal_slab, non_orthogonal_slab = self.get_slab(
-                    shift=possible_shift
-                )
+                (
+                    orthogonal_slab,
+                    non_orthogonal_slab,
+                    bottom_layer_dist,
+                    top_layer_dist,
+                ) = self.get_slab(shift=possible_shift)
                 orthogonal_slab.sort_index = i
                 non_orthogonal_slab.sort_index = i
                 orthogonal_slabs.append(orthogonal_slab)
                 non_orthogonal_slabs.append(non_orthogonal_slab)
+                bottom_layer_dists.append(bottom_layer_dist)
+                top_layer_dists.append(top_layer_dist)
 
         surfaces = []
 
@@ -606,6 +631,8 @@ class SurfaceGenerator:
                 vacuum=self.vacuum,
                 uvw_basis=self.uvw_basis,
                 point_group_operations=self.point_group_operations,
+                bottom_layer_dist=bottom_layer_dists[i],
+                top_layer_dist=top_layer_dists[i],
             )
             surfaces.append(surface)
 
@@ -643,7 +670,7 @@ class InterfaceGenerator:
         angle_tol: float = 0.01,
         length_tol: float = 0.01,
         max_area: float = 500.0,
-        interfacial_distance: float = 2.0,
+        interfacial_distance: Union[float, None] = 2.0,
         sub_strain_frac: float = 0.0,
         vacuum: float = 40.0,
         center: bool = False,
@@ -814,10 +841,17 @@ class InterfaceGenerator:
                     ]
 
     def _build_interface(self, match):
+        if self.interfacial_distance is None:
+            i_dist = (
+                self.substrate.top_layer_dist + self.film.bottom_layer_dist
+            ) / 2
+        else:
+            i_dist = self.interfacial_distance
+
         interface = Interface(
             substrate=self.substrate,
             film=self.film,
-            interfacial_distance=self.interfacial_distance,
+            interfacial_distance=i_dist,
             match=match,
             vacuum=self.vacuum,
             center=self.center,
@@ -825,13 +859,21 @@ class InterfaceGenerator:
         return interface
 
     def generate_interfaces(self):
+        if self.interfacial_distance is None:
+            i_dist = (
+                self.substrate.top_layer_dist + self.film.bottom_layer_dist
+            ) / 2
+        else:
+            i_dist = self.interfacial_distance
+
         interfaces = []
+
         print("Generating Interfaces:")
         for match in tqdm(self.match_list, dynamic_ncols=True):
             interface = Interface(
                 substrate=self.substrate,
                 film=self.film,
-                interfacial_distance=self.interfacial_distance,
+                interfacial_distance=i_dist,
                 match=match,
                 vacuum=self.vacuum,
                 center=self.center,

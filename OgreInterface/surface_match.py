@@ -108,13 +108,16 @@ class IonicSurfaceMatcher:
             neighbor_dict[group[0]] = np.min(nn)
 
         for n, d in neighbor_dict.items():
-            if d is None:
-                s1 = chemical_symbols[n[0]]
-                s2 = chemical_symbols[n[1]]
-                d1 = float(Element(s1).ionic_radii[charge_dict[s1]])
-                d2 = float(Element(s2).ionic_radii[charge_dict[s2]])
+            s1 = chemical_symbols[n[0]]
+            s2 = chemical_symbols[n[1]]
+            c1 = charge_dict[s1]
+            c2 = charge_dict[s2]
 
-                neighbor_dict[n] = d1 + d2
+            if d is None:
+                d1_ionic = float(Element(s1).ionic_radii[c1])
+                d2_ionic = float(Element(s2).ionic_radii[c2])
+
+                neighbor_dict[n] = d1_ionic + d2_ionic
 
         return neighbor_dict
 
@@ -562,7 +565,7 @@ class IonicSurfaceMatcher:
             ax=ax1,
             X=X_plot,
             Y=Y_plot,
-            Z=Z_born,
+            Z=Z_born / self.interface.area,
             borders=borders,
             cmap=cmap,
             fontsize=fontsize,
@@ -572,7 +575,7 @@ class IonicSurfaceMatcher:
             ax=ax2,
             X=X_plot,
             Y=Y_plot,
-            Z=Z_coulomb,
+            Z=Z_coulomb / self.interface.area,
             borders=borders,
             cmap=cmap,
             fontsize=fontsize,
@@ -582,7 +585,7 @@ class IonicSurfaceMatcher:
             ax=ax3,
             X=X_plot,
             Y=Y_plot,
-            Z=Z_both,
+            Z=Z_both / self.interface.area,
             borders=borders,
             cmap=cmap,
             fontsize=fontsize,

@@ -361,7 +361,9 @@ class IonicSurfaceMatcher:
 
         return X_cart, Y_cart, Z_interp
 
-    def _plot_heatmap(self, fig, ax, X, Y, Z, borders, cmap, fontsize):
+    def _plot_heatmap(
+        self, fig, ax, X, Y, Z, borders, cmap, fontsize, show_max
+    ):
         ax.set_xlabel(r"Shift in $x$ ($\AA$)", fontsize=fontsize)
         ax.set_ylabel(r"Shift in $y$ ($\AA$)", fontsize=fontsize)
 
@@ -386,7 +388,19 @@ class IonicSurfaceMatcher:
         cbar = fig.colorbar(im, cax=cax, orientation="horizontal")
         cbar.ax.tick_params(labelsize=fontsize)
         cbar.ax.locator_params(nbins=3)
-        cbar.set_label("$E_{adh}$ (eV)", fontsize=fontsize)
+
+        if show_max:
+            E_max = np.max(Z)
+            label = (
+                "$E_{adh}$ (eV/$\\AA^{2}$) : "
+                + "$E_{max}$ = "
+                + f"{E_max:.4f}"
+            )
+            cbar.set_label(label, fontsize=fontsize)
+        else:
+            label = "$E_{adh}$ (eV/$\\AA^{2}$)"
+            cbar.set_label(label, fontsize=fontsize)
+
         cax.xaxis.set_ticks_position("top")
         cax.xaxis.set_label_position("top")
         ax.tick_params(labelsize=fontsize)
@@ -394,120 +408,15 @@ class IonicSurfaceMatcher:
         ax.set_ylim(borders[:, 1].min(), borders[:, 1].max())
         ax.set_aspect("equal")
 
-    def run_surface_matching_old(
-        self,
-        cmap: str = "jet",
-        fontsize: int = 14,
-        output: str = "PES.png",
-        shift: bool = True,
-    ) -> float:
-        shifts = self.shifts
-        inputs = self._generate_inputs(shifts)
-        coulomb_energy = self._calculate_coulomb(inputs)
-        born_energy = self._calculate_born(inputs)
-
-        sub_coulomb_energy = coulomb_energy[0]
-        film_coulomb_energy = coulomb_energy[1]
-        interface_coulomb_energy = coulomb_energy[2:].reshape(self.X.shape)
-
-        sub_born_energy = born_energy[0]
-        film_born_energy = born_energy[1]
-        interface_born_energy = born_energy[2:].reshape(self.X.shape)
-
-        coulomb_adh_energy = (
-            sub_coulomb_energy + film_coulomb_energy
-        ) - interface_coulomb_energy
-        born_adh_energy = (
-            sub_born_energy + film_born_energy
-        ) - interface_born_energy
-
-        X_plot, Y_plot, Z_born = self._get_interpolated_data(
-            self.X, self.Y, born_adh_energy
-        )
-        _, _, Z_coulomb = self._get_interpolated_data(
-            self.X, self.Y, coulomb_adh_energy
-        )
-
-        Z_both = Z_born + Z_coulomb
-
-        a = self.matrix[0, :2]
-        b = self.matrix[1, :2]
-        borders = np.vstack([np.zeros(2), a, a + b, b, np.zeros(2)])
-        x_size = borders[:, 0].max() - borders[:, 0].min()
-        y_size = borders[:, 1].max() - borders[:, 1].min()
-        ratio = y_size / x_size
-
-        fig, (ax1, ax2, ax3) = plt.subplots(
-            figsize=(3 * 5, 5 * ratio),
-            ncols=3,
-            dpi=400,
-        )
-
-        self._plot_heatmap(
-            fig=fig,
-            ax=ax1,
-            X=X_plot,
-            Y=Y_plot,
-            Z=Z_born,
-            borders=borders,
-            cmap=cmap,
-            fontsize=fontsize,
-        )
-        self._plot_heatmap(
-            fig=fig,
-            ax=ax2,
-            X=X_plot,
-            Y=Y_plot,
-            Z=Z_coulomb,
-            borders=borders,
-            cmap=cmap,
-            fontsize=fontsize,
-        )
-        self._plot_heatmap(
-            fig=fig,
-            ax=ax3,
-            X=X_plot,
-            Y=Y_plot,
-            Z=Z_both,
-            borders=borders,
-            cmap=cmap,
-            fontsize=fontsize,
-        )
-
-        frac_shifts = np.c_[
-            X_plot.ravel(), Y_plot.ravel(), np.zeros(Y_plot.shape).ravel()
-        ].dot(np.linalg.inv(self.matrix))
-        opt_shift = frac_shifts[np.argmax(Z_both.ravel())]
-        max_Z = np.max(Z_both)
-        plot_shift = opt_shift.dot(self.matrix)
-
-        ax3.scatter(
-            [plot_shift[0]],
-            [plot_shift[1]],
-            fc="white",
-            ec="black",
-            marker="X",
-            s=100,
-            zorder=10,
-        )
-
-        if shift:
-            self.interface.shift_film(
-                shift=opt_shift, fractional=True, inplace=True
-            )
-
-        fig.tight_layout()
-        fig.savefig(output, bbox_inches="tight")
-        plt.close(fig)
-
-        return max_Z
-
     def run_surface_matching(
         self,
         cmap: str = "jet",
         fontsize: int = 14,
         output: str = "PES.png",
         shift: bool = True,
+        show_born_and_coulomb: bool = False,
+        dpi: int = 400,
+        show_max: bool = False,
     ) -> float:
         shifts = self.shifts
         atoms_list, z_atoms_list = self._get_shifted_atoms(shifts)
@@ -554,59 +463,96 @@ class IonicSurfaceMatcher:
         y_size = borders[:, 1].max() - borders[:, 1].min()
         ratio = y_size / x_size
 
-        fig, (ax1, ax2, ax3) = plt.subplots(
-            figsize=(3 * 5, 5 * ratio),
-            ncols=3,
-            dpi=400,
-        )
+        if show_born_and_coulomb:
+            fig, (ax1, ax2, ax3) = plt.subplots(
+                figsize=(3 * 5, 5 * ratio),
+                ncols=3,
+                dpi=dpi,
+            )
 
-        self._plot_heatmap(
-            fig=fig,
-            ax=ax1,
-            X=X_plot,
-            Y=Y_plot,
-            Z=Z_born / self.interface.area,
-            borders=borders,
-            cmap=cmap,
-            fontsize=fontsize,
-        )
-        self._plot_heatmap(
-            fig=fig,
-            ax=ax2,
-            X=X_plot,
-            Y=Y_plot,
-            Z=Z_coulomb / self.interface.area,
-            borders=borders,
-            cmap=cmap,
-            fontsize=fontsize,
-        )
-        self._plot_heatmap(
-            fig=fig,
-            ax=ax3,
-            X=X_plot,
-            Y=Y_plot,
-            Z=Z_both / self.interface.area,
-            borders=borders,
-            cmap=cmap,
-            fontsize=fontsize,
-        )
+            self._plot_heatmap(
+                fig=fig,
+                ax=ax1,
+                X=X_plot,
+                Y=Y_plot,
+                Z=Z_born / (2 * self.interface.area),
+                borders=borders,
+                cmap=cmap,
+                fontsize=fontsize,
+                show_max=False,
+            )
+            self._plot_heatmap(
+                fig=fig,
+                ax=ax2,
+                X=X_plot,
+                Y=Y_plot,
+                Z=Z_coulomb / (2 * self.interface.area),
+                borders=borders,
+                cmap=cmap,
+                fontsize=fontsize,
+                show_max=False,
+            )
+            self._plot_heatmap(
+                fig=fig,
+                ax=ax3,
+                X=X_plot,
+                Y=Y_plot,
+                Z=Z_both / (2 * self.interface.area),
+                borders=borders,
+                cmap=cmap,
+                fontsize=fontsize,
+                show_max=show_max,
+            )
 
-        frac_shifts = np.c_[
-            X_plot.ravel(), Y_plot.ravel(), np.zeros(Y_plot.shape).ravel()
-        ].dot(np.linalg.inv(self.matrix))
-        opt_shift = frac_shifts[np.argmax(Z_both.ravel())]
-        max_Z = np.max(Z_both)
-        plot_shift = opt_shift.dot(self.matrix)
+            frac_shifts = np.c_[
+                X_plot.ravel(), Y_plot.ravel(), np.zeros(Y_plot.shape).ravel()
+            ].dot(np.linalg.inv(self.matrix))
+            opt_shift = frac_shifts[np.argmax(Z_both.ravel())]
+            max_Z = np.max(Z_both)
+            plot_shift = opt_shift.dot(self.matrix)
 
-        ax3.scatter(
-            [plot_shift[0]],
-            [plot_shift[1]],
-            fc="white",
-            ec="black",
-            marker="X",
-            s=100,
-            zorder=10,
-        )
+            ax3.scatter(
+                [plot_shift[0]],
+                [plot_shift[1]],
+                fc="white",
+                ec="black",
+                marker="X",
+                s=100,
+                zorder=10,
+            )
+        else:
+            fig, ax = plt.subplots(
+                figsize=(5, 5 * ratio),
+                dpi=dpi,
+            )
+            self._plot_heatmap(
+                fig=fig,
+                ax=ax,
+                X=X_plot,
+                Y=Y_plot,
+                Z=Z_both / (2 * self.interface.area),
+                borders=borders,
+                cmap=cmap,
+                fontsize=fontsize,
+                show_max=show_max,
+            )
+
+            frac_shifts = np.c_[
+                X_plot.ravel(), Y_plot.ravel(), np.zeros(Y_plot.shape).ravel()
+            ].dot(np.linalg.inv(self.matrix))
+            opt_shift = frac_shifts[np.argmax(Z_both.ravel())]
+            max_Z = np.max(Z_both)
+            plot_shift = opt_shift.dot(self.matrix)
+
+            ax.scatter(
+                [plot_shift[0]],
+                [plot_shift[1]],
+                fc="white",
+                ec="black",
+                marker="X",
+                s=100,
+                zorder=10,
+            )
 
         self.opt_xy_shift = opt_shift
 

@@ -1,5 +1,5 @@
 from ase.neighborlist import neighbor_list
-from typing import Dict, List
+from typing import Dict, List, Optional
 from ase import Atoms
 import torch
 from OgreInterface.score_function.neighbors import TorchNeighborList
@@ -111,25 +111,18 @@ def generate_dict_ase(
 def generate_dict_torch(
     atoms: List[Atoms],
     cutoff: float,
-    charge_dict: Dict[str, float],
-    # radius_dict: Dict[str, float],
-    ns_dict: Dict[str, float],
+    ns_dict: Optional[Dict[str, float]] = None,
+    charge_dict: Optional[Dict[str, float]] = None,
 ) -> Dict:
 
     tn = TorchNeighborList(cutoff=cutoff)
     inputs_batch = []
 
     for at_idx, atom in enumerate(atoms):
-        charges = torch.Tensor(
-            [charge_dict[s] for s in atom.get_chemical_symbols()]
-        )
-        # r0s = torch.Tensor(
-        #     [radius_dict[s] for s in atom.get_chemical_symbols()]
-        # )
+
         is_film = torch.from_numpy(
             atom.get_array("is_film", copy=True).astype(int)
         )
-        ns = torch.Tensor([ns_dict[s] for s in atom.get_chemical_symbols()])
         R = torch.from_numpy(atom.get_positions())
         cell = torch.from_numpy(atom.get_cell().array)
 
@@ -139,11 +132,18 @@ def generate_dict_torch(
             "R": R,
             "cell": cell,
             "pbc": torch.from_numpy(atom.get_pbc()),
-            "partial_charges": charges,
-            # "r0s": r0s,
-            "ns": ns,
             "is_film": is_film,
         }
+
+        if charge_dict is not None:
+            charges = torch.Tensor(
+                [charge_dict[s] for s in atom.get_chemical_symbols()]
+            )
+            ns = torch.Tensor(
+                [ns_dict[s] for s in atom.get_chemical_symbols()]
+            )
+            input_dict["partial_charges"] = charges
+            input_dict["ns"] = ns
 
         tn.forward(inputs=input_dict)
 

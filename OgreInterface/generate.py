@@ -123,14 +123,6 @@ class SurfaceGenerator:
             lazy,
         )
 
-    # @property
-    # def primitive_transformation_matrix(self):
-    #     return self._transformation_matrix
-
-    # @property
-    # def conventional_transformation_matrix(self):
-    #     return self.uvw_basis
-
     def _get_bulk(self, atoms_or_struc):
         if type(atoms_or_struc) == Atoms:
             init_structure = AseAtomsAdaptor.get_structure(atoms_or_struc)
@@ -357,6 +349,12 @@ class SurfaceGenerator:
             a_to_i.T, translation_vec=np.zeros(3)
         )
         planar_oriented_struc.apply_operation(a_to_i_operation)
+
+        planar_oriented_struc.add_site_property(
+            "oriented_bulk_equivalent",
+            list(range(len(planar_oriented_struc))),
+        )
+
         planar_oriented_struc.sort()
 
         planar_oriented_atoms = AseAtomsAdaptor().get_atoms(
@@ -480,9 +478,6 @@ class SurfaceGenerator:
         bottom_layer_dist = np.abs(bot_z - (top_z - 1)) * init_matrix[-1, -1]
         top_layer_dist = np.abs((bot_z + 1) - top_z) * init_matrix[-1, -1]
 
-        slab_base.make_supercell([1, 1, self.layers])
-        slab_base.sort()
-
         vacuum_scale = self.vacuum // self.surface_normal_projection
 
         if vacuum_scale % 2:
@@ -491,25 +486,8 @@ class SurfaceGenerator:
         if vacuum_scale == 0:
             vacuum_scale = 1
 
-        vacuum_transform = np.eye(3)
-        vacuum_transform[-1, -1] = self.layers + vacuum_scale
-        vacuum_matrix = vacuum_transform @ init_matrix
-
-        # c_zero_inds = np.where(
-        #     np.isclose(
-        #         slab_base.frac_coords[:, -1],
-        #         slab_base.frac_coords[:, -1].min(),
-        #     )
-        # )[0]
-        # print(slab_base.frac_coords[c_zero_inds])
-
-        non_orthogonal_slab = Structure(
-            lattice=Lattice(matrix=vacuum_matrix),
-            species=slab_base.species,
-            coords=slab_base.cart_coords,
-            coords_are_cartesian=True,
-            to_unit_cell=True,
-            site_properties=slab_base.site_properties,
+        non_orthogonal_slab = utils.get_layer_supercelll(
+            structure=slab_base, layers=self.layers, vacuum_scale=vacuum_scale
         )
         non_orthogonal_slab.sort()
         non_orthogonal_min_atom = non_orthogonal_slab.frac_coords[
@@ -551,6 +529,7 @@ class SurfaceGenerator:
         )
 
         return (
+            slab_base,
             orthogonal_slab,
             non_orthogonal_slab,
             bottom_layer_dist,
@@ -576,12 +555,14 @@ class SurfaceGenerator:
         """
         # Determine if all possible terminations are generated
         possible_shifts = self._calculate_possible_shifts()
+        shifted_slab_bases = []
         orthogonal_slabs = []
         non_orthogonal_slabs = []
         bottom_layer_dists = []
         top_layer_dists = []
         if not self.generate_all:
             (
+                shifted_slab_base,
                 orthogonal_slab,
                 non_orthogonal_slab,
                 bottom_layer_dist,
@@ -589,6 +570,7 @@ class SurfaceGenerator:
             ) = self.get_slab(shift=possible_shifts[0])
             orthogonal_slab.sort_index = 0
             non_orthogonal_slab.sort_index = 0
+            shifted_slab_bases.append(shifted_slab_base)
             orthogonal_slabs.append(orthogonal_slab)
             non_orthogonal_slabs.append(non_orthogonal_slab)
             bottom_layer_dists.append(bottom_layer_dist)
@@ -596,6 +578,7 @@ class SurfaceGenerator:
         else:
             for i, possible_shift in enumerate(possible_shifts):
                 (
+                    shifted_slab_base,
                     orthogonal_slab,
                     non_orthogonal_slab,
                     bottom_layer_dist,
@@ -603,6 +586,7 @@ class SurfaceGenerator:
                 ) = self.get_slab(shift=possible_shift)
                 orthogonal_slab.sort_index = i
                 non_orthogonal_slab.sort_index = i
+                shifted_slab_bases.append(shifted_slab_base)
                 orthogonal_slabs.append(orthogonal_slab)
                 non_orthogonal_slabs.append(non_orthogonal_slab)
                 bottom_layer_dists.append(bottom_layer_dist)
@@ -622,7 +606,7 @@ class SurfaceGenerator:
             surface = Surface(
                 orthogonal_slab=slab,
                 non_orthogonal_slab=non_orthogonal_slabs[i],
-                primitive_oriented_bulk=self.oriented_bulk_structure,
+                primitive_oriented_bulk=shifted_slab_bases[i],
                 conventional_bulk=self.bulk_structure,
                 base_structure=base_structure,
                 transformation_matrix=self.transformation_matrix,

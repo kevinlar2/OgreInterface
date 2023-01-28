@@ -14,6 +14,37 @@ def conv_a_to_b(struc_a: Structure, struc_b: Structure) -> np.ndarray:
     return struc_b.lattice.matrix @ struc_a.lattice.inv_matrix
 
 
+def get_layer_supercelll(
+    structure: Structure, layers: int, vacuum_scale: int = 0
+) -> Structure:
+    base_frac_coords = structure.frac_coords
+    sc_base_frac_coords = np.vstack(
+        [base_frac_coords + np.array([0, 0, i]) for i in range(layers)]
+    )
+    sc_cart_coords = sc_base_frac_coords.dot(structure.lattice.matrix)
+    sc_layer_inds = np.repeat(np.arange(layers), len(structure))
+
+    new_site_properties = {
+        k: v * layers for k, v in structure.site_properties.items()
+    }
+    new_site_properties["layer_index"] = sc_layer_inds.tolist()
+
+    layer_transform = np.eye(3)
+    layer_transform[-1, -1] = layers + vacuum_scale
+    layer_matrix = layer_transform @ structure.lattice.matrix
+
+    layer_slab = Structure(
+        lattice=Lattice(matrix=layer_matrix),
+        species=structure.atomic_numbers * layers,
+        coords=sc_cart_coords,
+        coords_are_cartesian=True,
+        to_unit_cell=True,
+        site_properties=new_site_properties,
+    )
+
+    return layer_slab
+
+
 def group_layers(structure, atol=None):
     """
     This function will find the atom indices belonging to each unique atomic layer.

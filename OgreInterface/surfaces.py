@@ -1,8 +1,7 @@
 """
 This module will be used to construct the surfaces and interfaces used in this package.
 """
-from OgreInterface.utils import group_layers
-from OgreInterface.utils import _float_gcd
+from OgreInterface import utils
 
 from pymatgen.core.structure import Structure
 from pymatgen.core.lattice import Lattice
@@ -11,6 +10,7 @@ from pymatgen.io.vasp.inputs import Poscar
 from pymatgen.io.ase import AseAtomsAdaptor
 from pymatgen.symmetry.analyzer import SymmOp
 from pymatgen.analysis.molecule_structure_comparator import CovalentRadius
+from pymatgen.analysis.local_env import CrystalNN
 
 import matplotlib.pyplot as plt
 from matplotlib.patches import Polygon
@@ -117,7 +117,7 @@ class Surface:
         Poscar(self.orthogonal_slab_structure).write_file(output)
 
     def remove_layers(self, num_layers, top=False, atol=None):
-        group_inds_conv, _ = group_layers(
+        group_inds_conv, _ = utils.group_layers(
             structure=self.orthogonal_slab_structure, atol=atol
         )
         if top:
@@ -129,8 +129,147 @@ class Surface:
 
         self.orthogonal_slab_structure.remove_sites(to_delete_conv)
 
-    def passivate(self, bot=True, top=True, passivated_struc=None):
-        raise NotImplementedError
+    def _get_surface_atoms(self):
+        layer_struc = utils.get_layer_supercelll(
+            structure=self.primitive_oriented_bulk_structure, layers=3
+        )
+        layer_struc.sort()
+
+        layer_inds = np.array(layer_struc.site_properties["layer_index"])
+
+        bottom_inds = np.where(layer_inds == 0)[0]
+        top_inds = np.where(layer_inds == np.max(layer_inds))[0]
+
+        cnn = CrystalNN()
+        top_neighborhood = []
+        for i in top_inds:
+            info_dict = cnn.get_nn_info(layer_struc, i)
+            for neighbor in info_dict:
+                if neighbor["image"][-1] > 0:
+                    top_neighborhood.append((i, info_dict))
+                    break
+
+        bottom_neighborhood = []
+        for i in bottom_inds:
+            info_dict = cnn.get_nn_info(layer_struc, i)
+            for neighbor in info_dict:
+                if neighbor["image"][-1] < 0:
+                    bottom_neighborhood.append((i, info_dict))
+                    break
+
+        return layer_struc, [bottom_neighborhood, top_neighborhood]
+
+    def _get_bond_dict(self):
+        (
+            layer_struc,
+            surface_neighborhoods,
+        ) = self._get_surface_atoms()
+
+        labels = ["bottom", "top"]
+        bond_dict = {"bottom": {}, "top": {}}
+        H_len = 0.31
+
+        for i, neighborhood in enumerate(surface_neighborhoods):
+            for surface_atom in neighborhood:
+                atom_index = surface_atom[0]
+
+                try:
+                    center_len = CovalentRadius.radius[
+                        layer_struc[atom_index].specie.symbol
+                    ]
+                except KeyError:
+                    center_len = layer_struc[atom_index].specie.atomic_radius
+
+                oriented_bulk_equivalent = layer_struc[atom_index].properties[
+                    "oriented_bulk_equivalent"
+                ]
+                neighbor_info = surface_atom[1]
+                broken_atoms = [
+                    neighbor
+                    for neighbor in neighbor_info
+                    if neighbor["image"][-1] != 0
+                ]
+
+                bonds = []
+                for atom in broken_atoms:
+                    broken_atom_cart_coords = atom["site"].coords
+                    center_atom_cart_coords = layer_struc[atom_index].coords
+                    bond_vector = 0.5 * (
+                        broken_atom_cart_coords - center_atom_cart_coords
+                    )
+                    norm_vector = bond_vector / np.linalg.norm(bond_vector)
+                    H_vector = (H_len + center_len) * norm_vector
+
+                    bonds.append(H_vector)
+
+                bond_dict[labels[i]][oriented_bulk_equivalent] = np.vstack(
+                    bonds
+                )
+
+        return bond_dict
+
+    def _get_passivation_atom_index(self, struc, bulk_equivalent, top=False):
+        struc_layer_index = np.array(struc.site_properties["layer_index"])
+        struc_bulk_equiv = np.array(
+            struc.site_properties["oriented_bulk_equivalent"]
+        )
+
+        if top:
+            layer_number = np.max(struc_layer_index)
+        else:
+            layer_number = 0
+
+        atom_index = np.where(
+            np.logical_and(
+                struc_layer_index == layer_number,
+                struc_bulk_equiv == bulk_equivalent,
+            )
+        )[0][0]
+
+        return atom_index
+
+    def _passivate(self, struc, index, bond):
+        position = struc[index].coords + bond
+        position = struc[index].coords + bond
+        struc.append(
+            "H",
+            coords=position,
+            coords_are_cartesian=True,
+            properties={k: -1 for k in struc[index].properties},
+        )
+
+    def passivate(
+        self, bot=True, top=True, passivated_struc=None, inplace=True
+    ):
+        bond_dict = self._get_bond_dict()
+        ortho_slab = self.orthogonal_slab_structure.copy()
+        non_ortho_slab = self.non_orthogonal_slab_structure.copy()
+
+        if top:
+            for bulk_equiv, bonds in bond_dict["top"].items():
+                ortho_index = self._get_passivation_atom_index(
+                    struc=ortho_slab, bulk_equivalent=bulk_equiv, top=True
+                )
+                non_ortho_index = self._get_passivation_atom_index(
+                    struc=non_ortho_slab, bulk_equivalent=bulk_equiv, top=True
+                )
+
+                for bond in bonds:
+                    self._passivate(ortho_slab, ortho_index, bond)
+                    self._passivate(non_ortho_slab, non_ortho_index, bond)
+
+        if bot:
+            for bulk_equiv, bonds in bond_dict["bottom"].items():
+                ortho_index = self._get_passivation_atom_index(
+                    struc=ortho_slab, bulk_equivalent=bulk_equiv, top=False
+                )
+                non_ortho_index = self._get_passivation_atom_index(
+                    struc=non_ortho_slab, bulk_equivalent=bulk_equiv, top=False
+                )
+
+                for bond in bonds:
+                    self._passivate(ortho_slab, ortho_index, bond)
+                    self._passivate(non_ortho_slab, non_ortho_index, bond)
 
     def get_termination(self):
         raise NotImplementedError
@@ -313,7 +452,7 @@ class Interface:
         uvw_supercell = matrix @ self.substrate.uvw_basis
         scale_factors = []
         for i, b in enumerate(uvw_supercell):
-            scale = np.abs(reduce(_float_gcd, b))
+            scale = np.abs(reduce(utils._float_gcd, b))
             uvw_supercell[i] = uvw_supercell[i] / scale
             scale_factors.append(scale)
 
@@ -327,7 +466,7 @@ class Interface:
         uvw_supercell = matrix @ self.film.uvw_basis
         scale_factors = []
         for i, b in enumerate(uvw_supercell):
-            scale = np.abs(reduce(_float_gcd, b))
+            scale = np.abs(reduce(utils._float_gcd, b))
             uvw_supercell[i] = uvw_supercell[i] / scale
             scale_factors.append(scale)
 

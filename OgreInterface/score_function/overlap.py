@@ -18,7 +18,7 @@ class SphereOverlap(nn.Module):
         self.register_buffer("cutoff", cutoff)
         self.pi = torch.tensor(np.pi)
 
-    def overlap_potential(
+    def overlap_potential_old(
         self, d_ij: torch.Tensor, r_i: torch.Tensor, r_j: torch.Tensor
     ):
         top = (
@@ -42,6 +42,11 @@ class SphereOverlap(nn.Module):
         )
 
         return overlap
+
+    def overlap_potential(
+        self, d_ij: torch.Tensor, r_i: torch.Tensor, r_j: torch.Tensor
+    ):
+        return ((r_i + r_j) / d_ij) ** 6
 
     def forward(
         self,

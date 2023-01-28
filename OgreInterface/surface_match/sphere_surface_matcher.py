@@ -5,7 +5,7 @@ from pymatgen.io.ase import AseAtomsAdaptor
 from pymatgen.core.periodic_table import Element
 from pymatgen.analysis.local_env import CrystalNN
 from ase.data import atomic_numbers, chemical_symbols
-from typing import Dict, Optional
+from typing import Dict, Optional, List
 import numpy as np
 from matplotlib.colors import Normalize
 import matplotlib.pyplot as plt
@@ -22,7 +22,11 @@ class SphereSurfaceMatcher:
         radius_dict: Optional[Dict[str, float]] = None,
         grid_density_x: int = 15,
         grid_density_y: int = 15,
+        xlim: List[float] = [0.0, 1.0],
+        ylim: List[float] = [0.0, 1.0],
     ):
+        self.xlim = xlim
+        self.ylim = ylim
         self.interface = interface
         self.matrix = deepcopy(interface.interface.lattice.matrix)
         self._vol = np.linalg.det(self.matrix)
@@ -32,7 +36,8 @@ class SphereSurfaceMatcher:
             self._vol *= -1
 
         self.radius_dict = self._get_radii(radius_dict)
-        self.cutoff = 2.5 * max(list(self.radius_dict.values()))
+        self.cutoff = self._get_cutoff()
+        print(self.cutoff)
         self.d_interface = self.interface.interfacial_distance
         self.film_part = self.interface.film_part
         self.sub_part = self.interface.sub_part
@@ -60,9 +65,15 @@ class SphereSurfaceMatcher:
 
         return radii_dict
 
+    def _get_cutoff(self):
+        max_radius = max(list(self.radius_dict.values()))
+        cutoff_val = (2 * max_radius) / (1e-3) ** (1 / 6)
+
+        return cutoff_val
+
     def _generate_shifts(self):
-        grid_x = np.linspace(0, 1, self.grid_density_x)
-        grid_y = np.linspace(0, 1, self.grid_density_y)
+        grid_x = np.linspace(self.xlim[0], self.xlim[1], self.grid_density_x)
+        grid_y = np.linspace(self.ylim[0], self.ylim[1], self.grid_density_y)
         X, Y = np.meshgrid(grid_x, grid_y)
 
         shifts = np.c_[X.ravel(), Y.ravel(), np.zeros(X.shape).ravel()]
@@ -106,12 +117,12 @@ class SphereSurfaceMatcher:
         return overlap
 
     def _get_interpolated_data(self, X, Y, Z):
-        x_grid = np.linspace(0, 1, self.grid_density_x)
-        y_grid = np.linspace(0, 1, self.grid_density_y)
+        x_grid = np.linspace(self.xlim[0], self.xlim[1], self.grid_density_x)
+        y_grid = np.linspace(self.ylim[0], self.ylim[1], self.grid_density_y)
         spline = RectBivariateSpline(y_grid, x_grid, Z)
 
-        x_grid_interp = np.linspace(0, 1, 401)
-        y_grid_interp = np.linspace(0, 1, 401)
+        x_grid_interp = np.linspace(self.xlim[0], self.xlim[1], 401)
+        y_grid_interp = np.linspace(self.ylim[0], self.ylim[1], 401)
 
         X_interp, Y_interp = np.meshgrid(x_grid_interp, y_grid_interp)
         Z_interp = spline.ev(xi=Y_interp, yi=X_interp)
@@ -204,13 +215,28 @@ class SphereSurfaceMatcher:
 
         a = self.matrix[0, :2]
         b = self.matrix[1, :2]
-        borders = np.vstack([np.zeros(2), a, a + b, b, np.zeros(2)])
+        borders = np.vstack(
+            [
+                self.xlim[0] * a + self.ylim[0] * b,
+                self.xlim[1] * a + self.ylim[0] * b,
+                self.xlim[1] * a + self.ylim[1] * b,
+                self.xlim[0] * a + self.ylim[1] * b,
+                self.xlim[0] * a + self.ylim[0] * b,
+            ]
+        )
         x_size = borders[:, 0].max() - borders[:, 0].min()
         y_size = borders[:, 1].max() - borders[:, 1].min()
         ratio = y_size / x_size
 
+        if ratio < 1:
+            figx = 5 / ratio
+            figy = 5
+        else:
+            figx = 5
+            figy = 5 * ratio
+
         fig, ax = plt.subplots(
-            figsize=(5, 5 * ratio),
+            figsize=(figx, figy),
             dpi=dpi,
         )
         self._plot_heatmap(

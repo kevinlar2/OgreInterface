@@ -5,7 +5,7 @@ from OgreInterface import utils
 
 from pymatgen.core.structure import Structure
 from pymatgen.core.lattice import Lattice
-from pymatgen.core.periodic_table import Element
+from pymatgen.core.periodic_table import Element, Species
 from pymatgen.io.vasp.inputs import Poscar
 from pymatgen.io.ase import AseAtomsAdaptor
 from pymatgen.symmetry.analyzer import SymmOp
@@ -14,7 +14,7 @@ from pymatgen.analysis.local_env import CrystalNN
 
 import matplotlib.pyplot as plt
 from matplotlib.patches import Polygon
-from itertools import combinations
+from itertools import combinations, groupby
 import numpy as np
 import copy
 from copy import deepcopy
@@ -70,6 +70,7 @@ class Surface:
         self.point_group_operations = point_group_operations
         self.bottom_layer_dist = bottom_layer_dist
         self.top_layer_dist = top_layer_dist
+        self.passivated = False
 
     @property
     def formula(self):
@@ -113,8 +114,47 @@ class Surface:
 
         return init_structure, init_atoms
 
-    def write_file(self, output="POSCAR_slab"):
-        Poscar(self.orthogonal_slab_structure).write_file(output)
+    def write_file(self, orthogonal=True, output="POSCAR_slab"):
+        if orthogonal:
+            slab = self.orthogonal_slab_structure
+        else:
+            slab = self.non_orthogonal_slab_structure
+
+        if not self.passivated:
+            Poscar(slab).write_file(output)
+        else:
+            comment = ":".join(
+                [i for i in slab.site_properties["hydrogen_str"] if i != ""]
+            )
+            syms = [site.specie.symbol for site in slab]
+
+            syms = []
+            for site in slab:
+                if site.specie.symbol == "H":
+                    if hasattr(site.specie, "oxi_state"):
+                        oxi = site.specie.oxi_state
+
+                        if oxi < 1.0:
+                            H_str = "H" + f"{oxi:.2f}"[1:]
+                        elif oxi > 1.0:
+                            H_str = "H" + f"{oxi:.2f}"
+                        else:
+                            H_str = "H"
+
+                        syms.append(H_str)
+                else:
+                    syms.append(site.specie.symbol)
+
+            comp_list = [(a[0], len(list(a[1]))) for a in groupby(syms)]
+            atom_types, n_atoms = zip(*comp_list)
+
+            poscar_str = Poscar(slab, comment=comment).get_string().split("\n")
+            poscar_str[5] = " ".join(atom_types)
+            poscar_str[6] = " ".join(list(map(str, n_atoms)))
+            poscar_str = "\n".join(poscar_str)
+
+            with open(output, "w") as f:
+                f.write(poscar_str)
 
     def remove_layers(self, num_layers, top=False, atol=None):
         group_inds_conv, _ = utils.group_layers(
@@ -130,9 +170,10 @@ class Surface:
         self.orthogonal_slab_structure.remove_sites(to_delete_conv)
 
     def _get_surface_atoms(self):
-        layer_struc = utils.get_layer_supercelll(
-            structure=self.primitive_oriented_bulk_structure, layers=3
-        )
+        obs = self.primitive_oriented_bulk_structure.copy()
+        obs.add_oxidation_state_by_guess()
+
+        layer_struc = utils.get_layer_supercelll(structure=obs, layers=3)
         layer_struc.sort()
 
         layer_inds = np.array(layer_struc.site_properties["layer_index"])
@@ -159,7 +200,26 @@ class Surface:
 
         return layer_struc, [bottom_neighborhood, top_neighborhood]
 
+    def _get_pseudohydrogen_charge(self, site, coordination):
+        electronic_struc = site.specie.electronic_structure.split(".")[1:]
+        oxi_state = site.specie.oxi_state
+        valence = 0
+        for orb in electronic_struc:
+            if orb[1] == "d":
+                if int(orb[2:]) < 10:
+                    valence += int(orb[2:])
+            else:
+                valence += int(orb[2:])
+
+        if oxi_state >= 0:
+            charge = (8 - valence) / coordination
+        else:
+            charge = ((2 * coordination) - valence) / coordination
+
+        return charge
+
     def _get_bond_dict(self):
+        image_map = {1: "1", 0: "0", -1: "2"}
         (
             layer_struc,
             surface_neighborhoods,
@@ -172,6 +232,9 @@ class Surface:
         for i, neighborhood in enumerate(surface_neighborhoods):
             for surface_atom in neighborhood:
                 atom_index = surface_atom[0]
+                center_atom_equiv_index = layer_struc[atom_index].properties[
+                    "oriented_bulk_equivalent"
+                ]
 
                 try:
                     center_len = CovalentRadius.radius[
@@ -184,6 +247,10 @@ class Surface:
                     "oriented_bulk_equivalent"
                 ]
                 neighbor_info = surface_atom[1]
+                coordination = len(neighbor_info)
+                charge = self._get_pseudohydrogen_charge(
+                    layer_struc[atom_index], coordination
+                )
                 broken_atoms = [
                     neighbor
                     for neighbor in neighbor_info
@@ -191,20 +258,38 @@ class Surface:
                 ]
 
                 bonds = []
+                bond_strs = []
                 for atom in broken_atoms:
-                    broken_atom_cart_coords = atom["site"].coords
+                    broken_site = atom["site"]
+                    broken_atom_equiv_index = broken_site.properties[
+                        "oriented_bulk_equivalent"
+                    ]
+                    broken_image = broken_site.image.astype(int)
+                    broken_atom_cart_coords = broken_site.coords
                     center_atom_cart_coords = layer_struc[atom_index].coords
-                    bond_vector = 0.5 * (
+                    bond_vector = (
                         broken_atom_cart_coords - center_atom_cart_coords
                     )
                     norm_vector = bond_vector / np.linalg.norm(bond_vector)
                     H_vector = (H_len + center_len) * norm_vector
 
-                    bonds.append(H_vector)
+                    H_str = ",".join(
+                        [
+                            str(center_atom_equiv_index),
+                            str(broken_atom_equiv_index),
+                            "".join([image_map[i] for i in broken_image]),
+                            str(i),
+                        ]
+                    )
 
-                bond_dict[labels[i]][oriented_bulk_equivalent] = np.vstack(
-                    bonds
-                )
+                    bonds.append(H_vector)
+                    bond_strs.append(H_str)
+
+                bond_dict[labels[i]][oriented_bulk_equivalent] = {
+                    "bonds": np.vstack(bonds),
+                    "bond_strings": bond_strs,
+                    "charge": charge,
+                }
 
         return bond_dict
 
@@ -228,14 +313,17 @@ class Surface:
 
         return atom_index
 
-    def _passivate(self, struc, index, bond):
+    def _passivate(self, struc, index, bond, bond_str, charge):
         position = struc[index].coords + bond
         position = struc[index].coords + bond
+        props = {k: -1 for k in struc[index].properties}
+        props["hydrogen_str"] = bond_str
+
         struc.append(
-            "H",
+            Species("H", oxidation_state=charge),
             coords=position,
             coords_are_cartesian=True,
-            properties={k: -1 for k in struc[index].properties},
+            properties=props,
         )
 
     def passivate(
@@ -244,6 +332,11 @@ class Surface:
         bond_dict = self._get_bond_dict()
         ortho_slab = self.orthogonal_slab_structure.copy()
         non_ortho_slab = self.non_orthogonal_slab_structure.copy()
+
+        ortho_slab.add_site_property("hydrogen_str", [""] * len(ortho_slab))
+        non_ortho_slab.add_site_property(
+            "hydrogen_str", [""] * len(non_ortho_slab)
+        )
 
         if top:
             for bulk_equiv, bonds in bond_dict["top"].items():
@@ -254,9 +347,23 @@ class Surface:
                     struc=non_ortho_slab, bulk_equivalent=bulk_equiv, top=True
                 )
 
-                for bond in bonds:
-                    self._passivate(ortho_slab, ortho_index, bond)
-                    self._passivate(non_ortho_slab, non_ortho_index, bond)
+                for bond, bond_str in zip(
+                    bonds["bonds"], bonds["bond_strings"]
+                ):
+                    self._passivate(
+                        ortho_slab,
+                        ortho_index,
+                        bond,
+                        bond_str,
+                        bonds["charge"],
+                    )
+                    self._passivate(
+                        non_ortho_slab,
+                        non_ortho_index,
+                        bond,
+                        bond_str,
+                        bonds["charge"],
+                    )
 
         if bot:
             for bulk_equiv, bonds in bond_dict["bottom"].items():
@@ -267,9 +374,34 @@ class Surface:
                     struc=non_ortho_slab, bulk_equivalent=bulk_equiv, top=False
                 )
 
-                for bond in bonds:
-                    self._passivate(ortho_slab, ortho_index, bond)
-                    self._passivate(non_ortho_slab, non_ortho_index, bond)
+                for bond, bond_str in zip(
+                    bonds["bonds"], bonds["bond_strings"]
+                ):
+                    self._passivate(
+                        ortho_slab,
+                        ortho_index,
+                        bond,
+                        bond_str,
+                        bonds["charge"],
+                    )
+                    self._passivate(
+                        non_ortho_slab,
+                        non_ortho_index,
+                        bond,
+                        bond_str,
+                        bonds["charge"],
+                    )
+
+        ortho_slab.sort()
+        non_ortho_slab.sort()
+
+        self.passivated = True
+
+        if inplace:
+            self.orthogonal_slab_structure = ortho_slab
+            self.non_orthogonal_slab_structure = non_ortho_slab
+        else:
+            return ortho_slab, non_ortho_slab
 
     def get_termination(self):
         raise NotImplementedError

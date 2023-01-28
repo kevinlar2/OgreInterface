@@ -35,7 +35,7 @@ def get_layer_supercelll(
 
     layer_slab = Structure(
         lattice=Lattice(matrix=layer_matrix),
-        species=structure.atomic_numbers * layers,
+        species=structure.species * layers,
         coords=sc_cart_coords,
         coords_are_cartesian=True,
         to_unit_cell=True,

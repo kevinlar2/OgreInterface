@@ -43,6 +43,7 @@ class Surface:
         point_group_operations,
         bottom_layer_dist,
         top_layer_dist,
+        termination_index,
     ):
         (
             self.orthogonal_slab_structure,
@@ -70,6 +71,7 @@ class Surface:
         self.point_group_operations = point_group_operations
         self.bottom_layer_dist = bottom_layer_dist
         self.top_layer_dist = top_layer_dist
+        self.termination_index = termination_index
         self.passivated = False
 
     @property
@@ -120,11 +122,27 @@ class Surface:
         else:
             slab = self.non_orthogonal_slab_structure
 
+        base_comment = "|".join(
+            [
+                f"layers={self.layers}",
+                f"index={self.termination_index}",
+                f"othogonal={orthogonal}",
+            ]
+        )
+
         if not self.passivated:
-            Poscar(slab).write_file(output)
+            poscar_str = Poscar(slab, comment=base_comment).get_string()
         else:
-            comment = ":".join(
-                [i for i in slab.site_properties["hydrogen_str"] if i != ""]
+            comment = (
+                base_comment
+                + "|passivation="
+                + ":".join(
+                    [
+                        i
+                        for i in slab.site_properties["hydrogen_str"]
+                        if i != ""
+                    ]
+                )
             )
             syms = [site.specie.symbol for site in slab]
 
@@ -153,8 +171,8 @@ class Surface:
             poscar_str[6] = " ".join(list(map(str, n_atoms)))
             poscar_str = "\n".join(poscar_str)
 
-            with open(output, "w") as f:
-                f.write(poscar_str)
+        with open(output, "w") as f:
+            f.write(poscar_str)
 
     def remove_layers(self, num_layers, top=False, atol=None):
         group_inds_conv, _ = utils.group_layers(
@@ -219,7 +237,7 @@ class Surface:
         return charge
 
     def _get_bond_dict(self):
-        image_map = {1: "1", 0: "0", -1: "2"}
+        image_map = {1: "+", 0: "=", -1: "-"}
         (
             layer_struc,
             surface_neighborhoods,
@@ -317,7 +335,7 @@ class Surface:
         position = struc[index].coords + bond
         position = struc[index].coords + bond
         props = {k: -1 for k in struc[index].properties}
-        props["hydrogen_str"] = bond_str
+        props["hydrogen_str"] = f"{index}," + bond_str
 
         struc.append(
             Species("H", oxidation_state=charge),

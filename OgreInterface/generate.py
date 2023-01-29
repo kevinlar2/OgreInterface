@@ -617,6 +617,7 @@ class SurfaceGenerator:
                 point_group_operations=self.point_group_operations,
                 bottom_layer_dist=bottom_layer_dists[i],
                 top_layer_dist=top_layer_dists[i],
+                termination_index=i,
             )
             surfaces.append(surface)
 

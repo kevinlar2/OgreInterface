@@ -12,6 +12,7 @@ from pymatgen.symmetry.analyzer import SymmOp
 from pymatgen.analysis.molecule_structure_comparator import CovalentRadius
 from pymatgen.analysis.local_env import CrystalNN
 
+from typing import Dict, Union
 import matplotlib.pyplot as plt
 from matplotlib.patches import Polygon
 from itertools import combinations, groupby
@@ -20,6 +21,10 @@ import copy
 from copy import deepcopy
 from functools import reduce
 from ase import Atoms
+import warnings
+
+# supress warning from CrystallNN when ionic radii are not found.
+warnings.filterwarnings("ignore", module=r"pymatgen.analysis.local_env")
 
 
 class Surface:
@@ -116,34 +121,38 @@ class Surface:
 
         return init_structure, init_atoms
 
-    def write_file(self, orthogonal=True, output="POSCAR_slab"):
+    def write_file(
+        self,
+        orthogonal: bool = True,
+        output: str = "POSCAR_slab",
+        relax: bool = True,
+    ) -> None:
         if orthogonal:
             slab = self.orthogonal_slab_structure
         else:
             slab = self.non_orthogonal_slab_structure
 
-        base_comment = "|".join(
+        comment = "|".join(
             [
-                f"layers={self.layers}",
-                f"index={self.termination_index}",
-                f"othogonal={orthogonal}",
+                f"layer={self.layers}",
+                f"ind={self.termination_index}",
+                f"otho={orthogonal}",
             ]
         )
 
         if not self.passivated:
-            poscar_str = Poscar(slab, comment=base_comment).get_string()
+            poscar_str = Poscar(slab, comment=comment).get_string()
         else:
-            comment = (
-                base_comment
-                + "|passivation="
-                + ":".join(
-                    [
-                        i
-                        for i in slab.site_properties["hydrogen_str"]
-                        if i != ""
-                    ]
+            if relax:
+                atomic_numbers = np.array(slab.atomic_numbers)
+                selective_dynamics = np.repeat(
+                    (atomic_numbers == 1).reshape(-1, 1),
+                    repeats=3,
+                    axis=1,
                 )
-            )
+            else:
+                selective_dynamics = None
+
             syms = [site.specie.symbol for site in slab]
 
             syms = []
@@ -166,8 +175,22 @@ class Surface:
             comp_list = [(a[0], len(list(a[1]))) for a in groupby(syms)]
             atom_types, n_atoms = zip(*comp_list)
 
-            poscar_str = Poscar(slab, comment=comment).get_string().split("\n")
-            poscar_str[5] = " ".join(atom_types)
+            new_atom_types = []
+            for atom in atom_types:
+                if "H" == atom[0] and atom not in ["Hf", "Hs", "Hg", "He"]:
+                    new_atom_types.append("H")
+                else:
+                    new_atom_types.append(atom)
+
+            comment += "|potcar=" + " ".join(atom_types)
+
+            poscar = Poscar(slab, comment=comment)
+
+            if relax:
+                poscar.selective_dynamics = selective_dynamics
+
+            poscar_str = poscar.get_string().split("\n")
+            poscar_str[5] = " ".join(new_atom_types)
             poscar_str[6] = " ".join(list(map(str, n_atoms)))
             poscar_str = "\n".join(poscar_str)
 
@@ -344,10 +367,90 @@ class Surface:
             properties=props,
         )
 
+    def _get_passivated_bond_dict(
+        self,
+        bond_dict: Dict[
+            str, Dict[int, Dict[str, Union[np.ndarray, str, float]]]
+        ],
+        relaxed_structure_file: str,
+    ):
+        with open(relaxed_structure_file, "r") as f:
+            poscar_str = f.read().split("\n")
+
+        desc_str = poscar_str[0].split("|")
+
+        layers = int(desc_str[0].split("=")[1])
+        termination_index = int(desc_str[1].split("=")[1])
+
+        if termination_index == self.termination_index:
+            poscar = Poscar.from_string(
+                "\n".join(poscar_str), read_velocities=False
+            )
+
+            structure = poscar.structure
+            hydrogen_index = np.array(structure.atomic_numbers) == 1
+
+            obs = self.primitive_oriented_bulk_structure.copy()
+            obs.add_oxidation_state_by_guess()
+
+            is_negative = np.linalg.det(obs.lattice.matrix) < 0
+
+            if is_negative:
+                structure = Structure(
+                    lattice=Lattice(structure.lattice.matrix * -1),
+                    species=structure.species,
+                    coords=structure.frac_coords,
+                )
+
+            hydrogen_coords = structure.cart_coords[hydrogen_index]
+
+            layer_struc = utils.get_layer_supercelll(
+                structure=obs, layers=layers, vacuum_scale=2
+            )
+            layer_struc.sort()
+
+            surface_atom_info = []
+
+            for side, side_dict in bond_dict.items():
+                is_top = True if side == "top" else False
+                for bulk_equiv, bonds in side_dict.items():
+                    index = self._get_passivation_atom_index(
+                        struc=layer_struc,
+                        bulk_equivalent=bulk_equiv,
+                        top=is_top,
+                    )
+                    surface_atom_info.append((index, side, bulk_equiv))
+
+            surface_atoms, _, _ = zip(*surface_atom_info)
+            surface_atom_coords = structure.cart_coords[list(surface_atoms)]
+
+            new_bonds = {i: [] for i in surface_atom_info}
+
+            for hydrogen in hydrogen_coords:
+                dist = np.linalg.norm(hydrogen - surface_atom_coords, axis=1)
+                center_ind = np.argmin(dist)
+                bond = hydrogen - surface_atom_coords[center_ind]
+                new_bonds[surface_atom_info[center_ind]].append(bond)
+
+            for k, v in new_bonds.items():
+                bond_dict[k[1]][k[2]]["bonds"] = np.vstack(v)
+
+            return bond_dict
+        else:
+            raise ValueError(
+                f"This is not the same termination. The passivated structure has termination={termination_index}, and the current surface has termination={self.termination_index}"
+            )
+
     def passivate(
         self, bot=True, top=True, passivated_struc=None, inplace=True
     ):
         bond_dict = self._get_bond_dict()
+
+        if passivated_struc is not None:
+            bond_dict = self._get_passivated_bond_dict(
+                bond_dict=bond_dict, relaxed_structure_file=passivated_struc
+            )
+
         ortho_slab = self.orthogonal_slab_structure.copy()
         non_ortho_slab = self.non_orthogonal_slab_structure.copy()
 

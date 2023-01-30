@@ -18,7 +18,7 @@ from tqdm import tqdm
 import numpy as np
 import math
 from copy import deepcopy
-from typing import Union, List
+from typing import Union, List, TypeVar
 from itertools import combinations, product, groupby
 from ase import Atoms
 from multiprocessing import Pool, cpu_count
@@ -27,22 +27,61 @@ import time
 from scipy.cluster.hierarchy import fcluster, linkage
 from scipy.spatial.distance import squareform
 
+SelfSurfaceGenerator = TypeVar(
+    "SelfSurfaceGenerator", bound="SurfaceGenerator"
+)
+SelfInterfaceGenerator = TypeVar(
+    "SelfInterfaceGenerator", bound="InterfaceGenerator"
+)
+
 
 class TolarenceError(RuntimeError):
+    """Class to handle errors when no interfaces are found for a given tolarence setting."""
+
     pass
 
 
 class SurfaceGenerator:
-    """
-    The SurfaceGenerator classes generates surfaces with all possible terminations and contains
-    information about the Miller indices of the surface and the number of different
-    terminations.
+    """Class for generating surfaces from a given bulk structure.
 
-    Parameters:
-        structure (pymatgen.core.structure.Structure or ase.Atoms): Conventional bulk structure.
-        miller_index (list): Miller index of the created surfaces.
-        layers (int): Number of layers generated in the surface.
-        vacuum (float): Size of vacuum in Angstroms.
+    The SurfaceGenerator classes generates surfaces with all possible terminations and contains
+    information pertinent to generating interfaces with the InterfaceGenerator.
+
+    Args:
+        bulk: Bulk crystal structure used to create the surface
+        miller_index: Miller index of the surface
+        layers: Number of layers to include in the surface
+        vacuum: Size of the vacuum to include over the surface in Angstroms
+        generate_all: Determines if all possible surface terminations are generated.
+        filter_ionic_slab: Determines if the terminations of ionic crystals should be filtered out based on their
+            predicted stability calculated using the IonicScoreFunction
+        lazy: Determines if the surfaces are actually generated, or if only the surface basis vectors are found.
+            (this is used for the MillerIndex search to make things faster)
+
+    Attributes:
+        slabs (list): List of OgreInterface Surface objects with different surface terminations.
+        bulk_structure (Structure): Pymatgen Structure class for the conventional cell of the input bulk structure
+        bulk_atoms (Atoms): ASE Atoms class for the conventional cell of the input bulk structure
+        primitive_structure (Structure): Pymatgen Structure class for the primitive cell of the input bulk structure
+        primitive_atoms (Atoms): ASE Atoms class for the primitive cell of the input bulk structure
+        miller_index (list): Miller index of the surface
+        layers (int): Number of layers to include in the surface
+        vacuum (float): Size of the vacuum to include over the surface in Angstroms
+        generate_all (bool): Determines if all possible surface terminations are generated.
+        filter_ionic_slab (bool): Determines if the terminations of ionic crystals should be filtered out based on their
+            predicted stability calculated using the IonicScoreFunction
+        lazy (bool): Determines if the surfaces are actually generated, or if only the surface basis vectors are found.
+            (this is used for the MillerIndex search to make things faster)
+        oriented_bulk_structure (Structure): Pymatgen Structure class of the smallest building block of the slab,
+            which will eventually be used to build the slab supercell
+        oriented_bulk_atoms (Atoms): Pymatgen Atoms class of the smallest building block of the slab,
+            which will eventually be used to build the slab supercell
+        uvw_basis (list): The miller indices of the slab lattice vectors.
+        transformation_matrix: Transformation matrix used to convert from the bulk basis to the slab basis
+            (usefull for band unfolding calculations)
+        inplane_vectors (list): The cartesian vectors of the in-plane lattice vectors.
+        surface_normal (list): The normal vector of the surface
+        surface_normal_projection (float): The projections of the c-lattice vector onto the surface normal
     """
 
     def __init__(
@@ -55,7 +94,7 @@ class SurfaceGenerator:
         generate_all: bool = True,
         filter_ionic_slabs: bool = False,
         lazy: bool = False,
-    ):
+    ) -> None:
         self.convert_to_conventional = convert_to_conventional
 
         (
@@ -65,11 +104,11 @@ class SurfaceGenerator:
             self.primitive_atoms,
         ) = self._get_bulk(atoms_or_struc=bulk)
 
-        self.use_prim = len(self.bulk_structure) != len(
+        self._use_prim = len(self.bulk_structure) != len(
             self.primitive_structure
         )
 
-        self.point_group_operations = self._get_point_group_operations()
+        self._point_group_operations = self._get_point_group_operations()
 
         self.miller_index = miller_index
         self.layers = layers
@@ -90,7 +129,8 @@ class SurfaceGenerator:
         if not self.lazy:
             self.slabs = self._generate_slabs()
 
-    def generate_slabs(self):
+    def generate_slabs(self) -> None:
+        """Used to generate list of Surface objects if lazy=True"""
         if self.lazy:
             self.slabs = self._generate_slabs()
         else:
@@ -101,7 +141,7 @@ class SurfaceGenerator:
     @classmethod
     def from_file(
         cls,
-        filename,
+        filename: str,
         miller_index: List[int],
         layers: int,
         vacuum: float,
@@ -109,7 +149,23 @@ class SurfaceGenerator:
         generate_all: bool = True,
         filter_ionic_slabs: bool = False,
         lazy: bool = False,
-    ):
+    ) -> SelfSurfaceGenerator:
+        """Creating a SurfaceGenerator from a file (i.e. POSCAR, cif, etc)
+
+        Args:
+            filename: File path to the structure file
+            miller_index: Miller index of the surface
+            layers: Number of layers to include in the surface
+            vacuum: Size of the vacuum to include over the surface in Angstroms
+            generate_all: Determines if all possible surface terminations are generated
+            filter_ionic_slab: Determines if the terminations of ionic crystals should be filtered out based on their
+                predicted stability calculated using the IonicScoreFunction
+            lazy: Determines if the surfaces are actually generated, or if only the surface basis vectors are found.
+                (this is used for the MillerIndex search to make things faster)
+
+        Returns:
+            SurfaceGenerator
+        """
         structure = Structure.from_file(filename=filename)
 
         return cls(
@@ -207,7 +263,7 @@ class SurfaceGenerator:
             sg.get_symmetry_dataset()["equivalent_atoms"][prim_inds].tolist(),
         )
 
-        if not self.use_prim:
+        if not self._use_prim:
             intercepts = np.array(
                 [1 / i if i != 0 else 0 for i in miller_index]
             )
@@ -368,7 +424,7 @@ class SurfaceGenerator:
 
         transformation_matrix = np.copy(final_basis)
 
-        if self.use_prim:
+        if self._use_prim:
             for i, b in enumerate(final_basis):
                 cart_coords = prim_lattice.get_cartesian_coords(b)
                 conv_frac_coords = lattice.get_fractional_coords(cart_coords)
@@ -447,14 +503,14 @@ class SurfaceGenerator:
 
         return shifts
 
-    def get_slab(self, shift=0, tol: float = 0.1, energy=None):
+    def _get_slab(self, shift=0, tol: float = 0.1, energy=None):
         """
         This method takes in shift value for the c lattice direction and
         generates a slab based on the given shift. You should rarely use this
         method. Instead, it is used by other generation algorithms to obtain
         all slabs.
 
-        Arg:
+        Args:
             shift (float): A shift value in Angstrom that determines how much a
                 slab should be shifted.
             tol (float): Tolerance to determine primitive cell.
@@ -567,7 +623,7 @@ class SurfaceGenerator:
                 non_orthogonal_slab,
                 bottom_layer_dist,
                 top_layer_dist,
-            ) = self.get_slab(shift=possible_shifts[0])
+            ) = self._get_slab(shift=possible_shifts[0])
             orthogonal_slab.sort_index = 0
             non_orthogonal_slab.sort_index = 0
             shifted_slab_bases.append(shifted_slab_base)
@@ -583,7 +639,7 @@ class SurfaceGenerator:
                     non_orthogonal_slab,
                     bottom_layer_dist,
                     top_layer_dist,
-                ) = self.get_slab(shift=possible_shift)
+                ) = self._get_slab(shift=possible_shift)
                 orthogonal_slab.sort_index = i
                 non_orthogonal_slab.sort_index = i
                 shifted_slab_bases.append(shifted_slab_base)
@@ -594,7 +650,7 @@ class SurfaceGenerator:
 
         surfaces = []
 
-        if self.use_prim:
+        if self._use_prim:
             base_structure = self.primitive_structure
         else:
             base_structure = self.bulk_structure
@@ -614,7 +670,7 @@ class SurfaceGenerator:
                 layers=self.layers,
                 vacuum=self.vacuum,
                 uvw_basis=self.uvw_basis,
-                point_group_operations=self.point_group_operations,
+                point_group_operations=self._point_group_operations,
                 bottom_layer_dist=bottom_layer_dists[i],
                 top_layer_dist=top_layer_dists[i],
                 termination_index=i,
@@ -642,9 +698,25 @@ class SurfaceGenerator:
 
 
 class InterfaceGenerator:
-    """
+    """Class for generating interfaces from two bulk structures
+
     This class will use the lattice matching algorithm from Zur and McGill to generate
     commensurate interface structures between two inorganic crystalline materials.
+
+    Args:
+        substrate: Surface class of the substrate material
+        film: Surface class of the film materials
+        area_tol: Tolarance of the area mismatch (eq. 2.1 in Zur and McGill)
+        angle_tol: Tolarence of the angle mismatch between the film and substrate lattice vectors
+        length_tol: Tolarence of the length mismatch between the film and substrate lattice vectors
+        max_area: Maximum area of the interface unit cell cross section
+        interfacial_distance: Distance between the top atom in the substrate to the bottom atom of the film
+            If None, the interfacial distance will be predicted based on the average distance of the interlayer
+            spacing between the film and substrate materials.
+        vacuum: Size of the vacuum in Angstroms
+        cener: Determines of the interface should be centered in the vacuum
+
+    Attributes:
     """
 
     def __init__(
@@ -656,7 +728,6 @@ class InterfaceGenerator:
         length_tol: float = 0.01,
         max_area: float = 500.0,
         interfacial_distance: Union[float, None] = 2.0,
-        sub_strain_frac: float = 0.0,
         vacuum: float = 40.0,
         center: bool = False,
     ):
@@ -680,7 +751,6 @@ class InterfaceGenerator:
         self.length_tol = length_tol
         self.max_area = max_area
         self.interfacial_distance = interfacial_distance
-        self.sub_strain_frac = sub_strain_frac
         self.vacuum = vacuum
         self.match_list = self._generate_interface_props()
 

@@ -719,15 +719,15 @@ class InterfaceGenerator:
         >>> from OgreInterface.generate import SurfaceGenerator, InterfaceGenerator
         >>> subs = SurfaceGenerator.from_file(filename="POSCAR_sub", miller_index=[1,1,1], layers=5)
         >>> films = SurfaceGenerator.from_file(filename="POSCAR_film", miller_index=[1,1,1], layers=5)
-        >>> interface_generator = InterfaceGenerator(substrate=subs.slabs[0], film=films.slabs[0], area_tol=0.01, angle_tol=0.01, length_tol=0.01, max_area=500)
+        >>> interface_generator = InterfaceGenerator(substrate=subs.slabs[0], film=films.slabs[0])
         >>> interfaces = interface_generator.generate_interfaces() # List of OgreInterface Interface objects
 
     Args:
         substrate: Surface class of the substrate material
         film: Surface class of the film materials
-        area_tol: Tolarance of the area mismatch (eq. 2.1 in Zur and McGill)
-        angle_tol: Tolarence of the angle mismatch between the film and substrate lattice vectors
-        length_tol: Tolarence of the length mismatch between the film and substrate lattice vectors
+        max_area_mismatch: Tolarance of the area mismatch (eq. 2.1 in Zur and McGill)
+        max_angle_strain: Tolarence of the angle mismatch between the film and substrate lattice vectors
+        max_linear_strain: Tolarence of the length mismatch between the film and substrate lattice vectors
         max_area: Maximum area of the interface unit cell cross section
         interfacial_distance: Distance between the top atom in the substrate to the bottom atom of the film
             If None, the interfacial distance will be predicted based on the average distance of the interlayer
@@ -738,9 +738,9 @@ class InterfaceGenerator:
     Attributes:
         substrate (Surface): Surface class of the substrate material
         film (Surface): Surface class of the film materials
-        area_tol (float): Tolarance of the area mismatch (eq. 2.1 in Zur and McGill)
-        angle_tol (float): Tolarence of the angle mismatch between the film and substrate lattice vectors
-        length_tol (float): Tolarence of the length mismatch between the film and substrate lattice vectors
+        max_area_mismatch (float): Tolarance of the area mismatch (eq. 2.1 in Zur and McGill)
+        max_angle_strain (float): Tolarence of the angle mismatch between the film and substrate lattice vectors
+        max_linear_strain (float): Tolarence of the length mismatch between the film and substrate lattice vectors
         max_area (float): Maximum area of the interface unit cell cross section
         interfacial_distance (Union[float, None]): Distance between the top atom in the substrate to the bottom atom of the film
             If None, the interfacial distance will be predicted based on the average distance of the interlayer
@@ -754,9 +754,9 @@ class InterfaceGenerator:
         self,
         substrate: Surface,
         film: Surface,
-        area_tol: float = 0.01,
-        angle_tol: float = 0.01,
-        length_tol: float = 0.01,
+        max_area_mismatch: float = 0.01,
+        max_angle_strain: float = 0.01,
+        max_linear_strain: float = 0.01,
         max_area: float = 500.0,
         interfacial_distance: Union[float, None] = 2.0,
         vacuum: float = 40.0,
@@ -777,9 +777,9 @@ class InterfaceGenerator:
             )
 
         self.center = center
-        self.area_tol = area_tol
-        self.angle_tol = angle_tol
-        self.length_tol = length_tol
+        self.max_area_mismatch = max_area_mismatch
+        self.max_angle_strain = max_angle_strain
+        self.max_linear_strain = max_linear_strain
         self.max_area = max_area
         self.interfacial_distance = interfacial_distance
         self.vacuum = vacuum
@@ -792,9 +792,9 @@ class InterfaceGenerator:
             film_basis=self.film.uvw_basis,
             substrate_basis=self.substrate.uvw_basis,
             max_area=self.max_area,
-            max_linear_strain=self.length_tol,
-            max_angle_strain=self.angle_tol,
-            max_area_mismatch=self.area_tol,
+            max_linear_strain=self.max_linear_strain,
+            max_angle_strain=self.max_angle_strain,
+            max_area_mismatch=self.max_area_mismatch,
         )
         match_list = zm.run(return_all=True)
 

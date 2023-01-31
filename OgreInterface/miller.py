@@ -21,8 +21,40 @@ from typing import Union
 
 
 class MillerSearch(object):
+    """Class to perform a miller index scan to find all domain matched interfaces of various surfaces.
 
-    """Docstring for MillerSearch."""
+    Examples:
+        >>> from OgreInterface.miller import MillerSearch
+        >>> ms = MillerSearch(substrate="POSCAR_sub", film="POSCAR_film", max_substrate_index=1, max_film_index=1)
+        >>> ms.run_scan()
+        >>> ms.plot_misfits(output="miller_scan.png")
+
+    Args:
+        substrate: Bulk structure of the substrate in either Pymatgen Structure, ASE Atoms, or a structure file such as a POSCAR or Cif
+        film: Bulk structure of the film in either Pymatgen Structure, ASE Atoms, or a structure file such as a POSCAR or Cif
+        max_substrate_index: Max miller index of the substrate surfaces
+        max_film_index: Max miller index of the film surfaces
+        max_area_mismatch: Area ratio mismatch tolerance for the InterfaceGenerator
+        max_angle_strain: Angle strain tolerance for the InterfaceGenerator
+        max_linear_strain: Lattice vectors length mismatch tolerance for the InterfaceGenerator
+        max_area: Maximum area of the matched supercells
+        convert_to_conventional: Determines if the input structure is converted to it's conventional standard structure according to
+            the Pymatgen SpacegroupAnalyzer.
+
+    Attributes:
+        substrate (Structure): Pymatgen Structure of the substrate
+        film (Structure): Pymatgen Structure of the film
+        max_substrate_index (int): Max miller index of the substrate surfaces
+        max_film_index (int): Max miller index of the film surfaces
+        max_area_mismatch (float): Area ratio mismatch tolerance for the InterfaceGenerator
+        max_angle_strain (float): Angle strain tolerance for the InterfaceGenerator
+        max_linear_strain (float): Lattice vectors length mismatch tolerance for the InterfaceGenerator
+        max_area (float): Maximum area of the matched supercells
+        convert_to_conventional (bool): Determines if the input structure is converted to it's conventional standard structure according to
+            the Pymatgen SpacegroupAnalyzer.
+        substrate_inds (list): List of unique substrate surface miller indices
+        film_inds (list): List of unique film surface miller indices
+    """
 
     def __init__(
         self,
@@ -30,9 +62,9 @@ class MillerSearch(object):
         film: Union[Structure, Atoms, str],
         max_substrate_index: int = 1,
         max_film_index: int = 1,
-        area_tol: float = 0.01,
-        angle_tol: float = 0.01,
-        length_tol: float = 0.01,
+        max_area_mismatch: float = 0.01,
+        max_angle_strain: float = 0.01,
+        max_linear_strain: float = 0.01,
         max_area: float = 500.0,
         convert_to_conventional: bool = True,
     ) -> None:
@@ -49,9 +81,9 @@ class MillerSearch(object):
 
         self.max_film_index = max_film_index
         self.max_substrate_index = max_substrate_index
-        self.area_tol = area_tol
-        self.angle_tol = angle_tol
-        self.length_tol = length_tol
+        self.max_area_mismatch = max_area_mismatch
+        self.max_angle_strain = max_angle_strain
+        self.max_linear_strain = max_linear_strain
         self.max_area = max_area
         self.substrate_inds = self._get_unique_miller_indices(
             self.substrate, self.max_substrate_index
@@ -59,9 +91,8 @@ class MillerSearch(object):
         self.film_inds = self._get_unique_miller_indices(
             self.film, self.max_film_index
         )
-        self.misfit_data = None
-        self.area_data = None
-        self.count_data = None
+        self._misfit_data = None
+        self._area_data = None
 
     def _get_bulk(self, atoms_or_struc):
         if type(atoms_or_struc) == Atoms:
@@ -247,7 +278,11 @@ class MillerSearch(object):
 
         return np.vstack(sorted_planes)
 
-    def run_scan(self):
+    def run_scan(self) -> None:
+        """
+        Run the miller index scan by looping through all combinations of unique surface miller indices
+        for the substrate and film.
+        """
         substrates = []
         films = []
 
@@ -288,7 +323,6 @@ class MillerSearch(object):
 
         misfits = np.ones((len(substrates), len(films))) * np.nan
         areas = np.ones((len(substrates), len(films))) * np.nan
-        counts = np.ones((len(substrates), len(films))) * np.nan
 
         for i, substrate in enumerate(substrates):
             for j, film in enumerate(films):
@@ -298,9 +332,9 @@ class MillerSearch(object):
                     film_basis=film[2],
                     substrate_basis=substrate[2],
                     max_area=self.max_area,
-                    max_linear_strain=self.length_tol,
-                    max_angle_strain=self.angle_tol,
-                    max_area_mismatch=self.area_tol,
+                    max_linear_strain=self.max_linear_strain,
+                    max_angle_strain=self.max_angle_strain,
+                    max_area_mismatch=self.max_area_mismatch,
                 )
                 matches = zm.run()
 
@@ -313,21 +347,37 @@ class MillerSearch(object):
 
         self.misfits = np.round(misfits.T, 8)
         self.areas = areas.T
-        self.counts = counts.T
 
     def plot_misfits(
         self,
-        cmap="rainbow",
-        dpi=400,
-        output="misfit_plot.png",
-        fontsize=12,
-        figure_scale=1,
-        # figsize=(5.5, 4),
-        labelrotation=20,
-        substrate_label=None,
-        film_label=None,
-        show_in_colab=False,
-    ):
+        cmap: str = "magma",
+        dpi: int = 400,
+        output: str = "misfit_plot.png",
+        fontsize: float = 12.0,
+        figure_scale: float = 1.0,
+        labelrotation: float = -20.0,
+        substrate_label: Union[str, None] = None,
+        film_label: Union[str, None] = None,
+        show_in_colab: bool = False,
+    ) -> None:
+        """
+        Plot the results of the miller index scan.
+
+        Args:
+            cmap: color map (matplotlib)
+            dpi: dpi (dots per inch) of the output image.
+                Setting dpi=100 gives reasonably sized images when viewed in colab notebook
+            output: File path for the output image
+            fontsize: fontsize for axis and tick labels
+            figure_scale: The figure size is automatically changed to fit the ratio of the substrate / film indices
+                but in some cases, especially with large amounts of unique surfaces the figure size needs to be increased.
+                This should usually stay at 1.0.
+            labelrotation: Determines how much the labels on the x-axis should be rotated. This is usefull to avoid overlapping labels
+            substrate_label: If none, this is automatically determined using the reduced formula of the bulk structure
+            film_label: If none, this is automatically determined using the reduced formula of the bulk structure
+            show_in_colab: Determines if the matplotlib figure is closed or not after the plot if made.
+                if show_in_colab=True the plot will show up after you run the cell in colab/jupyter notebook.
+        """
         ylabels = []
         for ylabel in self.film_inds:
             tmp_label = [
@@ -350,7 +400,10 @@ class MillerSearch(object):
         s = self.areas
         c = self.misfits * 100
 
-        figsize = (figure_scale * 5 * (M / N), figure_scale * 4)
+        if (M / N) < 1.0:
+            figsize = (figure_scale * 5, (N / M) * figure_scale * 4)
+        else:
+            figsize = (figure_scale * 5 * (M / N), figure_scale * 4)
 
         fig, ax = plt.subplots(figsize=figsize, dpi=dpi)
         ax_divider = make_axes_locatable(ax)
@@ -423,9 +476,9 @@ if __name__ == "__main__":
         film="./dd-poscars/POSCAR_Al_conv",
         max_film_index=2,
         max_substrate_index=2,
-        length_tol=0.01,
-        angle_tol=0.01,
-        area_tol=0.01,
+        max_linear_strain=0.01,
+        max_angle_strain=0.01,
+        max_area_mismatch=0.01,
         max_area=500,
     )
     ms.run_scan()

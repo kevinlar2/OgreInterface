@@ -9,11 +9,11 @@ ms = MillerSearch(
     film="./poscars/POSCAR_Al_conv",
     max_film_index=2,
     max_substrate_index=2,
-    length_tol=0.01,
-    angle_tol=0.01,
-    area_tol=0.01,
+    max_linear_strain=0.01,
+    max_angle_strain=0.01,
+    max_area_mismatch=0.01,
     max_area=200,
-    convert_to_conventional=False,
+    convert_to_conventional=True,
 )
 ms.run_scan()
 ms.plot_misfits(fontsize=14, labelrotation=-20, figure_scale=1)
@@ -46,9 +46,9 @@ film = films.slabs[0]
 interface_generator = InterfaceGenerator(
     substrate=sub,
     film=film,
-    length_tol=0.01,
-    angle_tol=0.01,
-    area_tol=0.01,
+    max_linear_strain=0.01,
+    max_angle_strain=0.01,
+    max_area_mismatch=0.01,
     max_area=200,
     interfacial_distance=2.0,
     vacuum=40,

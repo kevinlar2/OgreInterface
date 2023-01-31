@@ -529,6 +529,8 @@ class Surface:
 
 
 class Interface:
+    """Doc string for interface"""
+
     def __init__(
         self,
         substrate,

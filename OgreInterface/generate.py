@@ -47,6 +47,19 @@ class SurfaceGenerator:
     The SurfaceGenerator classes generates surfaces with all possible terminations and contains
     information pertinent to generating interfaces with the InterfaceGenerator.
 
+    Examples:
+        Creating a SurfaceGenerator object using PyMatGen to load the structure:
+        >>> from OgreInterface.generate import SurfaceGenerator
+        >>> from pymatgen.core.structure import Structure
+        >>> bulk = Structure.from_file("POSCAR_bulk")
+        >>> surfaces = SurfaceGenerator(bulk=bulk, miller_index=[1, 1, 1], layers=5, vacuum=60)
+        >>> surface = surfaces.slabs[0] # OgreInterface.Surface object
+
+        Creating a SurfaceGenerator object using the build in from_file() method:
+        >>> from OgreInterface.generate import SurfaceGenerator
+        >>> surfaces = SurfaceGenerator.from_file(filename="POSCAR_bulk", miller_index=[1, 1, 1], layers=5, vacuum=60)
+        >>> surface = surfaces.slabs[0] # OgreInterface.Surface object
+
     Args:
         bulk: Bulk crystal structure used to create the surface
         miller_index: Miller index of the surface

@@ -1,0 +1,3 @@
+## generate.py
+
+::: OgreInterface.generate

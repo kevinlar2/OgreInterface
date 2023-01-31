@@ -675,7 +675,7 @@ class SurfaceGenerator:
             surface = Surface(
                 orthogonal_slab=slab,
                 non_orthogonal_slab=non_orthogonal_slabs[i],
-                primitive_oriented_bulk=shifted_slab_bases[i],
+                oriented_bulk=shifted_slab_bases[i],
                 bulk=base_structure,
                 transformation_matrix=self.transformation_matrix,
                 miller_index=self.miller_index,

@@ -13,7 +13,7 @@ from pymatgen.symmetry.analyzer import SymmOp
 from pymatgen.analysis.molecule_structure_comparator import CovalentRadius
 from pymatgen.analysis.local_env import CrystalNN
 
-from typing import Dict, Union, Iterable
+from typing import Dict, Union, Iterable, List
 import matplotlib.pyplot as plt
 from matplotlib.patches import Polygon
 from itertools import combinations, groupby
@@ -268,9 +268,9 @@ class Surface:
 
         comment = "|".join(
             [
-                f"layer={self.layers}",
-                f"ind={self.termination_index}",
-                f"otho={orthogonal}",
+                f"L={self.layers}",
+                f"T={self.termination_index}",
+                f"O={orthogonal}",
             ]
         )
 
@@ -511,7 +511,7 @@ class Surface:
         position = struc[index].coords + bond
         position = struc[index].coords + bond
         props = {k: -1 for k in struc[index].properties}
-        props["hydrogen_str"] = f"{index}," + bond_str
+        # props["hydrogen_str"] = f"{index}," + bond_str
 
         struc.append(
             Species("H", oxidation_state=charge),
@@ -579,14 +579,36 @@ class Surface:
 
             new_bonds = {i: [] for i in surface_atom_info}
 
+            shifts = np.array(
+                [
+                    [0, 0, 0],
+                    [1, 0, 0],
+                    [0, 1, 0],
+                    [1, 1, 0],
+                    [-1, 1, 0],
+                    [1, -1, 0],
+                    [-1, -1, 0],
+                    [-1, 0, 0],
+                    [0, -1, 0],
+                ]
+            ).dot(structure.lattice.matrix)
+
+            all_surface_atom_coords = (
+                shifts[:, None] + surface_atom_coords[None, :]
+            )
+
             for hydrogen in hydrogen_coords:
-                dist = np.linalg.norm(hydrogen - surface_atom_coords, axis=1)
-                center_ind = np.argmin(dist)
-                bond = hydrogen - surface_atom_coords[center_ind]
-                new_bonds[surface_atom_info[center_ind]].append(bond)
+                all_dists = np.linalg.norm(
+                    hydrogen[None, None, :] - all_surface_atom_coords, axis=2
+                )
+                center_ind = np.where(np.isclose(all_dists, np.min(all_dists)))
+                center_atom_ind = center_ind[1][0]
+                bond = hydrogen - all_surface_atom_coords[center_ind]
+                new_bonds[surface_atom_info[center_atom_ind]].append(bond)
 
             for k, v in new_bonds.items():
-                bond_dict[k[1]][k[2]]["bonds"] = np.vstack(v)
+                if k[1] in bond_dict:
+                    bond_dict[k[1]][k[2]]["bonds"] = np.vstack(v)
 
             return bond_dict
         else:
@@ -638,10 +660,10 @@ class Surface:
         ortho_slab = self.orthogonal_slab_structure.copy()
         non_ortho_slab = self.non_orthogonal_slab_structure.copy()
 
-        ortho_slab.add_site_property("hydrogen_str", [""] * len(ortho_slab))
-        non_ortho_slab.add_site_property(
-            "hydrogen_str", [""] * len(non_ortho_slab)
-        )
+        # ortho_slab.add_site_property("hydrogen_str", [""] * len(ortho_slab))
+        # non_ortho_slab.add_site_property(
+        #     "hydrogen_str", [""] * len(non_ortho_slab)
+        # )
 
         if top:
             for bulk_equiv, bonds in bond_dict["top"].items():
@@ -935,9 +957,65 @@ class Interface:
 
         return return_str
 
-    def write_file(self, output: str = "POSCAR_interface"):
+    def write_file_old(self, output: str = "POSCAR_interface"):
         """Write the POSCAR of the interface"""
         Poscar(self.interface).write_file(output)
+
+    def write_file(self, output: str = "POSCAR_interface"):
+        """Write the POSCAR of the interface"""
+        slab = self.interface
+        comment = "|".join(
+            [
+                f"Lf={self.film.layers}",
+                f"Tf={self.film.termination_index}",
+                f"Ls={self.substrate.layers}",
+                f"Ts={self.substrate.termination_index}",
+            ]
+        )
+
+        if not self.substrate._passivated and not self.film._passivated:
+            poscar_str = Poscar(slab, comment=comment).get_string()
+        else:
+            syms = [site.specie.symbol for site in slab]
+
+            syms = []
+            for site in slab:
+                if site.specie.symbol == "H":
+                    if hasattr(site.specie, "oxi_state"):
+                        oxi = site.specie.oxi_state
+
+                        if oxi < 1.0:
+                            H_str = "H" + f"{oxi:.2f}"[1:]
+                        elif oxi > 1.0:
+                            H_str = "H" + f"{oxi:.2f}"
+                        else:
+                            H_str = "H"
+
+                        syms.append(H_str)
+                else:
+                    syms.append(site.specie.symbol)
+
+            comp_list = [(a[0], len(list(a[1]))) for a in groupby(syms)]
+            atom_types, n_atoms = zip(*comp_list)
+
+            new_atom_types = []
+            for atom in atom_types:
+                if "H" == atom[0] and atom not in ["Hf", "Hs", "Hg", "He"]:
+                    new_atom_types.append("H")
+                else:
+                    new_atom_types.append(atom)
+
+            comment += "|potcar=" + " ".join(atom_types)
+
+            poscar = Poscar(slab, comment=comment)
+
+            poscar_str = poscar.get_string().split("\n")
+            poscar_str[5] = " ".join(new_atom_types)
+            poscar_str[6] = " ".join(list(map(str, n_atoms)))
+            poscar_str = "\n".join(poscar_str)
+
+        with open(output, "w") as f:
+            f.write(poscar_str)
 
     def shift_film(
         self,

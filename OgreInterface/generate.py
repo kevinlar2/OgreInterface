@@ -3,7 +3,7 @@ This module will be used to construct the surfaces and interfaces used in this p
 """
 from OgreInterface.surfaces import Surface, Interface
 from OgreInterface import utils
-from OgreInterface.lattice_match import ZurMcGill
+from OgreInterface.lattice_match import ZurMcGill, OgreMatch
 
 from pymatgen.core.structure import Structure
 from pymatgen.analysis.structure_matcher import StructureMatcher
@@ -676,8 +676,7 @@ class SurfaceGenerator:
                 orthogonal_slab=slab,
                 non_orthogonal_slab=non_orthogonal_slabs[i],
                 primitive_oriented_bulk=shifted_slab_bases[i],
-                conventional_bulk=self.bulk_structure,
-                base_structure=base_structure,
+                bulk=base_structure,
                 transformation_matrix=self.transformation_matrix,
                 miller_index=self.miller_index,
                 layers=self.layers,
@@ -716,6 +715,13 @@ class InterfaceGenerator:
     This class will use the lattice matching algorithm from Zur and McGill to generate
     commensurate interface structures between two inorganic crystalline materials.
 
+    Examples:
+        >>> from OgreInterface.generate import SurfaceGenerator, InterfaceGenerator
+        >>> subs = SurfaceGenerator.from_file(filename="POSCAR_sub", miller_index=[1,1,1], layers=5)
+        >>> films = SurfaceGenerator.from_file(filename="POSCAR_film", miller_index=[1,1,1], layers=5)
+        >>> interface_generator = InterfaceGenerator(substrate=subs.slabs[0], film=films.slabs[0], area_tol=0.01, angle_tol=0.01, length_tol=0.01, max_area=500)
+        >>> interfaces = interface_generator.generate_interfaces() # List of OgreInterface Interface objects
+
     Args:
         substrate: Surface class of the substrate material
         film: Surface class of the film materials
@@ -727,9 +733,21 @@ class InterfaceGenerator:
             If None, the interfacial distance will be predicted based on the average distance of the interlayer
             spacing between the film and substrate materials.
         vacuum: Size of the vacuum in Angstroms
-        cener: Determines of the interface should be centered in the vacuum
+        center: Determines of the interface should be centered in the vacuum
 
     Attributes:
+        substrate (Surface): Surface class of the substrate material
+        film (Surface): Surface class of the film materials
+        area_tol (float): Tolarance of the area mismatch (eq. 2.1 in Zur and McGill)
+        angle_tol (float): Tolarence of the angle mismatch between the film and substrate lattice vectors
+        length_tol (float): Tolarence of the length mismatch between the film and substrate lattice vectors
+        max_area (float): Maximum area of the interface unit cell cross section
+        interfacial_distance (Union[float, None]): Distance between the top atom in the substrate to the bottom atom of the film
+            If None, the interfacial distance will be predicted based on the average distance of the interlayer
+            spacing between the film and substrate materials.
+        vacuum (float): Size of the vacuum in Angstroms
+        center: Determines of the interface should be centered in the vacuum
+        match_list (List[OgreMatch]): List of OgreMatch objects for each interface generated
     """
 
     def __init__(
@@ -927,6 +945,7 @@ class InterfaceGenerator:
         return interface
 
     def generate_interfaces(self):
+        """Generates a list of Interface objects from that matches found using the Zur and McGill lattice matching algorithm"""
         if self.interfacial_distance is None:
             i_dist = (
                 self.substrate.top_layer_dist + self.film.bottom_layer_dist

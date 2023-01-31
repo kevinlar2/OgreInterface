@@ -206,7 +206,7 @@ class IonicSurfaceMatcher:
         return interface_neighbor_dict
 
     def _get_ewald_parameters(self):
-        struc_vol = self.interface.structure_volume
+        struc_vol = self.interface._structure_volume
         # struc_vol = self._vol
         accf = np.sqrt(np.log(10**4))
         w = 1 / 2**0.5

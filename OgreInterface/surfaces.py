@@ -2,6 +2,7 @@
 This module will be used to construct the surfaces and interfaces used in this package.
 """
 from OgreInterface import utils
+from OgreInterface.lattice_match import OgreMatch
 
 from pymatgen.core.structure import Structure
 from pymatgen.core.lattice import Lattice
@@ -12,7 +13,7 @@ from pymatgen.symmetry.analyzer import SymmOp
 from pymatgen.analysis.molecule_structure_comparator import CovalentRadius
 from pymatgen.analysis.local_env import CrystalNN
 
-from typing import Dict, Union
+from typing import Dict, Union, Iterable
 import matplotlib.pyplot as plt
 from matplotlib.patches import Polygon
 from itertools import combinations, groupby
@@ -28,28 +29,95 @@ warnings.filterwarnings("ignore", module=r"pymatgen.analysis.local_env")
 
 
 class Surface:
-    """
-    The Surface class is a container for surfaces generated with the SurfaceGenerator
-    class and will be used as an input to the InterfaceGenerator class
+    """Container for surfaces generated with the SurfaceGenerator
+
+    The Surface class and will be used as an input to the InterfaceGenerator class,
+    and it should be create exclusively using the SurfaceGenerator.
+
+    Examples:
+        Generating a surface with pseudo-hydrogen passivation where the atomic positions of the hydrogens need to be relaxed using DFT.
+        >>> from OgreInterface.generate import SurfaceGenerator
+        >>> surfaces = SurfaceGenerator.from_file(filename="POSCAR_bulk", miller_index=[1, 1, 1], layers=5, vacuum=60)
+        >>> surface = surfaces.slabs[0] # OgreInterface.Surface object
+        >>> surface.passivate(bot=True, top=True)
+        >>> surface.write_file(output="POSCAR_slab", orthogonal=True, relax=True) # relax=True will automatically set selective dynamics=True for all passivating hydrogens
+
+        Generating a surface with pseudo-hydrogen passivation that comes from a structure with pre-relaxed pseudo-hydrogens.
+        >>> from OgreInterface.generate import SurfaceGenerator
+        >>> surfaces = SurfaceGenerator.from_file(filename="POSCAR_bulk", miller_index=[1, 1, 1], layers=20, vacuum=60)
+        >>> surface = surfaces.slabs[0] # OgreInterface.Surface object
+        >>> surface.passivate(bot=True, top=True, passivated_struc="CONTCAR") # CONTCAR is the output of the structural relaxation
+        >>> surface.write_file(output="POSCAR_slab", orthogonal=True, relax=False)
+
+    Args:
+        orthogonal_slab: Slab structure that is forced to have an c lattice vector that is orthogonal
+            to the inplane lattice vectors
+        non_orthogonal_slab: Slab structure that is not gaurunteed to have an orthogonal c lattice vector,
+            and assumes the same basis as the primitive_oriented_bulk structure.
+        oriented_bulk: Structure of the smallest building block of the slab, which was used to
+            construct the non_orthogonal_slab supercell by creating a (1x1xN) supercell where N in the number
+            of layers.
+        bulk: Bulk structure that can be transformed into the slab basis using the transformation_matrix
+        transformation_matrix: 3x3 integer matrix that used to change from the bulk basis to the slab basis.
+        miller_index: Miller indices of the surface, with respect to the conventional bulk structure.
+        layers: Number of unit cell layers in the surface
+        vacuum: Size of the vacuum in Angstroms
+        uvw_basis: Miller indices corresponding to the lattice vector directions of the slab
+        point_group_operations: List of unique point group operations that will eventually be used to efficiently
+            filter out symmetrically equivalent interfaces found using the lattice matching algorithm.
+        bottom_layer_dist: z-distance of where the next atom should be if the slab structure were to continue downwards
+            (This is used to automatically approximate the interfacial distance in interfacial_distance is set to None in the InterfaceGenerator)
+        top_layer_dist: z-distance of where the next atom should be if the slab structure were to continue upwards
+            (This is used to automatically approximate the interfacial distance in interfacial_distance is set to None in the InterfaceGenerator)
+        termination_index: Index of the Surface in the list of Surfaces produced by the SurfaceGenerator
+
+    Attributes:
+        orthogonal_slab_structure (Structure): Pymatgen Structure that is forced to have an c lattice vector that is orthogonal
+            to the inplane lattice vectors
+        orthogonal_slab_atoms (Atoms): ASE Atoms that is forced to have an c lattice vector that is orthogonal
+            to the inplane lattice vectors
+        non_orthogonal_slab_structure (Structure): Pymatgen Structure that is not gaurunteed to have an orthogonal c lattice vector,
+            and assumes the same basis as the primitive_oriented_bulk structure.
+        non_orthogonal_slab_atoms (Atoms): ASE Atoms that is not gaurunteed to have an orthogonal c lattice vector,
+            and assumes the same basis as the primitive_oriented_bulk structure.
+        oriented_bulk_structure: Pymatgen Structure of the smallest building block of the slab, which was used to
+            construct the non_orthogonal_slab supercell by creating a (1x1xN) supercell where N in the number
+            of layers.
+        oriented_bulk_atoms (Atoms): ASE Atoms of the smallest building block of the slab, which was used to
+            construct the non_orthogonal_slab supercell by creating a (1x1xN) supercell where N in the number
+            of layers.
+        bulk_structure (Structure): Bulk Pymatgen Structure that can be transformed into the slab basis using the transformation_matrix
+        bulk_atoms (Atoms): Bulk ASE Atoms that can be transformed into the slab basis using the transformation_matrix
+        transformation_matrix (np.ndarray): 3x3 integer matrix that used to change from the bulk basis to the slab basis.
+        miller_index (list): Miller indices of the surface, with respect to the conventional bulk structure.
+        layers (int): Number of unit cell layers in the surface
+        vacuum (float): Size of the vacuum in Angstroms
+        uvw_basis (np.ndarray): Miller indices corresponding to the lattice vector directions of the slab
+        point_group_operations (np.ndarray): List of unique point group operations that will eventually be used to efficiently
+            filter out symmetrically equivalent interfaces found using the lattice matching algorithm.
+        bottom_layer_dist (float): z-distance of where the next atom should be if the slab structure were to continue downwards
+            (This is used to automatically approximate the interfacial distance in interfacial_distance is set to None in the InterfaceGenerator)
+        top_layer_dist (float): z-distance of where the next atom should be if the slab structure were to continue upwards
+            (This is used to automatically approximate the interfacial distance in interfacial_distance is set to None in the InterfaceGenerator)
+        termination_index (int): Index of the Surface in the list of Surfaces produced by the SurfaceGenerator
     """
 
     def __init__(
         self,
-        orthogonal_slab,
-        non_orthogonal_slab,
-        primitive_oriented_bulk,
-        conventional_bulk,
-        base_structure,
-        transformation_matrix,
-        miller_index,
-        layers,
-        vacuum,
-        uvw_basis,
-        point_group_operations,
-        bottom_layer_dist,
-        top_layer_dist,
-        termination_index,
-    ):
+        orthogonal_slab: Union[Structure, Atoms],
+        non_orthogonal_slab: Union[Structure, Atoms],
+        oriented_bulk: Union[Structure, Atoms],
+        bulk: Union[Structure, Atoms],
+        transformation_matrix: np.ndarray,
+        miller_index: list,
+        layers: int,
+        vacuum: float,
+        uvw_basis: np.ndarray,
+        point_group_operations: np.ndarray,
+        bottom_layer_dist: float,
+        top_layer_dist: float,
+        termination_index: int,
+    ) -> None:
         (
             self.orthogonal_slab_structure,
             self.orthogonal_slab_atoms,
@@ -59,15 +127,14 @@ class Surface:
             self.non_orthogonal_slab_atoms,
         ) = self._get_atoms_and_struc(non_orthogonal_slab)
         (
-            self.primitive_oriented_bulk_structure,
-            self.primitive_oriented_bulk_atoms,
-        ) = self._get_atoms_and_struc(primitive_oriented_bulk)
+            self.oriented_bulk_structure,
+            self.oriented_bulk_atoms,
+        ) = self._get_atoms_and_struc(oriented_bulk)
         (
-            self.conventional_bulk_structure,
-            self.conventional_bulk_atoms,
-        ) = self._get_atoms_and_struc(conventional_bulk)
+            self.bulk_structure,
+            self.bulk_atoms,
+        ) = self._get_atoms_and_struc(bulk)
 
-        self.base_structure = base_structure
         self.transformation_matrix = transformation_matrix
         self.miller_index = miller_index
         self.layers = layers
@@ -77,14 +144,34 @@ class Surface:
         self.bottom_layer_dist = bottom_layer_dist
         self.top_layer_dist = top_layer_dist
         self.termination_index = termination_index
-        self.passivated = False
+        self._passivated = False
 
     @property
-    def formula(self):
-        return self.conventional_bulk_structure.composition.reduced_formula
+    def formula(self) -> str:
+        """
+        Reduced formula of the surface
+
+        Examples:
+            >>> surface.formula
+            >>> "InAs"
+
+        Returns:
+            Reduced formula of the underlying bulk structure
+        """
+        return self.bulk_structure.composition.reduced_formula
 
     @property
-    def area(self):
+    def area(self) -> float:
+        """
+        Cross section area of the slab in Angstroms^2
+
+        Examples:
+            >>> surface.area
+            >>> 62.51234
+
+        Returns:
+            Cross-section area in Angstroms^2
+        """
         area = np.linalg.norm(
             np.cross(
                 self.orthogonal_slab_structure.lattice.matrix[0],
@@ -95,16 +182,47 @@ class Surface:
         return area
 
     @property
-    def inplane_vectors(self):
+    def inplane_vectors(self) -> np.ndarray:
+        """
+        In-plane cartesian vectors of the slab structure
+
+        Examples:
+            >>> surface.inplane_vectors
+            >>> [[4.0 0.0 0.0]
+            ...  [2.0 2.0 0.0]]
+
+        Returns:
+            (2, 3) numpy array containing the cartesian coordinates of the in-place lattice vectors
+        """
         matrix = deepcopy(self.orthogonal_slab_structure.lattice.matrix)
         return matrix[:2]
 
     @property
-    def miller_index_a(self):
+    def miller_index_a(self) -> np.ndarray:
+        """
+        Miller index of the a-lattice vector
+
+        Examples:
+            >>> surface.miller_index_a
+            >>> [-1 1 0]
+
+        Returns:
+            (3,) numpy array containing the miller indices
+        """
         return self.uvw_basis[0].astype(int)
 
     @property
-    def miller_index_b(self):
+    def miller_index_b(self) -> np.ndarray:
+        """
+        Miller index of the b-lattice vector
+
+        Examples:
+            >>> surface.miller_index_b
+            >>> [1 -1 0]
+
+        Returns:
+            (3,) numpy array containing the miller indices
+        """
         return self.uvw_basis[1].astype(int)
 
     def _get_atoms_and_struc(self, atoms_or_struc):
@@ -125,8 +243,24 @@ class Surface:
         self,
         orthogonal: bool = True,
         output: str = "POSCAR_slab",
-        relax: bool = True,
+        relax: bool = False,
     ) -> None:
+        """
+        Writes a POSCAR file of the surface with important information about the slab such as the number of layers, the termination index, and pseudo-hydrogen charges
+
+        Examples:
+            Writing a POSCAR file for a static DFT calculation:
+            >>> surface.write_file(orthogonal=True, output="POSCAR", relax=False)
+
+            Writing a passivated POSCAR file that needs to be relaxed using DFT:
+            >>> surface.write_file(orthogonal=True, output="POSCAR", relax=True)
+
+
+        Args:
+            orthogonal: Determines the the output slab is forced to have a c-vector that is orthogonal to the a and b lattice vectors
+            output: File path of the POSCAR
+            relax: Determines if selective dynamics should be set in the POSCAR
+        """
         if orthogonal:
             slab = self.orthogonal_slab_structure
         else:
@@ -140,7 +274,7 @@ class Surface:
             ]
         )
 
-        if not self.passivated:
+        if not self._passivated:
             poscar_str = Poscar(slab, comment=comment).get_string()
         else:
             if relax:
@@ -197,7 +331,26 @@ class Surface:
         with open(output, "w") as f:
             f.write(poscar_str)
 
-    def remove_layers(self, num_layers, top=False, atol=None):
+    def remove_layers(
+        self,
+        num_layers: int,
+        top: bool = False,
+        atol: Union[float, None] = None,
+    ) -> None:
+        """
+        Removes atomic layers from a specified side of the surface. Using this function will ruin the pseudo-hydrogen passivation
+        for the side that has layers removed, so it would be prefered to just select a different termination from the list of Surfaces
+        generated using the SurfaceGenerator instead of manually removing layers to get the termination you want.
+
+        Examples:
+            Removing 3 layers from the top of a surface:
+            >>> surface.remove_layers(num_layers=3, top=True)
+
+        Args:
+            num_layers: Number of atomic layers to remove
+            top: Determines of the layers are removed from the top of the slab or the bottom if False
+            atol: Tolarence for grouping the layers, if None, it is automatically determined and usually performs well
+        """
         group_inds_conv, _ = utils.group_layers(
             structure=self.orthogonal_slab_structure, atol=atol
         )
@@ -211,7 +364,7 @@ class Surface:
         self.orthogonal_slab_structure.remove_sites(to_delete_conv)
 
     def _get_surface_atoms(self):
-        obs = self.primitive_oriented_bulk_structure.copy()
+        obs = self.oriented_bulk_structure.copy()
         obs.add_oxidation_state_by_guess()
 
         layer_struc = utils.get_layer_supercelll(structure=obs, layers=3)
@@ -390,7 +543,7 @@ class Surface:
             structure = poscar.structure
             hydrogen_index = np.array(structure.atomic_numbers) == 1
 
-            obs = self.primitive_oriented_bulk_structure.copy()
+            obs = self.oriented_bulk_structure.copy()
             obs.add_oxidation_state_by_guess()
 
             is_negative = np.linalg.det(obs.lattice.matrix) < 0
@@ -442,8 +595,39 @@ class Surface:
             )
 
     def passivate(
-        self, bot=True, top=True, passivated_struc=None, inplace=True
-    ):
+        self,
+        bottom: bool = True,
+        top: bool = True,
+        passivated_struc: Union[str, None] = None,
+        inplace: bool = True,
+    ) -> Union[List[Structure], None]:
+        """
+        This function will apply pseudohydrogen passivation to all broken bonds on the surface and assign charges to the pseudo-hydrogens based
+        on the equations provided in https://doi.org/10.1103/PhysRevB.85.195328. The identification of the local coordination environments is
+        provided using CrystalNN in Pymatgen which is based on https://doi.org/10.1021/acs.inorgchem.0c02996.
+
+        Examples:
+            Initial passivation:
+            >>> surface.passivate(bottom=True, top=True, inplace=True)
+
+            Relaxed passivation from a CONTCAR file:
+            >>> surface.passivate(bottom=True, top=True, passivated_struc="CONTCAR", inplace=True)
+
+            Non-In-place passivation:
+            >>> orthogonal_pas_structure, non_orthogonal_pas_structure = surface.passivate(bottom=True, top=True, inplace=False)
+
+
+
+        Args:
+            bottom: Determines if the bottom of the structure should be passivated
+            top: Determines of the top of the structure should be passivated
+            passivated_struc: File path to the CONTCAR/POSCAR file that contains the relaxed atomic positions of the pseudo-hydrogens.
+                This structure must have the same miller index and termination index.
+            inplace: Determines if the pseudo-hydrogens should be added in-place to the structures or if new structures should be returned.
+
+        Returns:
+            If inplace = False, the passivated orthogonal and non_orthogonal structures are returned
+        """
         bond_dict = self._get_bond_dict()
 
         if passivated_struc is not None:
@@ -486,7 +670,7 @@ class Surface:
                         bonds["charge"],
                     )
 
-        if bot:
+        if bottom:
             for bulk_equiv, bonds in bond_dict["bottom"].items():
                 ortho_index = self._get_passivation_atom_index(
                     struc=ortho_slab, bulk_equivalent=bulk_equiv, top=False
@@ -516,7 +700,7 @@ class Surface:
         ortho_slab.sort()
         non_ortho_slab.sort()
 
-        self.passivated = True
+        self._passivated = True
 
         if inplace:
             self.orthogonal_slab_structure = ortho_slab
@@ -525,51 +709,91 @@ class Surface:
             return ortho_slab, non_ortho_slab
 
     def get_termination(self):
+        """
+        Returns the termination of the surface as a dictionary
+
+        Examples:
+            >>> surface.get_termination()
+            >>> {"bottom": "In", "top": "As"}
+        """
         raise NotImplementedError
 
 
 class Interface:
-    """Doc string for interface"""
+    """Container of Interfaces generated using the InterfaceGenerator
+
+    The Surface class and will be used as an input to the InterfaceGenerator class,
+    and it should be create exclusively using the SurfaceGenerator.
+
+    Args:
+        substrate: Surface class of the substrate material
+        film: Surface class of the film material
+        match: OgreMatch class of the matching interface
+        interfacial_distance: Distance between the top atom of the substrate and the bottom atom of the film
+        vacuum: Size of the vacuum in Angstroms
+        center: Determines if the interface is centered in the vacuum
+
+    Attributes:
+        substrate (Surface): Surface class of the substrate material
+        film (Surface): Surface class of the film material
+        match (OgreMatch): OgreMatch class of the matching interface
+        interfacial_distance (float): Distance between the top atom of the substrate and the bottom atom of the film
+        vacuum (float): Size of the vacuum in Angstroms
+        center (bool): Determines if the interface is centered in the vacuum
+        interface (Structure): Pymatgen structure of the interface
+        sub_part (Structure): Pymatgen structure of only the substrate half of the interface supercell
+        film_part (Structure): Pymatgen structure of only the film half of the interface supercell
+    """
 
     def __init__(
         self,
-        substrate,
-        film,
-        match,
-        interfacial_distance,
-        vacuum,
-        center=False,
-    ):
+        substrate: Surface,
+        film: Surface,
+        match: OgreMatch,
+        interfacial_distance: float,
+        vacuum: float,
+        center: bool = True,
+    ) -> None:
         self.center = center
         self.substrate = substrate
         self.film = film
         self.match = match
         self.vacuum = vacuum
         (
-            self.substrate_supercell,
-            self.substrate_supercell_uvw,
-            self.substrate_supercell_scale_factors,
+            self._substrate_supercell,
+            self._substrate_supercell_uvw,
+            self._substrate_supercell_scale_factors,
         ) = self._prepare_substrate()
         (
-            self.film_supercell,
-            self.film_supercell_uvw,
-            self.film_supercell_scale_factors,
+            self._film_supercell,
+            self._film_supercell_uvw,
+            self._film_supercell_scale_factors,
         ) = self._prepare_film()
         self.interfacial_distance = interfacial_distance
         self.interface_height = None
-        self.strained_sub = self.substrate_supercell
+        self._strained_sub = self._substrate_supercell
         (
-            self.strained_film,
-            self.stack_transformation,
+            self._strained_film,
+            self._stack_transformation,
         ) = self._strain_and_orient_film()
         self.interface, self.sub_part, self.film_part = self._stack_interface()
 
     @property
-    def area(self):
+    def area(self) -> float:
+        """
+        Cross section area of the interface in Angstroms^2
+
+        Examples:
+            >>> interface.area
+            >>> 205.123456
+
+        Returns:
+            Cross-section area in Angstroms^2
+        """
         return self.match.area
 
     @property
-    def structure_volume(self):
+    def _structure_volume(self):
         matrix = deepcopy(self.interface.lattice.matrix)
         vac_matrix = np.vstack(
             [
@@ -584,46 +808,102 @@ class Interface:
         return total_volume - vacuum_volume
 
     @property
-    def substrate_basis(self):
-        return self.substrate_supercell_uvw
+    def substrate_basis(self) -> np.ndarray:
+        """
+        Returns the miller indices of the basis vectors of the substrate supercell
+
+        Examples:
+            >>> interface.substrate_basis
+            >>> [[3 1 0]
+            ...  [-1 3 0]
+            ...  [0 0 1]]
+
+        Returns:
+            (3, 3) numpy array containing the miller indices of each lattice vector
+        """
+        return self._substrate_supercell_uvw
 
     @property
-    def substrate_a(self):
-        return self.substrate_supercell_uvw[0]
+    def substrate_a(self) -> np.ndarray:
+        """
+        Returns the miller indices of the a basis vector of the substrate supercell
+
+        Examples:
+            >>> interface.substrate_a
+            >>> [3 1 0]
+
+        Returns:
+            (3,) numpy array containing the miller indices of the a lattice vector
+        """
+        return self._substrate_supercell_uvw[0]
 
     @property
-    def substrate_b(self):
-        return self.substrate_supercell_uvw[1]
+    def substrate_b(self) -> np.ndarray:
+        """
+        Returns the miller indices of the b basis vector of the substrate supercell
+
+        Examples:
+            >>> interface.substrate_b
+            >>> [-1 3 0]
+
+        Returns:
+            (3,) numpy array containing the miller indices of the b lattice vector
+        """
+        return self._substrate_supercell_uvw[1]
 
     @property
-    def substrate_c(self):
-        return self.substrate_supercell_uvw[2]
+    def film_basis(self) -> np.ndarray:
+        """
+        Returns the miller indices of the basis vectors of the film supercell
+
+        Examples:
+            >>> interface.film_basis
+            >>> [[1 -1 0]
+            ...  [0 1 0]
+            ...  [0 0 1]]
+
+        Returns:
+            (3, 3) numpy array containing the miller indices of each lattice vector
+        """
+        return self._film_supercell_uvw
 
     @property
-    def film_basis(self):
-        return self.film_supercell_uvw
+    def film_a(self) -> np.ndarray:
+        """
+        Returns the miller indices of the a basis vector of the film supercell
+
+        Examples:
+            >>> interface.film_a
+            >>> [1 -1 0]
+
+        Returns:
+            (3,) numpy array containing the miller indices of the a lattice vector
+        """
+        return self._film_supercell_uvw[0]
 
     @property
-    def film_a(self):
-        return self.film_supercell_uvw[0]
+    def film_b(self) -> np.ndarray:
+        """
+        Returns the miller indices of the a basis vector of the film supercell
 
-    @property
-    def film_b(self):
-        return self.film_supercell_uvw[1]
+        Examples:
+            >>> interface.film_b
+            >>> [0 1 0]
 
-    @property
-    def film_c(self):
-        return self.film_supercell_uvw[2]
+        Returns:
+            (3,) numpy array containing the miller indices of the b lattice vector
+        """
+        return self._film_supercell_uvw[1]
 
     def __str__(self):
         fm = self.film.miller_index
         sm = self.substrate.miller_index
         film_str = f"{self.film.formula}({fm[0]} {fm[1]} {fm[2]})"
         sub_str = f"{self.substrate.formula}({sm[0]} {sm[1]} {sm[2]})"
-        s_uvw = self.substrate_supercell_uvw
-        s_sf = self.substrate_supercell_scale_factors
-        f_uvw = self.film_supercell_uvw
-        f_sf = self.film_supercell_scale_factors
+        s_uvw = self._substrate_supercell_uvw
+        s_sf = self._substrate_supercell_scale_factors
+        f_uvw = self._film_supercell_uvw
+        f_sf = self._film_supercell_scale_factors
         match_a_film = (
             f"{f_sf[0]}*[{f_uvw[0][0]:2d} {f_uvw[0][1]:2d} {f_uvw[0][2]:2d}]"
         )
@@ -655,12 +935,36 @@ class Interface:
 
         return return_str
 
-    def write_file(self, output="POSCAR_interface"):
+    def write_file(self, output: str = "POSCAR_interface"):
+        """Write the POSCAR of the interface"""
         Poscar(self.interface).write_file(output)
 
     def shift_film(
-        self, shift, fractional=False, inplace=False, return_atoms=False
-    ):
+        self,
+        shift: Iterable,
+        fractional: bool = False,
+        inplace: bool = False,
+        return_atoms: bool = False,
+    ) -> Union[Structure, None]:
+        """
+        Shifts the film over the substrate by a given shift vector.
+
+        Examples:
+            In-place shift using fractional coordinates:
+            >>> interface.shift_film(shift=[0.5, 0.25, 0.0], fractional=True, inplace=True)
+
+            Non in-place shift using cartesian coordinates:
+            >>> shifted_interface = interface.shift_film(shift=[4.5, 0.0, 0.5], fractional=False, inplace=False)
+
+        Args:
+            shift: 3-element vector defining the shift in the x (a), y (b), and z (c) directions
+            fractional: Determines if the shift is defined in fractional coordinates
+            inplace: Determines of the shift happens inplace or if a new structure is returned
+            return_atoms: Determine if the returned structure is an ASE Atoms object instead of a Structure object
+
+        Returns:
+            Shifted interface Structure if inplace=False or Shifted interface Atoms if inplace=False and return_atoms=True
+        """
         if fractional:
             frac_shift = np.array(shift)
         else:
@@ -728,23 +1032,23 @@ class Interface:
         return supercell_slab, uvw_supercell, scale_factors
 
     def _strain_and_orient_film(self):
-        sub_in_plane_vecs = self.substrate_supercell.lattice.matrix[:2]
-        film_out_of_plane = self.film_supercell.lattice.matrix[-1]
-        film_inv_matrix = self.film_supercell.lattice.inv_matrix
+        sub_in_plane_vecs = self._substrate_supercell.lattice.matrix[:2]
+        film_out_of_plane = self._film_supercell.lattice.matrix[-1]
+        film_inv_matrix = self._film_supercell.lattice.inv_matrix
         new_matrix = np.vstack([sub_in_plane_vecs, film_out_of_plane])
         transform = (film_inv_matrix @ new_matrix).T
         op = SymmOp.from_rotation_and_translation(
             transform, translation_vec=np.zeros(3)
         )
 
-        strained_film = deepcopy(self.film_supercell)
+        strained_film = deepcopy(self._film_supercell)
         strained_film.apply_operation(op)
 
         return strained_film, transform
 
     def _stack_interface(self):
-        strained_sub = self.strained_sub
-        strained_film = self.strained_film
+        strained_sub = self._strained_sub
+        strained_film = self._strained_film
 
         sub_matrix = strained_sub.lattice.matrix
         sub_c = deepcopy(sub_matrix[-1])
@@ -1012,7 +1316,7 @@ class Interface:
         )
         fc = np.round(cart_coords.dot(sc_inv_matrix), 3)
         if is_film:
-            plot_coords = cart_coords.dot(self.stack_transformation.T)
+            plot_coords = cart_coords.dot(self._stack_transformation.T)
             linewidth = 1.0
         else:
             plot_coords = cart_coords
@@ -1040,14 +1344,24 @@ class Interface:
 
     def plot_interface(
         self,
-        output="interface_view.png",
-        dpi=400,
-        show_in_colab=False,
+        output: str = "interface_view.png",
+        dpi: int = 400,
+        show_in_colab: bool = False,
     ):
+        """
+        This function will show the relative alignment of the film and substrate supercells by plotting the in-plane unit cells on top of each other
+
+        Args:
+            output: File path for the output image
+            dpi: dpi (dots per inch) of the output image.
+                Setting dpi=100 gives reasonably sized images when viewed in colab notebook
+            show_in_colab: Determines if the matplotlib figure is closed or not after the plot if made.
+                if show_in_colab=True the plot will show up after you run the cell in colab/jupyter notebook.
+        """
         sub_matrix = self.substrate.orthogonal_slab_structure.lattice.matrix
         film_matrix = self.film.orthogonal_slab_structure.lattice.matrix
-        sub_sc_matrix = deepcopy(self.substrate_supercell.lattice.matrix)
-        film_sc_matrix = deepcopy(self.film_supercell.lattice.matrix)
+        sub_sc_matrix = deepcopy(self._substrate_supercell.lattice.matrix)
+        film_sc_matrix = deepcopy(self._film_supercell.lattice.matrix)
 
         coords = np.array(
             [

@@ -35,8 +35,8 @@ class IonicSurfaceMatcher:
         self.k_max = 10
         self.charge_dict = self._get_charges()
         self.r0_dict = self._get_r0s(
-            sub=self.interface.substrate.conventional_bulk_structure,
-            film=self.interface.film.conventional_bulk_structure,
+            sub=self.interface.substrate.bulk_structure,
+            film=self.interface.film.bulk_structure,
             charge_dict=self.charge_dict,
         )
         self.ns_dict = {element: 6.0 for element in self.charge_dict}
@@ -73,8 +73,8 @@ class IonicSurfaceMatcher:
     #     return sub_oxidation_state, radii
 
     def _get_charges(self):
-        sub = self.interface.substrate.conventional_bulk_structure
-        film = self.interface.film.conventional_bulk_structure
+        sub = self.interface.substrate.bulk_structure
+        film = self.interface.film.bulk_structure
         sub_oxidation_state = sub.composition.oxi_state_guesses()[0]
         film_oxidation_state = film.composition.oxi_state_guesses()[0]
 

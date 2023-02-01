@@ -67,4 +67,5 @@ for i, interface in enumerate(interfaces):
     interface.plot_interface(output=f"interface_view_{i:02d}.png")
 
     # Write the interface structure
-    Poscar(interface.interface).write_file(f"POSCAR_{i:02d}")
+    interface.write_file(output=f"POSCAR_{i:02d}", orthogonal=True)
+    # Poscar(interface.interface).write_file(f"POSCAR_{i:02d}")

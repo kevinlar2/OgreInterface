@@ -28,7 +28,7 @@ class SphereSurfaceMatcher:
         self.xlim = xlim
         self.ylim = ylim
         self.interface = interface
-        self.matrix = deepcopy(interface.interface.lattice.matrix)
+        self.matrix = deepcopy(interface.orthogonal_structure.lattice.matrix)
         self._vol = np.linalg.det(self.matrix)
 
         if self._vol < 0:
@@ -39,8 +39,8 @@ class SphereSurfaceMatcher:
         self.cutoff = self._get_cutoff()
         print(self.cutoff)
         self.d_interface = self.interface.interfacial_distance
-        self.film_part = self.interface.film_part
-        self.sub_part = self.interface.sub_part
+        self.film_part = self.interface.orthogonal_film_structure
+        self.sub_part = self.interface.orthogonal_substrate_structure
         self.grid_density_x = grid_density_x
         self.grid_density_y = grid_density_y
         self.opt_xy_shift = np.zeros(3)
@@ -96,7 +96,8 @@ class SphereSurfaceMatcher:
                 return_atoms=True,
             )
             shifted_atoms.set_array(
-                "is_film", self.interface.interface.site_properties["is_film"]
+                "is_film",
+                self.interface.orthogonal_structure.site_properties["is_film"],
             )
             atoms.append(shifted_atoms)
 

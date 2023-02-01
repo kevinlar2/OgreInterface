@@ -24,7 +24,7 @@ class IonicSurfaceMatcher:
         grid_density_y: int = 15,
     ):
         self.interface = interface
-        self.matrix = deepcopy(interface.interface.lattice.matrix)
+        self.matrix = deepcopy(interface.orthogonal_structure.lattice.matrix)
         self._vol = np.linalg.det(self.matrix)
 
         if self._vol < 0:
@@ -41,8 +41,8 @@ class IonicSurfaceMatcher:
         )
         self.ns_dict = {element: 6.0 for element in self.charge_dict}
         self.d_interface = self.interface.interfacial_distance
-        self.film_part = self.interface.film_part
-        self.sub_part = self.interface.sub_part
+        self.film_part = self.interface.orthogonal_film_structure
+        self.sub_part = self.interface.orthogonal_film_structure
         self.grid_density_x = grid_density_x
         self.grid_density_y = grid_density_y
         self.opt_xy_shift = np.zeros(3)
@@ -211,7 +211,7 @@ class IonicSurfaceMatcher:
         accf = np.sqrt(np.log(10**4))
         w = 1 / 2**0.5
         alpha = np.pi * (
-            len(self.interface.interface) * w / (struc_vol**2)
+            len(self.interface.orthogonal_structure) * w / (struc_vol**2)
         ) ** (1 / 3)
         cutoff = accf / np.sqrt(alpha)
         k_max = 2 * np.sqrt(alpha) * accf
@@ -256,7 +256,8 @@ class IonicSurfaceMatcher:
                 return_atoms=True,
             )
             shifted_atoms.set_array(
-                "is_film", self.interface.interface.site_properties["is_film"]
+                "is_film",
+                self.interface.orthogonal_structure.site_properties["is_film"],
             )
             z_shifted_atoms = self.interface.shift_film(
                 shift + z_shift,
@@ -265,7 +266,8 @@ class IonicSurfaceMatcher:
                 return_atoms=True,
             )
             z_shifted_atoms.set_array(
-                "is_film", self.interface.interface.site_properties["is_film"]
+                "is_film",
+                self.interface.orthogonal_structure.site_properties["is_film"],
             )
             atoms.append(shifted_atoms)
             z_atoms.append(z_shifted_atoms)
@@ -283,7 +285,8 @@ class IonicSurfaceMatcher:
             )
         ]
         atoms[0].set_array(
-            "is_film", self.interface.interface.site_properties["is_film"]
+            "is_film",
+            self.interface.orthogonal_structure.site_properties["is_film"],
         )
 
         for shift in shifts:
@@ -294,7 +297,8 @@ class IonicSurfaceMatcher:
                 return_atoms=True,
             )
             shifted_atoms.set_array(
-                "is_film", self.interface.interface.site_properties["is_film"]
+                "is_film",
+                self.interface.orthogonal_structure.site_properties["is_film"],
             )
             atoms.append(shifted_atoms)
 

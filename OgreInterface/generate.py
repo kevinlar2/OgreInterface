@@ -94,7 +94,7 @@ class SurfaceGenerator:
             (usefull for band unfolding calculations)
         inplane_vectors (list): The cartesian vectors of the in-plane lattice vectors.
         surface_normal (list): The normal vector of the surface
-        surface_normal_projection (float): The projections of the c-lattice vector onto the surface normal
+        c_projection (float): The projections of the c-lattice vector onto the surface normal
     """
 
     def __init__(
@@ -136,7 +136,7 @@ class SurfaceGenerator:
             self.transformation_matrix,
             self.inplane_vectors,
             self.surface_normal,
-            self.surface_normal_projection,
+            self.c_projection,
         ) = self._get_oriented_bulk_structure()
 
         if not self.lazy:
@@ -478,7 +478,7 @@ class SurfaceGenerator:
         # distance matrix that accounts for PBC.
         dist_matrix = np.zeros((n, n))
         # h = self.oriented_bulk_structure.lattice.matrix[-1, -1]
-        h = self.surface_normal_projection
+        h = self.c_projection
         # Projection of c lattice vector in
         # direction of surface normal.
         for i, j in combinations(list(range(n)), 2):
@@ -547,7 +547,7 @@ class SurfaceGenerator:
         bottom_layer_dist = np.abs(bot_z - (top_z - 1)) * init_matrix[-1, -1]
         top_layer_dist = np.abs((bot_z + 1) - top_z) * init_matrix[-1, -1]
 
-        vacuum_scale = self.vacuum // self.surface_normal_projection
+        vacuum_scale = self.vacuum // self.c_projection
 
         if vacuum_scale % 2:
             vacuum_scale += 1
@@ -686,6 +686,8 @@ class SurfaceGenerator:
                 bottom_layer_dist=bottom_layer_dists[i],
                 top_layer_dist=top_layer_dists[i],
                 termination_index=i,
+                surface_normal=self.surface_normal,
+                c_projection=self.c_projection,
             )
             surfaces.append(surface)
 

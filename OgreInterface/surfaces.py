@@ -74,14 +74,6 @@ class Surface:
         c_projection (float): The projections of the c-lattice vector onto the surface normal
 
     Attributes:
-        orthogonal_slab_structure (Structure): Pymatgen Structure that is forced to have an c lattice vector that is orthogonal
-            to the inplane lattice vectors
-        orthogonal_slab_atoms (Atoms): ASE Atoms that is forced to have an c lattice vector that is orthogonal
-            to the inplane lattice vectors
-        non_orthogonal_slab_structure (Structure): Pymatgen Structure that is not gaurunteed to have an orthogonal c lattice vector,
-            and assumes the same basis as the primitive_oriented_bulk structure.
-        non_orthogonal_slab_atoms (Atoms): ASE Atoms that is not gaurunteed to have an orthogonal c lattice vector,
-            and assumes the same basis as the primitive_oriented_bulk structure.
         oriented_bulk_structure: Pymatgen Structure of the smallest building block of the slab, which was used to
             construct the non_orthogonal_slab supercell by creating a (1x1xN) supercell where N in the number
             of layers.
@@ -806,18 +798,6 @@ class Interface:
         interfacial_distance (float): Distance between the top atom of the substrate and the bottom atom of the film
         vacuum (float): Size of the vacuum in Angstroms
         center (bool): Determines if the interface is centered in the vacuum
-        orthogonal_structure (Structure): Pymatgen structure of the orthogonalized interface
-        orthogonal_substrate_structure (Structure): Pymatgen structure of only the substrate half of the orthogonalized interface supercell
-        orthogonal_film_structure (Structure): Pymatgen structure of only the film half of the orthogonalized interface supercell
-        orthogonal_atoms (Atoms): ASE Atoms of the orthogonalized interface
-        orthogonal_substrate_atoms (Atoms): ASE Atoms of only the substrate half of the orthogonalized interface supercell
-        orthogonal_film_atoms (Atoms): ASE Atoms of only the film half of the orthogonalized interface supercell
-        non_orthogonal_structure (Structure): Pymatgen structure of the interface structure that assumes the substrate basis
-        non_orthogonal_substrate_structure (Structure): Pymatgen structure of only the substrate half of the non-orthogonalized interface supercell
-        non_orthogonal_film_structure (Structure): Pymatgen structure of only the film half of the non-orthogonalized interface supercell
-        non_orthogonal_atoms (Atoms): ASE Atoms of the interface structure that assumes the substrate basis
-        non_orthogonal_substrate_atoms (Atoms): ASE Atoms of only the substrate half of the non-orthogonalized interface supercell
-        non_orthogonal_film_atoms (Atoms): ASE Atoms of only the film half of the non-orthogonalized interface supercell
     """
 
     def __init__(

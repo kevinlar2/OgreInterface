@@ -1116,6 +1116,162 @@ class Interface:
 
         return return_str
 
+    def _load_relaxed_structure(self, relaxed_structure_file: str):
+
+        with open(relaxed_structure_file, "r") as f:
+            poscar_str = f.read().split("\n")
+
+        desc_str = poscar_str[0].split("|")
+
+        layers = desc_str[0].split("=")[1].split(",")
+        termination_index = desc_str[1].split("=")[1].split(",")
+        d_int = desc_str[2].split("=")[1]
+        ortho = bool(int(desc_str[3].split("=")[1]))
+        layers_to_relax = desc_str[4].split("=")[1].split(",")
+
+        film_layers = int(layers[0])
+        sub_layers = int(layers[1])
+
+        film_termination_index = int(termination_index[0])
+        sub_termination_index = int(termination_index[1])
+
+        N_film_layers_to_relax = int(layers_to_relax[0])
+        N_sub_layers_to_relax = int(layers_to_relax[1])
+
+        if (
+            d_int == f"{self.interfacial_distance:.2f}"
+            and film_termination_index == self.film.termination_index
+            and sub_termination_index == self.substrate.termination_index
+        ):
+            poscar = Poscar.from_string(
+                "\n".join(poscar_str), read_velocities=False
+            )
+            relaxed_structure = poscar.structure
+
+            if ortho:
+                unrelaxed_structure = self._orthogonal_structure.copy()
+            else:
+                unrelaxed_structure = self._non_orthogonal_structure.copy()
+
+            unrelaxed_structure.add_site_property(
+                "orig_ind", list(range(len(unrelaxed_structure)))
+            )
+
+            relaxation_shifts = np.zeros((len(unrelaxed_structure), 3))
+
+            is_negative = np.linalg.det(unrelaxed_structure.lattice.matrix) < 0
+
+            if is_negative:
+                relaxed_structure = Structure(
+                    lattice=Lattice(relaxed_structure.lattice.matrix * -1),
+                    species=relaxed_structure.species,
+                    coords=relaxed_structure.frac_coords,
+                )
+
+            is_film_full = np.array(
+                unrelaxed_structure.site_properties["is_film"]
+            )
+            is_sub_full = np.array(
+                unrelaxed_structure.site_properties["is_sub"]
+            )
+            layer_index_full = np.array(
+                unrelaxed_structure.site_properties["layer_index"]
+            )
+            sub_to_delete = np.logical_and(
+                is_sub_full,
+                layer_index_full < self.substrate.layers - sub_layers,
+            )
+
+            film_to_delete = np.logical_and(
+                is_film_full, layer_index_full >= film_layers
+            )
+
+            to_delete = np.where(np.logical_or(sub_to_delete, film_to_delete))[
+                0
+            ]
+
+            unrelaxed_structure.remove_sites(to_delete)
+
+            is_film_small = np.array(
+                unrelaxed_structure.site_properties["is_film"]
+            )
+            is_sub_small = np.array(
+                unrelaxed_structure.site_properties["is_sub"]
+            )
+            layer_index_small = np.array(
+                unrelaxed_structure.site_properties["layer_index"]
+            )
+
+            film_layers_to_relax = np.arange(N_film_layers_to_relax)
+
+            sub_layers_to_relax = np.arange(
+                self.substrate.layers - N_sub_layers_to_relax,
+                self.substrate.layers,
+            )
+
+            film_to_relax = np.logical_and(
+                is_film_small, np.isin(layer_index_small, film_layers_to_relax)
+            )
+            sub_to_relax = np.logical_and(
+                is_sub_small, np.isin(layer_index_small, sub_layers_to_relax)
+            )
+
+            relaxed_inds = np.where(
+                np.logical_or(film_to_relax, sub_to_relax)
+            )[0]
+
+            periodic_shifts = np.array(
+                [
+                    [0, 0, 0],
+                    [1, 0, 0],
+                    [0, 1, 0],
+                    [1, 1, 0],
+                    [-1, 1, 0],
+                    [1, -1, 0],
+                    [-1, -1, 0],
+                    [-1, 0, 0],
+                    [0, -1, 0],
+                ]
+            ).dot(unrelaxed_structure.lattice.matrix)
+
+            ref_ind = np.min(np.where(is_sub_small)[0])
+            unrelaxed_ref = unrelaxed_structure[ref_ind].coords
+            relaxed_ref = relaxed_structure[ref_ind].coords
+
+            for i in relaxed_inds:
+                init_ind = unrelaxed_structure[i].properties["orig_ind"]
+                relaxed_coords = relaxed_structure[i].coords
+                relaxed_coords[-1] -= relaxed_ref[-1]
+                unrelaxed_coords = unrelaxed_structure[i].coords
+                unrelaxed_coords[-1] -= unrelaxed_ref[-1]
+
+                all_relaxed_coords = periodic_shifts + relaxed_coords
+                dists = np.linalg.norm(
+                    all_relaxed_coords - unrelaxed_coords, axis=1
+                )
+                center_ind = np.argmin(dists)
+                bond = all_relaxed_coords[center_ind] - unrelaxed_coords
+                relaxation_shifts[init_ind] = bond
+
+            return relaxation_shifts
+
+    def relax_interface(self, relaxed_structure_file: str):
+        relaxation_shifts = self._load_relaxed_structure(
+            relaxed_structure_file
+        )
+        init_ortho_structure = self._orthogonal_structure
+
+        relaxed_ortho_structure = Structure(
+            lattice=init_ortho_structure.lattice,
+            species=init_ortho_structure.species,
+            coords=init_ortho_structure.cart_coords + relaxation_shifts,
+            to_unit_cell=True,
+            coords_are_cartesian=True,
+            site_properties=init_ortho_structure.site_properties,
+        )
+
+        Poscar(relaxed_ortho_structure).write_file("POSCAR_test_relax")
+
     def write_file(
         self,
         output: str = "POSCAR_interface",

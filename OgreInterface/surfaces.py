@@ -125,12 +125,12 @@ class Surface:
         c_projection: int,
     ) -> None:
         (
-            self.orthogonal_slab_structure,
-            self.orthogonal_slab_atoms,
+            self._orthogonal_slab_structure,
+            self._orthogonal_slab_atoms,
         ) = self._get_atoms_and_struc(orthogonal_slab)
         (
-            self.non_orthogonal_slab_structure,
-            self.non_orthogonal_slab_atoms,
+            self._non_orthogonal_slab_structure,
+            self._non_orthogonal_slab_atoms,
         ) = self._get_atoms_and_struc(non_orthogonal_slab)
         (
             self.oriented_bulk_structure,
@@ -153,6 +153,42 @@ class Surface:
         self.top_layer_dist = top_layer_dist
         self.termination_index = termination_index
         self._passivated = False
+
+    def get_surface(
+        self,
+        orthogonal: bool = True,
+        return_structure: bool = True,
+        return_atoms: bool = False,
+    ) -> Union[Atoms, Structure]:
+        """
+        This is a simple function for easier access to the surface structure generated from the SurfaceGenerator
+
+        Args:
+            orthogonal: Determines if the orthogonalized structure is returned
+            return_structure: Determines if the Pymatgen Structure object is returned
+            return_atoms: Determines if the ASE Atoms object is returned
+
+        Returns:
+            Either a Pymatgen Structure of ASE Atoms object of the surface structure
+        """
+        if orthogonal:
+            if return_structure and not return_atoms:
+                return self._orthogonal_slab_structure
+            elif return_atoms and not return_structure:
+                return self._orthogonal_slab_atoms
+            else:
+                raise ValueError(
+                    "Please select either return_atoms=True OR return_structure=True to get an ASE atoms object or a Pymatgen Structure object."
+                )
+        else:
+            if return_structure and not return_atoms:
+                return self._non_orthogonal_slab_structure
+            elif return_atoms and not return_structure:
+                return self._non_orthogonal_slab_atoms
+            else:
+                raise ValueError(
+                    "Please select either return_atoms=True OR return_structure=True to get an ASE atoms object or a Pymatgen Structure object."
+                )
 
     @property
     def formula(self) -> str:
@@ -182,8 +218,8 @@ class Surface:
         """
         area = np.linalg.norm(
             np.cross(
-                self.orthogonal_slab_structure.lattice.matrix[0],
-                self.orthogonal_slab_structure.lattice.matrix[1],
+                self._orthogonal_slab_structure.lattice.matrix[0],
+                self._orthogonal_slab_structure.lattice.matrix[1],
             )
         )
 
@@ -202,7 +238,7 @@ class Surface:
         Returns:
             (2, 3) numpy array containing the cartesian coordinates of the in-place lattice vectors
         """
-        matrix = deepcopy(self.orthogonal_slab_structure.lattice.matrix)
+        matrix = deepcopy(self._orthogonal_slab_structure.lattice.matrix)
         return matrix[:2]
 
     @property
@@ -270,9 +306,9 @@ class Surface:
             relax: Determines if selective dynamics should be set in the POSCAR
         """
         if orthogonal:
-            slab = self.orthogonal_slab_structure
+            slab = self._orthogonal_slab_structure
         else:
-            slab = self.non_orthogonal_slab_structure
+            slab = self._non_orthogonal_slab_structure
 
         comment = "|".join(
             [
@@ -360,7 +396,7 @@ class Surface:
             atol: Tolarence for grouping the layers, if None, it is automatically determined and usually performs well
         """
         group_inds_conv, _ = utils.group_layers(
-            structure=self.orthogonal_slab_structure, atol=atol
+            structure=self._orthogonal_slab_structure, atol=atol
         )
         if top:
             group_inds_conv = group_inds_conv[::-1]
@@ -369,7 +405,7 @@ class Surface:
         for i in range(num_layers):
             to_delete_conv.extend(group_inds_conv[i])
 
-        self.orthogonal_slab_structure.remove_sites(to_delete_conv)
+        self._orthogonal_slab_structure.remove_sites(to_delete_conv)
 
     def _get_surface_atoms(self):
         obs = self.oriented_bulk_structure.copy()
@@ -665,8 +701,8 @@ class Surface:
                 bond_dict=bond_dict, relaxed_structure_file=passivated_struc
             )
 
-        ortho_slab = self.orthogonal_slab_structure.copy()
-        non_ortho_slab = self.non_orthogonal_slab_structure.copy()
+        ortho_slab = self._orthogonal_slab_structure.copy()
+        non_ortho_slab = self._non_orthogonal_slab_structure.copy()
 
         # ortho_slab.add_site_property("hydrogen_str", [""] * len(ortho_slab))
         # non_ortho_slab.add_site_property(
@@ -733,8 +769,8 @@ class Surface:
         self._passivated = True
 
         if inplace:
-            self.orthogonal_slab_structure = ortho_slab
-            self.non_orthogonal_slab_structure = non_ortho_slab
+            self._orthogonal_slab_structure = ortho_slab
+            self._non_orthogonal_slab_structure = non_ortho_slab
         else:
             return ortho_slab, non_ortho_slab
 
@@ -817,18 +853,19 @@ class Interface:
         ) = self._strain_and_orient_film()
 
         (
-            self.non_orthogonal_structure,
-            self.non_orthogonal_substrate_structure,
-            self.non_orthogonal_film_structure,
-            self.non_orthogonal_atoms,
-            self.non_orthogonal_substrate_atoms,
-            self.non_orthogonal_film_atoms,
-            self.orthogonal_structure,
-            self.orthogonal_substrate_structure,
-            self.orthogonal_film_structure,
-            self.orthogonal_atoms,
-            self.orthogonal_substrate_atoms,
-            self.orthogonal_film_atoms,
+            self._M_matrix,
+            self._non_orthogonal_structure,
+            self._non_orthogonal_substrate_structure,
+            self._non_orthogonal_film_structure,
+            self._non_orthogonal_atoms,
+            self._non_orthogonal_substrate_atoms,
+            self._non_orthogonal_film_atoms,
+            self._orthogonal_structure,
+            self._orthogonal_substrate_structure,
+            self._orthogonal_film_structure,
+            self._orthogonal_atoms,
+            self._orthogonal_substrate_atoms,
+            self._orthogonal_film_atoms,
         ) = self._stack_interface()
         # self.interface, self.sub_part, self.film_part = self._stack_interface()
 
@@ -851,18 +888,18 @@ class Interface:
         """
         if orthogonal:
             if return_structure and not return_atoms:
-                return self.orthogonal_structure
+                return self._orthogonal_structure
             elif return_atoms and not return_structure:
-                return self.orthogonal_atoms
+                return self._orthogonal_atoms
             else:
                 raise ValueError(
                     "Please select either return_atoms=True OR return_structure=True to get an ASE atoms object or a Pymatgen Structure object."
                 )
         else:
             if return_structure and not return_atoms:
-                return self.non_orthogonal_structure
+                return self._non_orthogonal_structure
             elif return_atoms and not return_structure:
-                return self.non_orthogonal_atoms
+                return self._non_orthogonal_atoms
             else:
                 raise ValueError(
                     "Please select either return_atoms=True OR return_structure=True to get an ASE atoms object or a Pymatgen Structure object."
@@ -888,18 +925,18 @@ class Interface:
         """
         if orthogonal:
             if return_structure and not return_atoms:
-                return self.orthogonal_substrate_structure
+                return self._orthogonal_substrate_structure
             elif return_atoms and not return_structure:
-                return self.orthogonal_substrate_atoms
+                return self._orthogonal_substrate_atoms
             else:
                 raise ValueError(
                     "Please select either return_atoms=True OR return_structure=True to get an ASE atoms object or a Pymatgen Structure object."
                 )
         else:
             if return_structure and not return_atoms:
-                return self.non_orthogonal_substrate_structure
+                return self._non_orthogonal_substrate_structure
             elif return_atoms and not return_structure:
-                return self.non_orthogonal_substrate_atoms
+                return self._non_orthogonal_substrate_atoms
             else:
                 raise ValueError(
                     "Please select either return_atoms=True OR return_structure=True to get an ASE atoms object or a Pymatgen Structure object."
@@ -925,18 +962,18 @@ class Interface:
         """
         if orthogonal:
             if return_structure and not return_atoms:
-                return self.orthogonal_film_structure
+                return self._orthogonal_film_structure
             elif return_atoms and not return_structure:
-                return self.orthogonal_film_atoms
+                return self._orthogonal_film_atoms
             else:
                 raise ValueError(
                     "Please select either return_atoms=True OR return_structure=True to get an ASE atoms object or a Pymatgen Structure object."
                 )
         else:
             if return_structure and not return_atoms:
-                return self.non_orthogonal_film_structure
+                return self._non_orthogonal_film_structure
             elif return_atoms and not return_structure:
-                return self.non_orthogonal_film_atoms
+                return self._non_orthogonal_film_atoms
             else:
                 raise ValueError(
                     "Please select either return_atoms=True OR return_structure=True to get an ASE atoms object or a Pymatgen Structure object."
@@ -958,7 +995,7 @@ class Interface:
 
     @property
     def _structure_volume(self):
-        matrix = deepcopy(self.orthogonal_structure.lattice.matrix)
+        matrix = deepcopy(self._orthogonal_structure.lattice.matrix)
         vac_matrix = np.vstack(
             [
                 matrix[:2],
@@ -1122,9 +1159,9 @@ class Interface:
             substrate_layers_to_relax: Number of unit cell layers near the interface to relax
         """
         if orthogonal:
-            slab = self.orthogonal_structure
+            slab = self._orthogonal_structure
         else:
-            slab = self.non_orthogonal_structure
+            slab = self._non_orthogonal_structure
 
         comment = "|".join(
             [
@@ -1133,6 +1170,7 @@ class Interface:
                 f"Tf={self.film.termination_index}",
                 f"Ts={self.substrate.termination_index}",
                 f"O={orthogonal}",
+                f"d={self.interfacial_distance:.2f}",
             ]
         )
 
@@ -1253,27 +1291,27 @@ class Interface:
                 )
 
             frac_shift = (
-                self.orthogonal_structure.lattice.get_fractional_coords(shift)
+                self._orthogonal_structure.lattice.get_fractional_coords(shift)
             )
 
         film_ind = np.where(
-            self.orthogonal_structure.site_properties["is_film"]
+            self._orthogonal_structure.site_properties["is_film"]
         )[0]
 
         if inplace:
-            self.orthogonal_structure.translate_sites(
+            self._orthogonal_structure.translate_sites(
                 film_ind,
                 frac_shift,
             )
-            self.orthogonal_film_structure.translate_sites(
-                range(len(self.orthogonal_film_structure)),
+            self._orthogonal_film_structure.translate_sites(
+                range(len(self._orthogonal_film_structure)),
                 frac_shift,
             )
             self.interface_height += frac_shift[-1] / 2
             self.interfacial_distance += shift[-1]
 
         else:
-            shifted_interface = self.orthogonal_structure.copy()
+            shifted_interface = self._orthogonal_structure.copy()
             shifted_interface.translate_sites(
                 film_ind,
                 frac_shift,
@@ -1286,7 +1324,7 @@ class Interface:
 
     def _prepare_substrate(self):
         matrix = self.match.substrate_sl_transform
-        supercell_slab = self.substrate.non_orthogonal_slab_structure.copy()
+        supercell_slab = self.substrate._non_orthogonal_slab_structure.copy()
         supercell_slab.make_supercell(scaling_matrix=matrix)
 
         uvw_supercell = matrix @ self.substrate.uvw_basis
@@ -1300,7 +1338,7 @@ class Interface:
 
     def _prepare_substrate_old(self):
         matrix = self.match.substrate_sl_transform
-        supercell_slab = self.substrate.orthogonal_slab_structure.copy()
+        supercell_slab = self.substrate._orthogonal_slab_structure.copy()
         supercell_slab.make_supercell(scaling_matrix=matrix)
 
         uvw_supercell = matrix @ self.substrate.uvw_basis
@@ -1314,12 +1352,12 @@ class Interface:
 
     def _prepare_film(self):
         matrix = self.match.film_sl_transform
-        supercell_slab = self.film.non_orthogonal_slab_structure.copy()
+        supercell_slab = self.film._non_orthogonal_slab_structure.copy()
         supercell_slab.make_supercell(scaling_matrix=matrix)
 
         sc_matrix = supercell_slab.lattice.matrix
         sub_non_orth_c_vec = (
-            self.substrate.non_orthogonal_slab_structure.lattice.matrix[-1]
+            self.substrate._non_orthogonal_slab_structure.lattice.matrix[-1]
         )
         sub_non_orth_c_norm = sub_non_orth_c_vec / np.linalg.norm(
             sub_non_orth_c_vec
@@ -1327,7 +1365,7 @@ class Interface:
 
         norm = self.film.surface_normal
         proj = np.dot(norm, sub_non_orth_c_norm)
-        scale = self.film.orthogonal_slab_structure.lattice.c / proj
+        scale = self.film._orthogonal_slab_structure.lattice.c / proj
 
         new_matrix = np.vstack([sc_matrix[:2], sub_non_orth_c_norm * scale])
 
@@ -1351,7 +1389,7 @@ class Interface:
 
     def _prepare_film_old(self):
         matrix = self.match.film_sl_transform
-        supercell_slab = self.film.orthogonal_slab_structure.copy()
+        supercell_slab = self.film._orthogonal_slab_structure.copy()
         supercell_slab.make_supercell(scaling_matrix=matrix)
 
         uvw_supercell = matrix @ self.film.uvw_basis
@@ -1379,6 +1417,245 @@ class Interface:
         return strained_film, transform
 
     def _stack_interface(self):
+        # Get the strained substrate and film
+        strained_sub = self._strained_sub
+        strained_film = self._strained_film
+
+        # Get the oriented bulk structure of the substrate
+        oriented_bulk_c = self.substrate.oriented_bulk_structure.lattice.c
+
+        # Get the normalized projection of the substrate c-vector onto the normal vector,
+        # This is used to determine the length of the non-orthogonal c-vector in order to get
+        # the correct vacuum size.
+        c_norm_proj = self.substrate.c_projection / oriented_bulk_c
+
+        # Get the substrate matrix and c-vector
+        sub_matrix = strained_sub.lattice.matrix
+        sub_c = deepcopy(sub_matrix[-1])
+
+        # Get the fractional and cartesian coordinates of the substrate and film
+        strained_sub_coords = deepcopy(strained_sub.cart_coords)
+        strained_film_coords = deepcopy(strained_film.cart_coords)
+        strained_sub_frac_coords = deepcopy(strained_sub.frac_coords)
+        strained_film_frac_coords = deepcopy(strained_film.frac_coords)
+
+        # Find the min and max coordinates of the substrate and film
+        min_sub_coords = np.min(strained_sub_frac_coords[:, -1])
+        max_sub_coords = np.max(strained_sub_frac_coords[:, -1])
+        min_film_coords = np.min(strained_film_frac_coords[:, -1])
+        max_film_coords = np.max(strained_film_frac_coords[:, -1])
+
+        # Get the lengths of the c-vetors of the substrate and film
+        sub_c_len = strained_sub.lattice.c
+        film_c_len = strained_film.lattice.c
+
+        # Find the total length of the interface structure including the interfacial distance
+        interface_structure_len = np.sum(
+            [
+                (max_sub_coords - min_sub_coords) * sub_c_len,
+                (max_film_coords - min_film_coords) * film_c_len,
+                self.interfacial_distance / c_norm_proj,
+            ]
+        )
+
+        # Find the length of the vacuum region in the non-orthogonal basis
+        interface_vacuum_len = self.vacuum / c_norm_proj
+
+        # The total length of the interface c-vector should be the length of the structure + length of the vacuum
+        # This will get changed in the next line to be exactly an integer multiple of the
+        # oriented bulk cell of the substrate
+        init_interface_c_len = interface_structure_len + interface_vacuum_len
+
+        # Find the closest integer multiple of the substrate oriented bulk c-vector length
+        n_unit_cell = int(np.ceil(init_interface_c_len / oriented_bulk_c))
+
+        # Make the new interface c-vector length an integer multiple of the oriented bulk c-vector
+        interface_c_len = oriented_bulk_c * n_unit_cell
+
+        # Create the transformation matrix from the primtive bulk structure to the interface unit cell
+        # this is only needed for band unfolding purposes
+        sub_M = self.substrate.transformation_matrix
+        layer_M = np.eye(3).astype(int)
+        layer_M[-1, -1] = n_unit_cell
+        interface_M = layer_M @ self.match.substrate_sl_transform @ sub_M
+
+        # Create the new interface lattice vectors
+        interface_matrix = np.vstack(
+            [sub_matrix[:2], interface_c_len * (sub_c / sub_c_len)]
+        )
+        interface_lattice = Lattice(matrix=interface_matrix)
+
+        # Convert the interfacial distance into fractional coordinated because they are easier to work with
+        frac_int_distance_shift = np.array(
+            [0, 0, self.interfacial_distance]
+        ).dot(interface_lattice.inv_matrix)
+
+        interface_inv_matrix = interface_lattice.inv_matrix
+
+        # Convert the substrate cartesian coordinates into the interface fractional coordinates
+        # and shift the bottom atom c-position to zero
+        sub_interface_coords = strained_sub_coords.dot(interface_inv_matrix)
+        sub_interface_coords[:, -1] -= sub_interface_coords[:, -1].min()
+
+        # Convert the film cartesian coordinates into the interface fractional coordinates
+        # and shift the bottom atom c-position to the top substrate c-position + interfacial distance
+        film_interface_coords = strained_film_coords.dot(interface_inv_matrix)
+        film_interface_coords[:, -1] -= film_interface_coords[:, -1].min()
+        film_interface_coords[:, -1] += sub_interface_coords[:, -1].max()
+        film_interface_coords += frac_int_distance_shift
+
+        # Combine the coodinates, species, and site_properties to make the interface Structure
+        interface_coords = np.r_[sub_interface_coords, film_interface_coords]
+        interface_species = strained_sub.species + strained_film.species
+        interface_site_properties = {
+            key: strained_sub.site_properties[key]
+            + strained_film.site_properties[key]
+            for key in strained_sub.site_properties
+        }
+        interface_site_properties["is_sub"] = np.array(
+            [True] * len(strained_sub) + [False] * len(strained_film)
+        )
+        interface_site_properties["is_film"] = np.array(
+            [False] * len(strained_sub) + [True] * len(strained_film)
+        )
+
+        # Create the non-orthogonalized interface structure
+        non_ortho_interface_struc = Structure(
+            lattice=interface_lattice,
+            species=interface_species,
+            coords=interface_coords,
+            to_unit_cell=True,
+            coords_are_cartesian=False,
+            site_properties=interface_site_properties,
+        )
+        non_ortho_interface_struc.sort()
+
+        self.interface_height = sub_interface_coords[:, -1].max() + (
+            0.5 * frac_int_distance_shift[-1]
+        )
+
+        if self.center:
+            # Get the new vacuum length, needed for shifting
+            vacuum_len = interface_c_len - interface_structure_len
+
+            # Find the fractional coordinates of shifting the structure up by half the amount of vacuum cells
+            center_shift = np.ceil(vacuum_len / oriented_bulk_c) // 2
+            center_shift *= oriented_bulk_c / interface_c_len
+
+            # Center the structure in the vacuum
+            non_ortho_interface_struc.translate_sites(
+                indices=range(len(non_ortho_interface_struc)),
+                vector=[0.0, 0.0, center_shift],
+                frac_coords=True,
+                to_unit_cell=True,
+            )
+            self.interface_height += center_shift
+
+        # Get the frac coords of the non-orthogonalized interface
+        frac_coords = non_ortho_interface_struc.frac_coords
+
+        # Find the max c-coord of the substrate
+        # This is used to shift the x-y positions of the interface structure so the top atom of the substrate
+        # is located at x=0, y=0. This will have no effect of the properties of the interface since all the
+        # atoms are shifted, it is more of a visual thing to make the interfaces look nice.
+        is_sub = np.array(non_ortho_interface_struc.site_properties["is_sub"])
+        sub_frac_coords = frac_coords[is_sub]
+        max_c = np.max(sub_frac_coords[:, -1])
+
+        # Find the xy-shift in cartesian coordinates
+        cart_shift = np.array([0.0, 0.0, max_c]).dot(
+            non_ortho_interface_struc.lattice.matrix
+        )
+        cart_shift[-1] = 0.0
+
+        # Get the projection of the non-orthogonal c-vector onto the surface normal
+        proj_c = np.dot(
+            self.substrate.surface_normal,
+            non_ortho_interface_struc.lattice.matrix[-1],
+        )
+
+        # Get the orthogonalized c-vector of the interface (this conserves the vacuum, but breaks symmetries)
+        ortho_c = self.substrate.surface_normal * proj_c
+
+        # Create the orthogonalized lattice vectors
+        new_matrix = np.vstack(
+            [
+                non_ortho_interface_struc.lattice.matrix[:2],
+                ortho_c,
+            ]
+        )
+
+        # Create the orthogonalized structure
+        ortho_interface_struc = Structure(
+            lattice=Lattice(new_matrix),
+            species=non_ortho_interface_struc.species,
+            coords=non_ortho_interface_struc.cart_coords,
+            site_properties=non_ortho_interface_struc.site_properties,
+            to_unit_cell=True,
+            coords_are_cartesian=True,
+        )
+
+        # Shift the structure so the top substrate atom's x and y postions are zero, similar to the non-orthogonalized structure
+        ortho_interface_struc.translate_sites(
+            indices=range(len(ortho_interface_struc)),
+            vector=-cart_shift,
+            frac_coords=False,
+            to_unit_cell=True,
+        )
+
+        # The next step is used extract on the film and substrate portions of the interface
+        # These can be used for charge transfer calculation
+        film_inds = np.where(
+            non_ortho_interface_struc.site_properties["is_film"]
+        )[0]
+        sub_inds = np.where(
+            non_ortho_interface_struc.site_properties["is_sub"]
+        )[0]
+
+        non_ortho_film_structure = non_ortho_interface_struc.copy()
+        non_ortho_film_structure.remove_sites(sub_inds)
+
+        non_ortho_sub_structure = non_ortho_interface_struc.copy()
+        non_ortho_sub_structure.remove_sites(film_inds)
+
+        ortho_film_structure = ortho_interface_struc.copy()
+        ortho_film_structure.remove_sites(sub_inds)
+
+        ortho_sub_structure = ortho_interface_struc.copy()
+        ortho_sub_structure.remove_sites(film_inds)
+
+        non_ortho_interface_atoms = AseAtomsAdaptor().get_atoms(
+            non_ortho_interface_struc
+        )
+        ortho_interface_atoms = AseAtomsAdaptor().get_atoms(
+            ortho_interface_struc
+        )
+        non_ortho_sub_atoms = AseAtomsAdaptor().get_atoms(
+            non_ortho_sub_structure
+        )
+        non_ortho_film_atoms = AseAtomsAdaptor().get_atoms(
+            non_ortho_film_structure
+        )
+        ortho_sub_atoms = AseAtomsAdaptor().get_atoms(ortho_sub_structure)
+        ortho_film_atoms = AseAtomsAdaptor().get_atoms(ortho_film_structure)
+
+        return (
+            interface_M,
+            non_ortho_interface_struc,
+            non_ortho_sub_structure,
+            non_ortho_film_structure,
+            non_ortho_interface_atoms,
+            non_ortho_sub_atoms,
+            non_ortho_film_atoms,
+            ortho_interface_struc,
+            ortho_sub_structure,
+            ortho_film_structure,
+            ortho_interface_atoms,
+            ortho_sub_atoms,
+            ortho_film_atoms,
+        )
+
+    def _stack_interface_messy(self):
         strained_sub = self._strained_sub
         strained_film = self._strained_film
 
@@ -1416,13 +1693,18 @@ class Interface:
         new_interface_c_len = oriented_bulk_c * n_unit_cell
         new_vacuum_len = new_interface_c_len - interface_structure_len
 
-        center_shift = (new_vacuum_len // oriented_bulk_c) // 2
+        center_shift = np.ceil(
+            np.ceil(new_vacuum_len / oriented_bulk_c) / 2
+        ).astpye(int)
+        print(center_shift)
         center_shift *= oriented_bulk_c / new_interface_c_len
 
         sub_M = self.substrate.transformation_matrix
         layer_M = np.eye(3).astype(int)
         layer_M[-1, -1] = n_unit_cell
         interface_M = layer_M @ self.match.substrate_sl_transform @ sub_M
+
+        print(layer_M @ sub_M)
 
         interface_matrix = np.vstack(
             [sub_matrix[:2], new_interface_c_len * (sub_c / sub_c_len)]
@@ -1469,12 +1751,6 @@ class Interface:
         )
         non_ortho_interface_struc.sort()
 
-        frac_coords = non_ortho_interface_struc.frac_coords
-        is_sub = np.array(non_ortho_interface_struc.site_properties["is_sub"])
-        sub_frac_coords = frac_coords[is_sub]
-        # max_c = sub_frac_coords[np.argmax(sub_frac_coords[:, -1])]
-        max_c = np.max(sub_frac_coords[:, -1])
-
         if self.center:
             non_ortho_interface_struc.translate_sites(
                 indices=range(len(non_ortho_interface_struc)),
@@ -1483,6 +1759,12 @@ class Interface:
                 to_unit_cell=True,
             )
             self.interface_height += center_shift
+
+        frac_coords = non_ortho_interface_struc.frac_coords
+        is_sub = np.array(non_ortho_interface_struc.site_properties["is_sub"])
+        sub_frac_coords = frac_coords[is_sub]
+        # max_c = sub_frac_coords[np.argmax(sub_frac_coords[:, -1])]
+        max_c = np.max(sub_frac_coords[:, -1])
 
         # ortho_interface_struc = interface_struc.copy()
         cart_shift = np.array([0.0, 0.0, max_c]).dot(
@@ -1884,8 +2166,8 @@ class Interface:
             show_in_colab: Determines if the matplotlib figure is closed or not after the plot if made.
                 if show_in_colab=True the plot will show up after you run the cell in colab/jupyter notebook.
         """
-        sub_matrix = self.substrate.orthogonal_slab_structure.lattice.matrix
-        film_matrix = self.film.orthogonal_slab_structure.lattice.matrix
+        sub_matrix = self.substrate._orthogonal_slab_structure.lattice.matrix
+        film_matrix = self.film._orthogonal_slab_structure.lattice.matrix
         sub_sc_matrix = deepcopy(self._substrate_supercell.lattice.matrix)
         film_sc_matrix = deepcopy(self._film_supercell.lattice.matrix)
 
@@ -1918,12 +2200,12 @@ class Interface:
         sub_sl = coords.dot(sub_sc_matrix)
 
         sub_struc, sub_inv_matrix = self._generate_sc_for_interface_view(
-            struc=self.substrate.orthogonal_slab_structure,
+            struc=self.substrate._orthogonal_slab_structure,
             transformation_matrix=self.match.substrate_sl_transform,
         )
 
         film_struc, film_inv_matrix = self._generate_sc_for_interface_view(
-            struc=self.film.orthogonal_slab_structure,
+            struc=self.film._orthogonal_slab_structure,
             transformation_matrix=self.match.film_sl_transform,
         )
 

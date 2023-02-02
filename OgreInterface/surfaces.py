@@ -1116,10 +1116,6 @@ class Interface:
 
         return return_str
 
-    # def write_file_old(self, output: str = "POSCAR_interface"):
-    #     """Write the POSCAR of the interface"""
-    #     Poscar(self.interface).write_file(output)
-
     def write_file(
         self,
         output: str = "POSCAR_interface",
@@ -1145,11 +1141,8 @@ class Interface:
 
         comment = "|".join(
             [
-                f"Lf={self.film.layers}",
-                f"Ls={self.substrate.layers}",
-                f"Tf={self.film.termination_index}",
-                f"Ts={self.substrate.termination_index}",
-                f"O={orthogonal}",
+                f"L=({self.film.layers},{self.substrate.layers})",
+                f"T=({self.film.termination_index},{self.substrate.termination_index})",
                 f"d={self.interfacial_distance:.2f}",
             ]
         )
@@ -1157,8 +1150,7 @@ class Interface:
         if relax:
             comment += "|" + "|".join(
                 [
-                    f"Rf={film_layers_to_relax}",
-                    f"Rs={substrate_layers_to_relax}",
+                    f"R=({film_layers_to_relax},{substrate_layers_to_relax})",
                 ]
             )
             film_layers = np.arange(film_layers_to_relax)

@@ -544,6 +544,26 @@ class SurfaceGenerator:
         z_coords = slab_base.frac_coords[:, -1]
         bot_z = z_coords.min()
         top_z = z_coords.max()
+
+        max_z_inds = np.where(np.isclose(top_z, z_coords))[0]
+
+        dists = []
+        for i in max_z_inds:
+            dist, image = slab_base[i].distance_and_image_from_frac_coords(
+                fcoords=[0.0, 0.0, 0.0]
+            )
+            dists.append(dist)
+
+        horiz_shift_ind = max_z_inds[np.argmin(dists)]
+        horiz_shift = -slab_base[horiz_shift_ind].frac_coords
+        horiz_shift[-1] = 0
+        slab_base.translate_sites(
+            indices=range(len(slab_base)),
+            vector=horiz_shift,
+            frac_coords=True,
+            to_unit_cell=True,
+        )
+
         bottom_layer_dist = np.abs(bot_z - (top_z - 1)) * init_matrix[-1, -1]
         top_layer_dist = np.abs((bot_z + 1) - top_z) * init_matrix[-1, -1]
 
@@ -559,15 +579,16 @@ class SurfaceGenerator:
             structure=slab_base, layers=self.layers, vacuum_scale=vacuum_scale
         )
         non_orthogonal_slab.sort()
-        non_orthogonal_min_atom = non_orthogonal_slab.frac_coords[
-            np.argmin(non_orthogonal_slab.frac_coords[:, -1])
-        ]
-        non_orthogonal_slab.translate_sites(
-            indices=range(len(non_orthogonal_slab)),
-            vector=-non_orthogonal_min_atom,
-            frac_coords=True,
-            to_unit_cell=True,
-        )
+        # non_orthogonal_min_atom = non_orthogonal_slab.frac_coords[
+        #     np.argmin(non_orthogonal_slab.frac_coords[:, -1])
+        # ]
+        # non_orthogonal_min_c = np.min(non_orthogonal_slab.frac_coords[:, -1])
+        # non_orthogonal_slab.translate_sites(
+        #     indices=range(len(non_orthogonal_slab)),
+        #     vector=-non_orthogonal_min_atom,
+        #     frac_coords=True,
+        #     to_unit_cell=True,
+        # )
 
         a, b, c = non_orthogonal_slab.lattice.matrix
         new_c = np.dot(c, self.surface_normal) * self.surface_normal

@@ -832,6 +832,116 @@ class Interface:
         ) = self._stack_interface()
         # self.interface, self.sub_part, self.film_part = self._stack_interface()
 
+    def get_interface(
+        self,
+        orthogonal: bool = True,
+        return_structure: bool = True,
+        return_atoms: bool = False,
+    ) -> Union[Atoms, Structure]:
+        """
+        This is a simple function for easier access to the interface structure generated from the OgreMatch
+
+        Args:
+            orthogonal: Determines if the orthogonalized structure is returned
+            return_structure: Determines if the Pymatgen Structure object is returned
+            return_atoms: Determines if the ASE Atoms object is returned
+
+        Returns:
+            Either a Pymatgen Structure of ASE Atoms object of the interface structure
+        """
+        if orthogonal:
+            if return_structure and not return_atoms:
+                return self.orthogonal_structure
+            elif return_atoms and not return_structure:
+                return self.orthogonal_atoms
+            else:
+                raise ValueError(
+                    "Please select either return_atoms=True OR return_structure=True to get an ASE atoms object or a Pymatgen Structure object."
+                )
+        else:
+            if return_structure and not return_atoms:
+                return self.non_orthogonal_structure
+            elif return_atoms and not return_structure:
+                return self.non_orthogonal_atoms
+            else:
+                raise ValueError(
+                    "Please select either return_atoms=True OR return_structure=True to get an ASE atoms object or a Pymatgen Structure object."
+                )
+
+    def get_substrate_supercell(
+        self,
+        orthogonal: bool = True,
+        return_structure: bool = True,
+        return_atoms: bool = False,
+    ):
+        """
+        This is a simple function for easier access to the substrate supercell generated from the OgreMatch
+        (i.e. the interface structure with the film atoms removed)
+
+        Args:
+            orthogonal: Determines if the orthogonalized structure is returned
+            return_structure: Determines if the Pymatgen Structure object is returned
+            return_atoms: Determines if the ASE Atoms object is returned
+
+        Returns:
+            Either a Pymatgen Structure of ASE Atoms object of the substrate supercell structure
+        """
+        if orthogonal:
+            if return_structure and not return_atoms:
+                return self.orthogonal_substrate_structure
+            elif return_atoms and not return_structure:
+                return self.orthogonal_substrate_atoms
+            else:
+                raise ValueError(
+                    "Please select either return_atoms=True OR return_structure=True to get an ASE atoms object or a Pymatgen Structure object."
+                )
+        else:
+            if return_structure and not return_atoms:
+                return self.non_orthogonal_substrate_structure
+            elif return_atoms and not return_structure:
+                return self.non_orthogonal_substrate_atoms
+            else:
+                raise ValueError(
+                    "Please select either return_atoms=True OR return_structure=True to get an ASE atoms object or a Pymatgen Structure object."
+                )
+
+    def get_film_supercell(
+        self,
+        orthogonal: bool = True,
+        return_structure: bool = True,
+        return_atoms: bool = False,
+    ):
+        """
+        This is a simple function for easier access to the film supercell generated from the OgreMatch
+        (i.e. the interface structure with the substrate atoms removed)
+
+        Args:
+            orthogonal: Determines if the orthogonalized structure is returned
+            return_structure: Determines if the Pymatgen Structure object is returned
+            return_atoms: Determines if the ASE Atoms object is returned
+
+        Returns:
+            Either a Pymatgen Structure of ASE Atoms object of the film supercell structure
+        """
+        if orthogonal:
+            if return_structure and not return_atoms:
+                return self.orthogonal_film_structure
+            elif return_atoms and not return_structure:
+                return self.orthogonal_film_atoms
+            else:
+                raise ValueError(
+                    "Please select either return_atoms=True OR return_structure=True to get an ASE atoms object or a Pymatgen Structure object."
+                )
+        else:
+            if return_structure and not return_atoms:
+                return self.non_orthogonal_film_structure
+            elif return_atoms and not return_structure:
+                return self.non_orthogonal_film_atoms
+            else:
+                raise ValueError(
+                    "Please select either return_atoms=True OR return_structure=True to get an ASE atoms object or a Pymatgen Structure object."
+                )
+
     @property
     def area(self) -> float:
         """
@@ -994,7 +1104,12 @@ class Interface:
     #     Poscar(self.interface).write_file(output)
 
     def write_file(
-        self, output: str = "POSCAR_interface", orthogonal: bool = True
+        self,
+        output: str = "POSCAR_interface",
+        orthogonal: bool = True,
+        relax: bool = False,
+        film_layers_to_relax: int = 1,
+        substrate_layers_to_relax: int = 1,
     ):
         """
         Write the POSCAR of the interface
@@ -1002,6 +1117,9 @@ class Interface:
         Args:
             output: File path of the output POSCAR
             orthogonal: Determines of the orthogonal structure is written
+            relax: Determines if selective dynamics is applied to the atoms at the interface
+            film_layers_to_relax: Number of unit cell layers near the interface to relax
+            substrate_layers_to_relax: Number of unit cell layers near the interface to relax
         """
         if orthogonal:
             slab = self.orthogonal_structure
@@ -1011,15 +1129,48 @@ class Interface:
         comment = "|".join(
             [
                 f"Lf={self.film.layers}",
-                f"Tf={self.film.termination_index}",
                 f"Ls={self.substrate.layers}",
+                f"Tf={self.film.termination_index}",
                 f"Ts={self.substrate.termination_index}",
                 f"O={orthogonal}",
             ]
         )
 
+        if relax:
+            comment += "|" + "|".join(
+                [
+                    f"Rf={film_layers_to_relax}",
+                    f"Rs={substrate_layers_to_relax}",
+                ]
+            )
+            film_layers = np.arange(film_layers_to_relax)
+            sub_layers = np.arange(
+                self.substrate.layers - substrate_layers_to_relax,
+                self.substrate.layers,
+            )
+            layer_index = np.array(slab.site_properties["layer_index"])
+            is_sub = np.array(slab.site_properties["is_sub"])
+            is_film = np.array(slab.site_properties["is_film"])
+            film_to_relax = np.logical_and(
+                is_film, np.isin(layer_index, film_layers)
+            )
+            sub_to_relax = np.logical_and(
+                is_sub, np.isin(layer_index, sub_layers)
+            )
+            to_relax = np.repeat(
+                np.logical_or(sub_to_relax, film_to_relax).reshape(-1, 1),
+                repeats=3,
+                axis=1,
+            )
+
         if not self.substrate._passivated and not self.film._passivated:
-            poscar_str = Poscar(slab, comment=comment).get_string()
+            poscar = Poscar(slab, comment=comment)
+
+            if relax:
+                poscar.selective_dynamics = to_relax
+
+            poscar_str = poscar.get_string()
+
         else:
             syms = [site.specie.symbol for site in slab]
 
@@ -1053,6 +1204,9 @@ class Interface:
             comment += "|potcar=" + " ".join(atom_types)
 
             poscar = Poscar(slab, comment=comment)
+
+            if relax:
+                poscar.selective_dynamics = to_relax
 
             poscar_str = poscar.get_string().split("\n")
             poscar_str[5] = " ".join(new_atom_types)
@@ -1318,7 +1472,8 @@ class Interface:
         frac_coords = non_ortho_interface_struc.frac_coords
         is_sub = np.array(non_ortho_interface_struc.site_properties["is_sub"])
         sub_frac_coords = frac_coords[is_sub]
-        max_c = sub_frac_coords[np.argmax(sub_frac_coords[:, -1])]
+        # max_c = sub_frac_coords[np.argmax(sub_frac_coords[:, -1])]
+        max_c = np.max(sub_frac_coords[:, -1])
 
         if self.center:
             non_ortho_interface_struc.translate_sites(
@@ -1330,7 +1485,9 @@ class Interface:
             self.interface_height += center_shift
 
         # ortho_interface_struc = interface_struc.copy()
-        cart_shift = max_c.dot(non_ortho_interface_struc.lattice.matrix)
+        cart_shift = np.array([0.0, 0.0, max_c]).dot(
+            non_ortho_interface_struc.lattice.matrix
+        )
         cart_shift[-1] = 0.0
         proj_c = np.dot(
             self.substrate.surface_normal,
@@ -1359,12 +1516,12 @@ class Interface:
             frac_coords=False,
             to_unit_cell=True,
         )
-        non_ortho_interface_struc.translate_sites(
-            indices=range(len(non_ortho_interface_struc)),
-            vector=-np.array([max_c[0], max_c[1], 0.0]),
-            frac_coords=True,
-            to_unit_cell=True,
-        )
+        # non_ortho_interface_struc.translate_sites(
+        #     indices=range(len(non_ortho_interface_struc)),
+        #     vector=-np.array([max_c[0], max_c[1], 0.0]),
+        #     frac_coords=True,
+        #     to_unit_cell=True,
+        # )
 
         film_inds = np.where(
             non_ortho_interface_struc.site_properties["is_film"]

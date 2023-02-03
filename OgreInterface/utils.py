@@ -4,6 +4,7 @@ import copy
 from functools import reduce
 from pymatgen.core.structure import Structure
 from pymatgen.core.lattice import Lattice
+from pymatgen.io.ase import AseAtomsAdaptor
 import itertools
 import functools
 import math
@@ -12,6 +13,10 @@ import collections
 
 def conv_a_to_b(struc_a: Structure, struc_b: Structure) -> np.ndarray:
     return struc_b.lattice.matrix @ struc_a.lattice.inv_matrix
+
+
+def get_atoms(struc):
+    return AseAtomsAdaptor().get_atoms(struc)
 
 
 def get_layer_supercelll(

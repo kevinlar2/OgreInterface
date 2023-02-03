@@ -13,7 +13,7 @@ from pymatgen.symmetry.analyzer import SymmOp
 from pymatgen.analysis.molecule_structure_comparator import CovalentRadius
 from pymatgen.analysis.local_env import CrystalNN
 
-from typing import Dict, Union, Iterable, List
+from typing import Dict, Union, Iterable, List, Tuple
 import matplotlib.pyplot as plt
 from matplotlib.patches import Polygon
 from itertools import combinations, groupby
@@ -261,7 +261,7 @@ class Surface:
         """
         return self.uvw_basis[1].astype(int)
 
-    def _get_atoms_and_struc(self, atoms_or_struc):
+    def _get_atoms_and_struc(self, atoms_or_struc) -> Tuple[Structure, Atoms]:
         if type(atoms_or_struc) == Atoms:
             init_structure = AseAtomsAdaptor.get_structure(atoms_or_struc)
             init_atoms = atoms_or_struc
@@ -399,7 +399,7 @@ class Surface:
 
         self._orthogonal_slab_structure.remove_sites(to_delete_conv)
 
-    def _get_surface_atoms(self):
+    def _get_surface_atoms(self) -> Tuple[Structure, List]:
         obs = self.oriented_bulk_structure.copy()
         obs.add_oxidation_state_by_guess()
 
@@ -428,9 +428,11 @@ class Surface:
                     bottom_neighborhood.append((i, info_dict))
                     break
 
-        return layer_struc, [bottom_neighborhood, top_neighborhood]
+        neighborhool_list = [bottom_neighborhood, top_neighborhood]
 
-    def _get_pseudohydrogen_charge(self, site, coordination):
+        return layer_struc, neighborhool_list
+
+    def _get_pseudohydrogen_charge(self, site, coordination) -> float:
         electronic_struc = site.specie.electronic_structure.split(".")[1:]
         oxi_state = site.specie.oxi_state
         valence = 0
@@ -448,7 +450,9 @@ class Surface:
 
         return charge
 
-    def _get_bond_dict(self):
+    def _get_bond_dict(
+        self,
+    ) -> Dict[str, Dict[int, Dict[str, Union[np.ndarray, float, str]]]]:
         image_map = {1: "+", 0: "=", -1: "-"}
         (
             layer_struc,
@@ -523,7 +527,9 @@ class Surface:
 
         return bond_dict
 
-    def _get_passivation_atom_index(self, struc, bulk_equivalent, top=False):
+    def _get_passivation_atom_index(
+        self, struc, bulk_equivalent, top=False
+    ) -> int:
         struc_layer_index = np.array(struc.site_properties["layer_index"])
         struc_bulk_equiv = np.array(
             struc.site_properties["oriented_bulk_equivalent"]
@@ -543,7 +549,7 @@ class Surface:
 
         return atom_index
 
-    def _passivate(self, struc, index, bond, bond_str, charge):
+    def _passivate(self, struc, index, bond, bond_str, charge) -> None:
         position = struc[index].coords + bond
         position = struc[index].coords + bond
         props = {k: -1 for k in struc[index].properties}
@@ -559,10 +565,11 @@ class Surface:
     def _get_passivated_bond_dict(
         self,
         bond_dict: Dict[
-            str, Dict[int, Dict[str, Union[np.ndarray, str, float]]]
+            str, Dict[int, Dict[str, Union[np.ndarray, float, str]]]
         ],
         relaxed_structure_file: str,
-    ):
+    ) -> Dict[str, Dict[int, Dict[str, Union[np.ndarray, float, str]]]]:
+
         with open(relaxed_structure_file, "r") as f:
             poscar_str = f.read().split("\n")
 
@@ -825,7 +832,6 @@ class Interface:
             self._film_supercell_scale_factors,
         ) = self._prepare_film()
         self.interfacial_distance = interfacial_distance
-        self.interface_height = None
         self._strained_sub = self._substrate_supercell
         (
             self._strained_film,
@@ -847,7 +853,8 @@ class Interface:
             self._orthogonal_substrate_atoms,
             self._orthogonal_film_atoms,
         ) = self._stack_interface()
-        # self.interface, self.sub_part, self.film_part = self._stack_interface()
+        self._a_shift = 0.0
+        self._b_shift = 0.0
 
     def get_interface(
         self,
@@ -890,7 +897,7 @@ class Interface:
         orthogonal: bool = True,
         return_structure: bool = True,
         return_atoms: bool = False,
-    ):
+    ) -> Union[Atoms, Structure]:
         """
         This is a simple function for easier access to the substrate supercell generated from the OgreMatch
         (i.e. the interface structure with the film atoms removed)
@@ -927,7 +934,7 @@ class Interface:
         orthogonal: bool = True,
         return_structure: bool = True,
         return_atoms: bool = False,
-    ):
+    ) -> Union[Atoms, Structure]:
         """
         This is a simple function for easier access to the film supercell generated from the OgreMatch
         (i.e. the interface structure with the substrate atoms removed)
@@ -974,7 +981,7 @@ class Interface:
         return self.match.area
 
     @property
-    def _structure_volume(self):
+    def _structure_volume(self) -> float:
         matrix = deepcopy(self._orthogonal_structure.lattice.matrix)
         vac_matrix = np.vstack(
             [
@@ -1116,7 +1123,9 @@ class Interface:
 
         return return_str
 
-    def _load_relaxed_structure(self, relaxed_structure_file: str):
+    def _load_relaxed_structure(
+        self, relaxed_structure_file: str
+    ) -> np.ndarray:
 
         with open(relaxed_structure_file, "r") as f:
             poscar_str = f.read().split("\n")
@@ -1125,8 +1134,8 @@ class Interface:
 
         layers = desc_str[0].split("=")[1].split(",")
         termination_index = desc_str[1].split("=")[1].split(",")
-        d_int = desc_str[2].split("=")[1]
-        ortho = bool(int(desc_str[3].split("=")[1]))
+        ortho = bool(int(desc_str[2].split("=")[1]))
+        d_int = desc_str[3].split("=")[1]
         layers_to_relax = desc_str[4].split("=")[1].split(",")
 
         film_layers = int(layers[0])
@@ -1139,7 +1148,7 @@ class Interface:
         N_sub_layers_to_relax = int(layers_to_relax[1])
 
         if (
-            d_int == f"{self.interfacial_distance:.2f}"
+            d_int == f"{self.interfacial_distance:.3f}"
             and film_termination_index == self.film.termination_index
             and sub_termination_index == self.substrate.termination_index
         ):
@@ -1241,9 +1250,9 @@ class Interface:
             for i in relaxed_inds:
                 init_ind = unrelaxed_structure[i].properties["orig_ind"]
                 relaxed_coords = relaxed_structure[i].coords
-                relaxed_coords[-1] -= relaxed_ref[-1]
+                relaxed_coords -= relaxed_ref
                 unrelaxed_coords = unrelaxed_structure[i].coords
-                unrelaxed_coords[-1] -= unrelaxed_ref[-1]
+                unrelaxed_coords -= unrelaxed_ref
 
                 all_relaxed_coords = periodic_shifts + relaxed_coords
                 dists = np.linalg.norm(
@@ -1254,13 +1263,16 @@ class Interface:
                 relaxation_shifts[init_ind] = bond
 
             return relaxation_shifts
+        else:
+            raise ValueError(
+                "The termination and interfacial distances must be the same"
+            )
 
-    def relax_interface(self, relaxed_structure_file: str):
+    def relax_interface(self, relaxed_structure_file: str) -> None:
         relaxation_shifts = self._load_relaxed_structure(
             relaxed_structure_file
         )
         init_ortho_structure = self._orthogonal_structure
-
         relaxed_ortho_structure = Structure(
             lattice=init_ortho_structure.lattice,
             species=init_ortho_structure.species,
@@ -1269,8 +1281,45 @@ class Interface:
             coords_are_cartesian=True,
             site_properties=init_ortho_structure.site_properties,
         )
+        relaxed_ortho_atoms = utils.get_atoms(relaxed_ortho_structure)
+        (
+            relaxed_ortho_film_structure,
+            relaxed_ortho_film_atoms,
+            relaxed_ortho_sub_structure,
+            relaxed_ortho_sub_atoms,
+        ) = self._get_film_and_substrate_parts(relaxed_ortho_structure)
 
-        Poscar(relaxed_ortho_structure).write_file("POSCAR_test_relax")
+        init_non_ortho_structure = self._non_orthogonal_structure
+        relaxed_non_ortho_structure = Structure(
+            lattice=init_non_ortho_structure.lattice,
+            species=init_non_ortho_structure.species,
+            coords=init_non_ortho_structure.cart_coords + relaxation_shifts,
+            to_unit_cell=True,
+            coords_are_cartesian=True,
+            site_properties=init_non_ortho_structure.site_properties,
+        )
+        relaxed_non_ortho_atoms = utils.get_atoms(relaxed_non_ortho_structure)
+        (
+            relaxed_non_ortho_film_structure,
+            relaxed_non_ortho_film_atoms,
+            relaxed_non_ortho_sub_structure,
+            relaxed_non_ortho_sub_atoms,
+        ) = self._get_film_and_substrate_parts(relaxed_non_ortho_structure)
+
+        self._orthogonal_structure = relaxed_ortho_structure
+        self._orthogonal_film_structure = relaxed_ortho_film_structure
+        self._orthogonal_substrate_structure = relaxed_ortho_sub_structure
+        self._non_orthogonal_structure = relaxed_non_ortho_structure
+        self._non_orthogonal_film_structure = relaxed_non_ortho_film_structure
+        self._non_orthogonal_substrate_structure = (
+            relaxed_non_ortho_sub_structure
+        )
+        self._orthogonal_atoms = relaxed_ortho_atoms
+        self._orthogonal_film_atoms = relaxed_ortho_film_atoms
+        self._orthogonal_substrate_atoms = relaxed_ortho_sub_atoms
+        self._non_orthogonal_atoms = relaxed_non_ortho_atoms
+        self._non_orthogonal_film_atoms = relaxed_non_ortho_film_atoms
+        self._non_orthogonal_substrate_atoms = relaxed_non_ortho_sub_atoms
 
     def write_file(
         self,
@@ -1279,7 +1328,7 @@ class Interface:
         relax: bool = False,
         film_layers_to_relax: int = 1,
         substrate_layers_to_relax: int = 1,
-    ):
+    ) -> None:
         """
         Write the POSCAR of the interface
 
@@ -1297,16 +1346,17 @@ class Interface:
 
         comment = "|".join(
             [
-                f"L=({self.film.layers},{self.substrate.layers})",
-                f"T=({self.film.termination_index},{self.substrate.termination_index})",
-                f"d={self.interfacial_distance:.2f}",
+                f"L={self.film.layers},{self.substrate.layers}",
+                f"T={self.film.termination_index},{self.substrate.termination_index}",
+                f"O={int(orthogonal)}",
+                f"d={self.interfacial_distance:.3f}",
             ]
         )
 
         if relax:
             comment += "|" + "|".join(
                 [
-                    f"R=({film_layers_to_relax},{substrate_layers_to_relax})",
+                    f"R={film_layers_to_relax},{substrate_layers_to_relax}",
                 ]
             )
             film_layers = np.arange(film_layers_to_relax)
@@ -1328,6 +1378,13 @@ class Interface:
                 repeats=3,
                 axis=1,
             )
+
+        comment += "|" + "|".join(
+            [
+                f"a={self._a_shift:.4f}",
+                f"b={self._b_shift:.4f}",
+            ]
+        )
 
         if not self.substrate._passivated and not self.film._passivated:
             poscar = Poscar(slab, comment=comment)
@@ -1382,75 +1439,126 @@ class Interface:
         with open(output, "w") as f:
             f.write(poscar_str)
 
-    def shift_film(
-        self,
-        shift: Iterable,
-        fractional: bool = False,
-        inplace: bool = False,
-        return_atoms: bool = False,
-    ) -> Union[Structure, None]:
+    def _shift_film(
+        self, interface: Structure, shift: Iterable, fractional: bool
+    ) -> Tuple[Structure, Atoms, Structure, Atoms]:
+        shifted_interface_structure = interface.copy()
+        film_ind = np.where(
+            shifted_interface_structure.site_properties["is_film"]
+        )[0]
+        shifted_interface_structure.translate_sites(
+            indices=film_ind,
+            vector=shift,
+            frac_coords=fractional,
+            to_unit_cell=True,
+        )
+        shifted_interface_atoms = utils.get_atoms(shifted_interface_structure)
+        (
+            shifted_film_structure,
+            shifted_film_atoms,
+            _,
+            _,
+        ) = self._get_film_and_substrate_parts(shifted_interface_structure)
+
+        return (
+            shifted_interface_structure,
+            shifted_interface_atoms,
+            shifted_film_structure,
+            shifted_film_atoms,
+        )
+
+    def set_interfacial_distance(self, interfacial_distance: float) -> None:
         """
-        Shifts the film over the substrate by a given shift vector.
+        Sets a new interfacial distance for the interface by shifting the film in the z-direction
 
         Examples:
-            In-place shift using fractional coordinates:
-            >>> interface.shift_film(shift=[0.5, 0.25, 0.0], fractional=True, inplace=True)
-
-            Non in-place shift using cartesian coordinates:
-            >>> shifted_interface = interface.shift_film(shift=[4.5, 0.0, 0.5], fractional=False, inplace=False)
+            >>> interface.set_interfacial_distance(interfacial_distance=2.0)
 
         Args:
-            shift: 3-element vector defining the shift in the x (a), y (b), and z (c) directions
-            fractional: Determines if the shift is defined in fractional coordinates
-            inplace: Determines of the shift happens inplace or if a new structure is returned
-            return_atoms: Determine if the returned structure is an ASE Atoms object instead of a Structure object
-
-        Returns:
-            Shifted interface Structure if inplace=False or Shifted interface Atoms if inplace=False and return_atoms=True
+            interfacial_distance: New interfacial distance for the interface
         """
+        shift = np.array(
+            [0.0, 0.0, interfacial_distance - self.interfacial_distance]
+        )
+        self.interfacial_distance = interfacial_distance
+        (
+            self._orthogonal_structure,
+            self._orthogonal_atoms,
+            self._orthogonal_film_structure,
+            self._orthogonal_film_atoms,
+        ) = self._shift_film(
+            interface=self._orthogonal_structure,
+            shift=shift,
+            fractional=False,
+        )
+        (
+            self._non_orthogonal_structure,
+            self._non_orthogonal_atoms,
+            self._non_orthogonal_film_structure,
+            self._non_orthogonal_film_atoms,
+        ) = self._shift_film(
+            interface=self._non_orthogonal_structure,
+            shift=shift,
+            fractional=False,
+        )
+
+    def shift_film_inplane(
+        self,
+        x_shift: float,
+        y_shift: float,
+        fractional: bool = False,
+    ) -> None:
+        """
+        Shifts the film in-place over the substrate within the plane of the interface by a given shift vector.
+
+        Examples:
+            Shift using fractional coordinates:
+            >>> interface.shift_film(shift=[0.5, 0.25], fractional=True)
+
+            Shift using cartesian coordinates:
+            >>> interface.shift_film(shift=[4.5, 0.0], fractional=False)
+
+        Args:
+            x_shift: Shift in the x or a-vector directions depending on if fractional=True
+            y_shift: Shift in the y or b-vector directions depending on if fractional=True
+            fractional: Determines if the shift is defined in fractional coordinates
+        """
+        shift_array = np.array([x_shift, y_shift, 0.0])
+
         if fractional:
-            frac_shift = np.array(shift)
+            frac_shift = shift_array
         else:
-            shift = np.array(shift)
-
-            if shift[-1] + self.interfacial_distance < 0.5:
-                raise ValueError(
-                    f"The film shift results in an interfacial distance of less than 0.5 Angstroms which is non-physical"
-                )
-
             frac_shift = (
-                self._orthogonal_structure.lattice.get_fractional_coords(shift)
+                self._orthogonal_structure.lattice.get_fractional_coords(
+                    shift_array
+                )
             )
 
-        film_ind = np.where(
-            self._orthogonal_structure.site_properties["is_film"]
-        )[0]
+        self._a_shift += shift_array[0]
+        self._b_shift += shift_array[1]
 
-        if inplace:
-            self._orthogonal_structure.translate_sites(
-                film_ind,
-                frac_shift,
-            )
-            self._orthogonal_film_structure.translate_sites(
-                range(len(self._orthogonal_film_structure)),
-                frac_shift,
-            )
-            self.interface_height += frac_shift[-1] / 2
-            self.interfacial_distance += shift[-1]
+        (
+            self._orthogonal_structure,
+            self._orthogonal_atoms,
+            self._orthogonal_film_structure,
+            self._orthogonal_film_atoms,
+        ) = self._shift_film(
+            interface=self._orthogonal_structure,
+            shift=frac_shift,
+            fractional=True,
+        )
+        (
+            self._non_orthogonal_structure,
+            self._non_orthogonal_atoms,
+            self._non_orthogonal_film_structure,
+            self._non_orthogonal_film_atoms,
+        ) = self._shift_film(
+            interface=self._non_orthogonal_structure,
+            shift=frac_shift,
+            fractional=True,
+        )
 
-        else:
-            shifted_interface = self._orthogonal_structure.copy()
-            shifted_interface.translate_sites(
-                film_ind,
-                frac_shift,
-            )
-
-            if return_atoms:
-                return AseAtomsAdaptor().get_atoms(shifted_interface)
-            else:
-                return shifted_interface
-
-    def _prepare_substrate(self):
+    def _prepare_substrate(self) -> Tuple[Structure, np.ndarray, np.ndarray]:
         matrix = self.match.substrate_sl_transform
         supercell_slab = self.substrate._non_orthogonal_slab_structure.copy()
         supercell_slab.make_supercell(scaling_matrix=matrix)
@@ -1464,21 +1572,7 @@ class Interface:
 
         return supercell_slab, uvw_supercell, scale_factors
 
-    def _prepare_substrate_old(self):
-        matrix = self.match.substrate_sl_transform
-        supercell_slab = self.substrate._orthogonal_slab_structure.copy()
-        supercell_slab.make_supercell(scaling_matrix=matrix)
-
-        uvw_supercell = matrix @ self.substrate.uvw_basis
-        scale_factors = []
-        for i, b in enumerate(uvw_supercell):
-            scale = np.abs(reduce(utils._float_gcd, b))
-            uvw_supercell[i] = uvw_supercell[i] / scale
-            scale_factors.append(scale)
-
-        return supercell_slab, uvw_supercell, scale_factors
-
-    def _prepare_film(self):
+    def _prepare_film(self) -> Tuple[Structure, np.ndarray, np.ndarray]:
         matrix = self.match.film_sl_transform
         supercell_slab = self.film._non_orthogonal_slab_structure.copy()
         supercell_slab.make_supercell(scaling_matrix=matrix)
@@ -1515,21 +1609,7 @@ class Interface:
 
         return oriented_supercell_slab, uvw_supercell, scale_factors
 
-    def _prepare_film_old(self):
-        matrix = self.match.film_sl_transform
-        supercell_slab = self.film._orthogonal_slab_structure.copy()
-        supercell_slab.make_supercell(scaling_matrix=matrix)
-
-        uvw_supercell = matrix @ self.film.uvw_basis
-        scale_factors = []
-        for i, b in enumerate(uvw_supercell):
-            scale = np.abs(reduce(utils._float_gcd, b))
-            uvw_supercell[i] = uvw_supercell[i] / scale
-            scale_factors.append(scale)
-
-        return supercell_slab, uvw_supercell, scale_factors
-
-    def _strain_and_orient_film(self):
+    def _strain_and_orient_film(self) -> Tuple[Structure, np.ndarray]:
         sub_in_plane_vecs = self._substrate_supercell.lattice.matrix[:2]
         film_out_of_plane = self._film_supercell.lattice.matrix[-1]
         film_inv_matrix = self._film_supercell.lattice.inv_matrix
@@ -1544,7 +1624,24 @@ class Interface:
 
         return strained_film, transform
 
-    def _stack_interface(self):
+    def _stack_interface(
+        self,
+    ) -> Tuple[
+        np.ndarray,
+        Structure,
+        Structure,
+        Structure,
+        Atoms,
+        Atoms,
+        Atoms,
+        Structure,
+        Structure,
+        Structure,
+        Atoms,
+        Atoms,
+        Atoms,
+    ]:
+
         # Get the strained substrate and film
         strained_sub = self._strained_sub
         strained_film = self._strained_film
@@ -1658,10 +1755,6 @@ class Interface:
         )
         non_ortho_interface_struc.sort()
 
-        self.interface_height = sub_interface_coords[:, -1].max() + (
-            0.5 * frac_int_distance_shift[-1]
-        )
-
         if self.center:
             # Get the new vacuum length, needed for shifting
             vacuum_len = interface_c_len - interface_structure_len
@@ -1677,7 +1770,6 @@ class Interface:
                 frac_coords=True,
                 to_unit_cell=True,
             )
-            self.interface_height += center_shift
 
         # Get the frac coords of the non-orthogonalized interface
         frac_coords = non_ortho_interface_struc.frac_coords
@@ -1733,39 +1825,21 @@ class Interface:
 
         # The next step is used extract on the film and substrate portions of the interface
         # These can be used for charge transfer calculation
-        film_inds = np.where(
-            non_ortho_interface_struc.site_properties["is_film"]
-        )[0]
-        sub_inds = np.where(
-            non_ortho_interface_struc.site_properties["is_sub"]
-        )[0]
+        (
+            ortho_film_structure,
+            ortho_film_atoms,
+            ortho_sub_structure,
+            ortho_sub_atoms,
+        ) = self._get_film_and_substrate_parts(ortho_interface_struc)
+        (
+            non_ortho_film_structure,
+            non_ortho_film_atoms,
+            non_ortho_sub_structure,
+            non_ortho_sub_atoms,
+        ) = self._get_film_and_substrate_parts(non_ortho_interface_struc)
 
-        non_ortho_film_structure = non_ortho_interface_struc.copy()
-        non_ortho_film_structure.remove_sites(sub_inds)
-
-        non_ortho_sub_structure = non_ortho_interface_struc.copy()
-        non_ortho_sub_structure.remove_sites(film_inds)
-
-        ortho_film_structure = ortho_interface_struc.copy()
-        ortho_film_structure.remove_sites(sub_inds)
-
-        ortho_sub_structure = ortho_interface_struc.copy()
-        ortho_sub_structure.remove_sites(film_inds)
-
-        non_ortho_interface_atoms = AseAtomsAdaptor().get_atoms(
-            non_ortho_interface_struc
-        )
-        ortho_interface_atoms = AseAtomsAdaptor().get_atoms(
-            ortho_interface_struc
-        )
-        non_ortho_sub_atoms = AseAtomsAdaptor().get_atoms(
-            non_ortho_sub_structure
-        )
-        non_ortho_film_atoms = AseAtomsAdaptor().get_atoms(
-            non_ortho_film_structure
-        )
-        ortho_sub_atoms = AseAtomsAdaptor().get_atoms(ortho_sub_structure)
-        ortho_film_atoms = AseAtomsAdaptor().get_atoms(ortho_film_structure)
+        non_ortho_interface_atoms = utils.get_atoms(non_ortho_interface_struc)
+        ortho_interface_atoms = utils.get_atoms(ortho_interface_struc)
 
         return (
             interface_M,
@@ -1783,294 +1857,21 @@ class Interface:
             ortho_film_atoms,
         )
 
-    def _stack_interface_messy(self):
-        strained_sub = self._strained_sub
-        strained_film = self._strained_film
+    def _get_film_and_substrate_parts(
+        self, interface: Structure
+    ) -> Tuple[Structure, Atoms, Structure, Atoms]:
+        film_inds = np.where(interface.site_properties["is_film"])[0]
+        sub_inds = np.where(interface.site_properties["is_sub"])[0]
 
-        oriented_bulk_c = self.substrate.oriented_bulk_structure.lattice.c
+        film_structure = interface.copy()
+        film_structure.remove_sites(sub_inds)
+        film_atoms = utils.get_atoms(film_structure)
 
-        c_norm_proj = self.substrate.c_projection / oriented_bulk_c
+        sub_structure = interface.copy()
+        sub_structure.remove_sites(film_inds)
+        sub_atoms = utils.get_atoms(sub_structure)
 
-        sub_matrix = strained_sub.lattice.matrix
-        sub_c = deepcopy(sub_matrix[-1])
-
-        strained_sub_coords = deepcopy(strained_sub.cart_coords)
-        strained_film_coords = deepcopy(strained_film.cart_coords)
-        strained_sub_frac_coords = deepcopy(strained_sub.frac_coords)
-        strained_film_frac_coords = deepcopy(strained_film.frac_coords)
-
-        min_sub_coords = np.min(strained_sub_frac_coords[:, -1])
-        max_sub_coords = np.max(strained_sub_frac_coords[:, -1])
-        min_film_coords = np.min(strained_film_frac_coords[:, -1])
-        max_film_coords = np.max(strained_film_frac_coords[:, -1])
-
-        sub_c_len = np.linalg.norm(strained_sub.lattice.matrix[-1])
-        film_c_len = np.linalg.norm(strained_film.lattice.matrix[-1])
-        interface_structure_len = np.sum(
-            [
-                (max_sub_coords - min_sub_coords) * sub_c_len,
-                (max_film_coords - min_film_coords) * film_c_len,
-                self.interfacial_distance / c_norm_proj,
-            ]
-        )
-        interface_vacuum_len = self.vacuum / c_norm_proj
-
-        interface_c_len = interface_structure_len + interface_vacuum_len
-
-        n_unit_cell = np.ceil(interface_c_len / oriented_bulk_c).astype(int)
-        new_interface_c_len = oriented_bulk_c * n_unit_cell
-        new_vacuum_len = new_interface_c_len - interface_structure_len
-
-        center_shift = np.ceil(
-            np.ceil(new_vacuum_len / oriented_bulk_c) / 2
-        ).astpye(int)
-        print(center_shift)
-        center_shift *= oriented_bulk_c / new_interface_c_len
-
-        sub_M = self.substrate.transformation_matrix
-        layer_M = np.eye(3).astype(int)
-        layer_M[-1, -1] = n_unit_cell
-        interface_M = layer_M @ self.match.substrate_sl_transform @ sub_M
-
-        print(layer_M @ sub_M)
-
-        interface_matrix = np.vstack(
-            [sub_matrix[:2], new_interface_c_len * (sub_c / sub_c_len)]
-        )
-        interface_lattice = Lattice(matrix=interface_matrix)
-        frac_int_distance_shift = np.array(
-            [0, 0, self.interfacial_distance]
-        ).dot(interface_lattice.inv_matrix)
-        interface_inv_matrix = interface_lattice.inv_matrix
-
-        sub_interface_coords = strained_sub_coords.dot(interface_inv_matrix)
-        sub_interface_coords[:, -1] -= sub_interface_coords[:, -1].min()
-
-        film_interface_coords = strained_film_coords.dot(interface_inv_matrix)
-        film_interface_coords[:, -1] -= film_interface_coords[:, -1].min()
-        film_interface_coords[:, -1] += sub_interface_coords[:, -1].max()
-        film_interface_coords += frac_int_distance_shift
-
-        interface_coords = np.r_[sub_interface_coords, film_interface_coords]
-        interface_species = strained_sub.species + strained_film.species
-        interface_site_properties = {
-            key: strained_sub.site_properties[key]
-            + strained_film.site_properties[key]
-            for key in strained_sub.site_properties
-        }
-        interface_site_properties["is_sub"] = np.array(
-            [True] * len(strained_sub) + [False] * len(strained_film)
-        )
-        interface_site_properties["is_film"] = np.array(
-            [False] * len(strained_sub) + [True] * len(strained_film)
-        )
-
-        self.interface_height = sub_interface_coords[:, -1].max() + (
-            0.5 * frac_int_distance_shift[-1]
-        )
-
-        non_ortho_interface_struc = Structure(
-            lattice=interface_lattice,
-            species=interface_species,
-            coords=interface_coords,
-            to_unit_cell=True,
-            coords_are_cartesian=False,
-            site_properties=interface_site_properties,
-        )
-        non_ortho_interface_struc.sort()
-
-        if self.center:
-            non_ortho_interface_struc.translate_sites(
-                indices=range(len(non_ortho_interface_struc)),
-                vector=[0.0, 0.0, center_shift],
-                frac_coords=True,
-                to_unit_cell=True,
-            )
-            self.interface_height += center_shift
-
-        frac_coords = non_ortho_interface_struc.frac_coords
-        is_sub = np.array(non_ortho_interface_struc.site_properties["is_sub"])
-        sub_frac_coords = frac_coords[is_sub]
-        # max_c = sub_frac_coords[np.argmax(sub_frac_coords[:, -1])]
-        max_c = np.max(sub_frac_coords[:, -1])
-
-        # ortho_interface_struc = interface_struc.copy()
-        cart_shift = np.array([0.0, 0.0, max_c]).dot(
-            non_ortho_interface_struc.lattice.matrix
-        )
-        cart_shift[-1] = 0.0
-        proj_c = np.dot(
-            self.substrate.surface_normal,
-            non_ortho_interface_struc.lattice.matrix[-1],
-        )
-        ortho_c = self.substrate.surface_normal * proj_c
-        new_matrix = np.vstack(
-            [
-                non_ortho_interface_struc.lattice.matrix[:2],
-                ortho_c,
-            ]
-        )
-
-        ortho_interface_struc = Structure(
-            lattice=Lattice(new_matrix),
-            species=non_ortho_interface_struc.species,
-            coords=non_ortho_interface_struc.cart_coords,
-            site_properties=non_ortho_interface_struc.site_properties,
-            to_unit_cell=True,
-            coords_are_cartesian=True,
-        )
-
-        ortho_interface_struc.translate_sites(
-            indices=range(len(ortho_interface_struc)),
-            vector=-cart_shift,
-            frac_coords=False,
-            to_unit_cell=True,
-        )
-        # non_ortho_interface_struc.translate_sites(
-        #     indices=range(len(non_ortho_interface_struc)),
-        #     vector=-np.array([max_c[0], max_c[1], 0.0]),
-        #     frac_coords=True,
-        #     to_unit_cell=True,
-        # )
-
-        film_inds = np.where(
-            non_ortho_interface_struc.site_properties["is_film"]
-        )[0]
-        sub_inds = np.where(
-            non_ortho_interface_struc.site_properties["is_sub"]
-        )[0]
-
-        non_ortho_film_structure = non_ortho_interface_struc.copy()
-        non_ortho_film_structure.remove_sites(sub_inds)
-
-        non_ortho_sub_structure = non_ortho_interface_struc.copy()
-        non_ortho_sub_structure.remove_sites(film_inds)
-
-        ortho_film_structure = ortho_interface_struc.copy()
-        ortho_film_structure.remove_sites(sub_inds)
-
-        ortho_sub_structure = ortho_interface_struc.copy()
-        ortho_sub_structure.remove_sites(film_inds)
-
-        non_ortho_interface_atoms = AseAtomsAdaptor().get_atoms(
-            non_ortho_interface_struc
-        )
-        ortho_interface_atoms = AseAtomsAdaptor().get_atoms(
-            ortho_interface_struc
-        )
-        non_ortho_sub_atoms = AseAtomsAdaptor().get_atoms(
-            non_ortho_sub_structure
-        )
-        non_ortho_film_atoms = AseAtomsAdaptor().get_atoms(
-            non_ortho_film_structure
-        )
-        ortho_sub_atoms = AseAtomsAdaptor().get_atoms(ortho_sub_structure)
-        ortho_film_atoms = AseAtomsAdaptor().get_atoms(ortho_film_structure)
-
-        return (
-            non_ortho_interface_struc,
-            non_ortho_sub_structure,
-            non_ortho_film_structure,
-            non_ortho_interface_atoms,
-            non_ortho_sub_atoms,
-            non_ortho_film_atoms,
-            ortho_interface_struc,
-            ortho_sub_structure,
-            ortho_film_structure,
-            ortho_interface_atoms,
-            ortho_sub_atoms,
-            ortho_film_atoms,
-        )
-
-    def _stack_interface_old(self):
-        strained_sub = self._strained_sub
-        strained_film = self._strained_film
-
-        sub_matrix = strained_sub.lattice.matrix
-        sub_c = deepcopy(sub_matrix[-1])
-
-        strained_sub_coords = deepcopy(strained_sub.cart_coords)
-        strained_film_coords = deepcopy(strained_film.cart_coords)
-        strained_sub_frac_coords = deepcopy(strained_sub.frac_coords)
-        strained_film_frac_coords = deepcopy(strained_film.frac_coords)
-
-        min_sub_coords = np.min(strained_sub_frac_coords[:, -1])
-        max_sub_coords = np.max(strained_sub_frac_coords[:, -1])
-        min_film_coords = np.min(strained_film_frac_coords[:, -1])
-        max_film_coords = np.max(strained_film_frac_coords[:, -1])
-
-        sub_c_len = np.linalg.norm(strained_sub.lattice.matrix[-1])
-        film_c_len = np.linalg.norm(strained_film.lattice.matrix[-1])
-        interface_c_len = np.sum(
-            [
-                (max_sub_coords - min_sub_coords) * sub_c_len,
-                (max_film_coords - min_film_coords) * film_c_len,
-                self.vacuum,
-                self.interfacial_distance,
-            ]
-        )
-        frac_int_distance = self.interfacial_distance / interface_c_len
-
-        interface_matrix = np.vstack(
-            [sub_matrix[:2], interface_c_len * (sub_c / sub_c_len)]
-        )
-        interface_lattice = Lattice(matrix=interface_matrix)
-        interface_inv_matrix = interface_lattice.inv_matrix
-
-        sub_interface_coords = strained_sub_coords.dot(interface_inv_matrix)
-        sub_interface_coords[:, -1] -= sub_interface_coords[:, -1].min()
-
-        film_interface_coords = strained_film_coords.dot(interface_inv_matrix)
-        film_interface_coords[:, -1] -= film_interface_coords[:, -1].min()
-        film_interface_coords[:, -1] += (
-            sub_interface_coords[:, -1].max() + frac_int_distance
-        )
-
-        interface_coords = np.r_[sub_interface_coords, film_interface_coords]
-        interface_species = strained_sub.species + strained_film.species
-        interface_site_properties = {
-            key: strained_sub.site_properties[key]
-            + strained_film.site_properties[key]
-            for key in strained_sub.site_properties
-        }
-        interface_site_properties["is_sub"] = np.array(
-            [True] * len(strained_sub) + [False] * len(strained_film)
-        )
-        interface_site_properties["is_film"] = np.array(
-            [False] * len(strained_sub) + [True] * len(strained_film)
-        )
-
-        self.interface_height = sub_interface_coords[:, -1].max() + (
-            0.5 * frac_int_distance
-        )
-
-        interface_struc = Structure(
-            lattice=interface_lattice,
-            species=interface_species,
-            coords=interface_coords,
-            to_unit_cell=True,
-            coords_are_cartesian=False,
-            site_properties=interface_site_properties,
-        )
-        interface_struc.sort()
-
-        if self.center:
-            interface_struc.translate_sites(
-                indices=range(len(interface_struc)),
-                vector=[0, 0, 0.5 - self.interface_height],
-            )
-            self.interface_height = 0.5
-
-        film_inds = np.where(interface_struc.site_properties["is_film"])[0]
-        sub_inds = np.where(interface_struc.site_properties["is_sub"])[0]
-
-        film_part = interface_struc.copy()
-        film_part.remove_sites(sub_inds)
-
-        sub_part = interface_struc.copy()
-        sub_part.remove_sites(film_inds)
-
-        return interface_struc, sub_part, film_part
+        return film_structure, film_atoms, sub_structure, sub_atoms
 
     @property
     def _metallic_elements(self):
@@ -2222,7 +2023,9 @@ class Interface:
 
         return sub_dict
 
-    def _generate_sc_for_interface_view(self, struc, transformation_matrix):
+    def _generate_sc_for_interface_view(
+        self, struc, transformation_matrix
+    ) -> Tuple[Structure, np.ndarray]:
         plot_struc = Structure(
             lattice=struc.lattice,
             species=["H"],
@@ -2246,7 +2049,7 @@ class Interface:
         facecolor,
         edgecolor,
         is_film=False,
-    ):
+    ) -> None:
         cart_coords = (
             zero_coord + supercell_shift + cell_vetices.dot(slab_matrix)
         )
@@ -2283,7 +2086,7 @@ class Interface:
         output: str = "interface_view.png",
         dpi: int = 400,
         show_in_colab: bool = False,
-    ):
+    ) -> None:
         """
         This function will show the relative alignment of the film and substrate supercells by plotting the in-plane unit cells on top of each other
 

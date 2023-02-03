@@ -1265,10 +1265,22 @@ class Interface:
             return relaxation_shifts
         else:
             raise ValueError(
-                "The termination and interfacial distances must be the same"
+                "The surface terminations and interfacial distances must be the same"
             )
 
     def relax_interface(self, relaxed_structure_file: str) -> None:
+        """
+        This function will shift the positions of the atoms near the interface coorresponding to the
+        atomic positions from a relaxed interface. This especially usefull when running DFT on large interface
+        structures because the atomic positions can be relaxed using an interface with less layers, and
+        then the relax positions can be applied to a much larger interface for a static DFT calculation.
+
+        Examples:
+            >>> interface.relax_interface(relax_structure_file="CONTCAR")
+
+        Args:
+            relaxed_structure_file: File path to the relax structure (CONTCAR/POSCAR for now)
+        """
         relaxation_shifts = self._load_relaxed_structure(
             relaxed_structure_file
         )

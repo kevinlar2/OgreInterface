@@ -664,8 +664,7 @@ class Surface:
         bottom: bool = True,
         top: bool = True,
         passivated_struc: Union[str, None] = None,
-        inplace: bool = True,
-    ) -> Union[List[Structure], None]:
+    ) -> None:
         """
         This function will apply pseudohydrogen passivation to all broken bonds on the surface and assign charges to the pseudo-hydrogens based
         on the equations provided in https://doi.org/10.1103/PhysRevB.85.195328. The identification of the local coordination environments is
@@ -673,25 +672,16 @@ class Surface:
 
         Examples:
             Initial passivation:
-            >>> surface.passivate(bottom=True, top=True, inplace=True)
+            >>> surface.passivate(bottom=True, top=True)
 
             Relaxed passivation from a CONTCAR file:
-            >>> surface.passivate(bottom=True, top=True, passivated_struc="CONTCAR", inplace=True)
-
-            Non-In-place passivation:
-            >>> orthogonal_pas_structure, non_orthogonal_pas_structure = surface.passivate(bottom=True, top=True, inplace=False)
-
-
+            >>> surface.passivate(bottom=True, top=True, passivated_struc="CONTCAR")
 
         Args:
             bottom: Determines if the bottom of the structure should be passivated
             top: Determines of the top of the structure should be passivated
             passivated_struc: File path to the CONTCAR/POSCAR file that contains the relaxed atomic positions of the pseudo-hydrogens.
                 This structure must have the same miller index and termination index.
-            inplace: Determines if the pseudo-hydrogens should be added in-place to the structures or if new structures should be returned.
-
-        Returns:
-            If inplace = False, the passivated orthogonal and non_orthogonal structures are returned
         """
         bond_dict = self._get_bond_dict()
 
@@ -702,11 +692,6 @@ class Surface:
 
         ortho_slab = self._orthogonal_slab_structure.copy()
         non_ortho_slab = self._non_orthogonal_slab_structure.copy()
-
-        # ortho_slab.add_site_property("hydrogen_str", [""] * len(ortho_slab))
-        # non_ortho_slab.add_site_property(
-        #     "hydrogen_str", [""] * len(non_ortho_slab)
-        # )
 
         if top:
             for bulk_equiv, bonds in bond_dict["top"].items():
@@ -766,12 +751,8 @@ class Surface:
         non_ortho_slab.sort()
 
         self._passivated = True
-
-        if inplace:
-            self._orthogonal_slab_structure = ortho_slab
-            self._non_orthogonal_slab_structure = non_ortho_slab
-        else:
-            return ortho_slab, non_ortho_slab
+        self._orthogonal_slab_structure = ortho_slab
+        self._non_orthogonal_slab_structure = non_ortho_slab
 
     def get_termination(self):
         """

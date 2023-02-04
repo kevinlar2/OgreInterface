@@ -146,12 +146,11 @@ class MillerSearch(object):
 
         return output.astype(int)
 
-    def _get_unique_miller_indices(self, struc, max_index):
+    def _get_unique_miller_indices(self, struc: Structure, max_index: int):
         struc_sg = SpacegroupAnalyzer(struc)
         lattice = struc.lattice
-        recip_lattice = lattice.reciprocal_lattice_crystallographic
-        symmops = struc_sg.get_symmetry_operations(cartesian=False)
-        recip_symmops = lattice.get_recp_symmetry_operation()
+        recip = struc.lattice.reciprocal_lattice_crystallographic
+        symmops = struc_sg.get_point_group_operations(cartesian=False)
         planes = set(list(product(range(-max_index, max_index + 1), repeat=3)))
         planes.remove((0, 0, 0))
 
@@ -166,75 +165,15 @@ class MillerSearch(object):
         planes_dict = {p: [] for p in reduced_planes}
 
         for plane in reduced_planes:
-            if plane in planes_dict.keys():
-                for i, symmop in enumerate(recip_symmops):
-                    origin = symmop.operate((0, 0, 0))
-                    point_out = symmop.operate(plane) - origin
-                    gcd = np.abs(reduce(self._float_gcd, point_out))
-                    point_out = tuple((point_out / gcd).astype(int))
-                    planes_dict[plane].append(point_out)
-                    if point_out != plane:
-                        if point_out in planes_dict.keys():
-                            del planes_dict[point_out]
-
-        unique_planes = []
-
-        for k in planes_dict:
-            equivalent_planes = np.array(list(set(planes_dict[k])))
-            diff = np.abs(np.sum(np.sign(equivalent_planes), axis=1))
-            like_signs = equivalent_planes[diff == np.max(diff)]
-            if len(like_signs) == 1:
-                unique_planes.append(like_signs[0])
-            else:
-                first_max = like_signs[
-                    np.abs(like_signs)[:, 0]
-                    == np.max(np.abs(like_signs)[:, 0])
-                ]
-                if len(first_max) == 1:
-                    unique_planes.append(first_max[0])
-                else:
-                    second_max = first_max[
-                        np.abs(first_max)[:, 1]
-                        == np.max(np.abs(first_max)[:, 1])
-                    ]
-                    if len(second_max) == 1:
-                        unique_planes.append(second_max[0])
-                    else:
-                        unique_planes.append(
-                            second_max[
-                                np.argmax(np.sign(second_max).sum(axis=1))
-                            ]
-                        )
-
-        unique_planes = np.vstack(unique_planes)
-        sorted_planes = sorted(
-            unique_planes, key=lambda x: (np.linalg.norm(x), -np.sign(x).sum())
-        )
-
-        return np.vstack(sorted_planes)
-
-    def _get_unique_miller_indices_old(self, struc, max_index):
-        struc_sg = SpacegroupAnalyzer(struc)
-        # struc_conv_cell = struc_sg.get_conventional_standard_structure()
-        symmops = struc_sg.get_symmetry_operations(cartesian=False)
-        planes = set(list(product(range(-max_index, max_index + 1), repeat=3)))
-        planes.remove((0, 0, 0))
-
-        reduced_planes = []
-        for plane in planes:
-            gcd = np.abs(reduce(self._float_gcd, plane))
-            reduced_plane = tuple((plane / gcd).astype(int))
-            reduced_planes.append(reduced_plane)
-
-        reduced_planes = set(reduced_planes)
-
-        planes_dict = {p: [] for p in reduced_planes}
-
-        for plane in reduced_planes:
+            cart_vec = recip.get_cartesian_coords(plane)
+            frac_vec = lattice.get_fractional_coords(cart_vec)
             if plane in planes_dict.keys():
                 for i, symmop in enumerate(symmops):
-                    origin = symmop.operate((0, 0, 0))
-                    point_out = symmop.operate(plane) - origin
+                    frac_point_out = symmop.operate(frac_vec)
+                    cart_point_out = lattice.get_cartesian_coords(
+                        frac_point_out
+                    )
+                    point_out = recip.get_fractional_coords(cart_point_out)
                     gcd = np.abs(reduce(self._float_gcd, point_out))
                     point_out = tuple((point_out / gcd).astype(int))
                     planes_dict[plane].append(point_out)

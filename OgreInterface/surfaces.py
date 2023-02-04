@@ -840,7 +840,6 @@ class Interface:
     def get_interface(
         self,
         orthogonal: bool = True,
-        return_structure: bool = True,
         return_atoms: bool = False,
     ) -> Union[Atoms, Structure]:
         """
@@ -848,35 +847,25 @@ class Interface:
 
         Args:
             orthogonal: Determines if the orthogonalized structure is returned
-            return_structure: Determines if the Pymatgen Structure object is returned
-            return_atoms: Determines if the ASE Atoms object is returned
+            return_atoms: Determines if the ASE Atoms object is returned instead of a Pymatgen Structure object (default)
 
         Returns:
             Either a Pymatgen Structure of ASE Atoms object of the interface structure
         """
         if orthogonal:
-            if return_structure and not return_atoms:
-                return self._orthogonal_structure
-            elif return_atoms and not return_structure:
+            if return_atoms:
                 return self._orthogonal_atoms
             else:
-                raise ValueError(
-                    "Please select either return_atoms=True OR return_structure=True to get an ASE atoms object or a Pymatgen Structure object."
-                )
+                return self._orthogonal_structure
         else:
-            if return_structure and not return_atoms:
-                return self._non_orthogonal_structure
-            elif return_atoms and not return_structure:
+            if return_atoms:
                 return self._non_orthogonal_atoms
             else:
-                raise ValueError(
-                    "Please select either return_atoms=True OR return_structure=True to get an ASE atoms object or a Pymatgen Structure object."
-                )
+                return self._non_orthogonal_structure
 
     def get_substrate_supercell(
         self,
         orthogonal: bool = True,
-        return_structure: bool = True,
         return_atoms: bool = False,
     ) -> Union[Atoms, Structure]:
         """
@@ -885,35 +874,25 @@ class Interface:
 
         Args:
             orthogonal: Determines if the orthogonalized structure is returned
-            return_structure: Determines if the Pymatgen Structure object is returned
-            return_atoms: Determines if the ASE Atoms object is returned
+            return_atoms: Determines if the ASE Atoms object is returned instead of a Pymatgen Structure object (default)
 
         Returns:
             Either a Pymatgen Structure of ASE Atoms object of the substrate supercell structure
         """
         if orthogonal:
-            if return_structure and not return_atoms:
-                return self._orthogonal_substrate_structure
-            elif return_atoms and not return_structure:
+            if return_atoms:
                 return self._orthogonal_substrate_atoms
             else:
-                raise ValueError(
-                    "Please select either return_atoms=True OR return_structure=True to get an ASE atoms object or a Pymatgen Structure object."
-                )
+                return self._orthogonal_substrate_structure
         else:
-            if return_structure and not return_atoms:
-                return self._non_orthogonal_substrate_structure
-            elif return_atoms and not return_structure:
+            if return_atoms:
                 return self._non_orthogonal_substrate_atoms
             else:
-                raise ValueError(
-                    "Please select either return_atoms=True OR return_structure=True to get an ASE atoms object or a Pymatgen Structure object."
-                )
+                return self._non_orthogonal_substrate_structure
 
     def get_film_supercell(
         self,
         orthogonal: bool = True,
-        return_structure: bool = True,
         return_atoms: bool = False,
     ) -> Union[Atoms, Structure]:
         """
@@ -922,30 +901,21 @@ class Interface:
 
         Args:
             orthogonal: Determines if the orthogonalized structure is returned
-            return_structure: Determines if the Pymatgen Structure object is returned
-            return_atoms: Determines if the ASE Atoms object is returned
+            return_atoms: Determines if the ASE Atoms object is returned instead of a Pymatgen Structure object (default)
 
         Returns:
             Either a Pymatgen Structure of ASE Atoms object of the film supercell structure
         """
         if orthogonal:
-            if return_structure and not return_atoms:
-                return self._orthogonal_film_structure
-            elif return_atoms and not return_structure:
+            if return_atoms:
                 return self._orthogonal_film_atoms
             else:
-                raise ValueError(
-                    "Please select either return_atoms=True OR return_structure=True to get an ASE atoms object or a Pymatgen Structure object."
-                )
+                return self._orthogonal_film_structure
         else:
-            if return_structure and not return_atoms:
-                return self._non_orthogonal_film_structure
-            elif return_atoms and not return_structure:
+            if return_atoms:
                 return self._non_orthogonal_film_atoms
             else:
-                raise ValueError(
-                    "Please select either return_atoms=True OR return_structure=True to get an ASE atoms object or a Pymatgen Structure object."
-                )
+                return self._non_orthogonal_film_structure
 
     @property
     def area(self) -> float:

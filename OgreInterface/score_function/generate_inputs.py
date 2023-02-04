@@ -2,6 +2,7 @@ from ase.neighborlist import neighbor_list
 from typing import Dict, List, Optional
 from ase import Atoms
 import torch
+import numpy as np
 from OgreInterface.score_function.neighbors import TorchNeighborList
 
 
@@ -57,6 +58,7 @@ def generate_dict_ase(
     charge_dict: Dict[str, float],
     radius_dict: Dict[str, float],
     ns_dict: Dict[str, float],
+    z_shift: float = 10.0,
 ) -> Dict:
     inputs_batch = []
 
@@ -113,6 +115,8 @@ def generate_dict_torch(
     cutoff: float,
     ns_dict: Optional[Dict[str, float]] = None,
     charge_dict: Optional[Dict[str, float]] = None,
+    z_shift: float = 15.0,
+    z_periodic: bool = False,
 ) -> Dict:
 
     tn = TorchNeighborList(cutoff=cutoff)
@@ -124,14 +128,24 @@ def generate_dict_torch(
             atom.get_array("is_film", copy=True).astype(int)
         )
         R = torch.from_numpy(atom.get_positions())
+        z_positions = np.copy(atom.get_positions())
+        z_positions[atom.get_array("is_film"), -1] += z_shift
+
+        R_z = torch.from_numpy(z_positions)
         cell = torch.from_numpy(atom.get_cell().array)
+
+        if z_periodic:
+            pbc = torch.Tensor([True, True, True]).to(dtype=torch.bool)
+        else:
+            pbc = torch.Tensor([True, True, False]).to(dtype=torch.bool)
 
         input_dict = {
             "n_atoms": torch.tensor([atom.get_global_number_of_atoms()]),
             "Z": torch.from_numpy(atom.get_atomic_numbers()),
             "R": R,
+            "R_z": R_z,
             "cell": cell,
-            "pbc": torch.from_numpy(atom.get_pbc()),
+            "pbc": pbc,
             "is_film": is_film,
         }
 
@@ -153,7 +167,14 @@ def generate_dict_torch(
             + input_dict["offsets"]
         )
 
+        Rij_z = (
+            R_z[input_dict["idx_j"]]
+            - R_z[input_dict["idx_i"]]
+            + input_dict["offsets"]
+        )
+
         input_dict["Rij"] = Rij
+        input_dict["Rij_z"] = Rij_z
         input_dict["cell"] = input_dict["cell"].view(-1, 3, 3)
         input_dict["pbc"] = input_dict["pbc"].view(-1, 3)
 

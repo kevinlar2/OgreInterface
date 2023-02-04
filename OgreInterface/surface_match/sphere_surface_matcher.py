@@ -13,6 +13,7 @@ from mpl_toolkits.axes_grid1 import make_axes_locatable
 from scipy.interpolate import RectBivariateSpline, CubicSpline
 from copy import deepcopy
 from itertools import groupby, combinations_with_replacement, product
+from ase import Atoms
 
 
 class SphereSurfaceMatcher:
@@ -42,16 +43,16 @@ class SphereSurfaceMatcher:
         self.sub_part = self.interface._orthogonal_substrate_structure
         self.grid_density_x = grid_density_x
         self.grid_density_y = grid_density_y
-        self.opt_xy_shift = np.zeros(3)
-        self.opt_z_shift = np.zeros(3)
+        self.opt_xy_shift = np.zeros(2)
 
         self.shifts, self.X, self.Y = self._generate_shifts()
         self.z_PES_data = None
 
     def get_optmized_structure(self):
-        opt_shift = self.opt_xy_shift + self.opt_z_shift
-        self.interface.shift_film(
-            shift=opt_shift, fractional=True, inplace=True
+        opt_shift = self.opt_xy_shift
+
+        self.interface.shift_film_inplane(
+            x_shift=opt_shift[0], y_shift=opt_shift[1], fractional=True
         )
 
     def _get_radii(self, radius_dict):
@@ -75,31 +76,43 @@ class SphereSurfaceMatcher:
         grid_y = np.linspace(self.ylim[0], self.ylim[1], self.grid_density_y)
         X, Y = np.meshgrid(grid_x, grid_y)
 
-        shifts = np.c_[X.ravel(), Y.ravel(), np.zeros(X.shape).ravel()]
+        shifts = np.c_[X.ravel(), Y.ravel()]
 
         return shifts, X, Y
 
-    def _get_shifted_atoms(self, shifts):
-        sub_atoms = AseAtomsAdaptor().get_atoms(self.sub_part)
+    def _get_shifted_atoms(self, shifts: np.ndarray) -> List[Atoms]:
+        sub_atoms = self.interface.get_substrate_supercell(return_atoms=True)
         sub_atoms.set_array("is_film", np.zeros(len(sub_atoms)).astype(bool))
-        film_atoms = AseAtomsAdaptor().get_atoms(self.film_part)
+
+        film_atoms = self.interface.get_film_supercell(return_atoms=True)
         film_atoms.set_array("is_film", np.ones(len(film_atoms)).astype(bool))
 
         atoms = [sub_atoms, film_atoms]
 
         for shift in shifts:
-            shifted_atoms = self.interface.shift_film(
-                shift + self.opt_z_shift,
-                fractional=True,
-                inplace=False,
-                return_atoms=True,
+            # Shift in-plane
+            self.interface.shift_film_inplane(
+                x_shift=shift[0], y_shift=shift[1], fractional=True
             )
+
+            # Get inplane shifted atoms
+            shifted_atoms = self.interface.get_interface(
+                orthogonal=True, return_atoms=True
+            )
+
+            # Add the is_film property
             shifted_atoms.set_array(
                 "is_film",
                 self.interface._orthogonal_structure.site_properties[
                     "is_film"
                 ],
             )
+
+            self.interface.shift_film_inplane(
+                x_shift=-shift[0], y_shift=-shift[1], fractional=True
+            )
+
+            # Add atoms to the list
             atoms.append(shifted_atoms)
 
         return atoms
@@ -203,8 +216,10 @@ class SphereSurfaceMatcher:
 
         inputs = self._generate_inputs(atoms_list)
         overlap = self._calculate_overlap(inputs)
+
         sub_overlap = overlap[0]
         film_overlap = overlap[1]
+
         interface_overlap = overlap[2:].reshape(self.X.shape)
 
         Z = (
@@ -270,131 +285,10 @@ class SphereSurfaceMatcher:
             zorder=10,
         )
 
-        self.opt_xy_shift = opt_shift
+        self.opt_xy_shift = opt_shift[:2]
 
         fig.tight_layout()
         fig.savefig(output, bbox_inches="tight")
         plt.close(fig)
 
         return max_Z
-
-    def run_z_shifts_old(
-        self,
-        interfacial_distances: np.ndarray = np.linspace(2.0, 4.0, 101),
-        fontsize: int = 12,
-        output: str = "z_shift.png",
-        shift: bool = True,
-    ) -> float:
-        z_shifts = interfacial_distances - self.d_interface
-        shifts = np.c_[
-            np.zeros((len(z_shifts), 2)), z_shifts
-        ] / np.linalg.norm(self.matrix[-1])
-        inputs = self._generate_inputs(shifts)
-
-        coulomb_energy = self._calculate_coulomb(inputs)
-        born_energy = self._calculate_born(inputs)
-
-        sub_coulomb_energy = coulomb_energy[0]
-        film_coulomb_energy = coulomb_energy[1]
-        interface_coulomb_energy = coulomb_energy[2:]
-
-        sub_born_energy = born_energy[0]
-        film_born_energy = born_energy[1]
-        interface_born_energy = born_energy[2:]
-
-        # pmg_coulomb_adh_energy = (
-        #     sub_pmg_coulomb_energy + film_pmg_coulomb_energy
-        # ) - interface_pmg_coulomb_energy
-        coulomb_adh_energy = (
-            sub_coulomb_energy + film_coulomb_energy
-        ) - interface_coulomb_energy
-        born_adh_energy = (
-            sub_born_energy + film_born_energy
-        ) - interface_born_energy
-
-        both_adh_energy = born_adh_energy + coulomb_adh_energy
-        # both_pmg_adh_energy = born_adh_energy + pmg_coulomb_adh_energy
-
-        new_x = np.linspace(
-            interfacial_distances.min(), interfacial_distances.max(), 500
-        )
-        new_z_shifts = np.linspace(
-            shifts[:, -1].min(), shifts[:, -1].max(), 500
-        )
-        cs = CubicSpline(interfacial_distances, both_adh_energy)
-        new_y = cs(new_x)
-
-        max_ind = np.argmax(new_y)
-        max_x = new_x[max_ind]
-        max_y = new_y[max_ind]
-        max_shift = new_z_shifts[max_ind]
-
-        if shift:
-            self.interface.shift_film(
-                shift=[0, 0, max_shift], fractional=True, inplace=True
-            )
-
-        fig, ax = plt.subplots(figsize=(4, 4), dpi=400)
-        ax.set_xlabel("Interfacial Distance ($\\AA$)", fontsize=fontsize)
-        ax.set_ylabel("$E_{adh}$", fontsize=fontsize)
-        ax.plot(new_x, new_y, color="black")
-        ax.scatter([max_x], [max_y], color="black", marker="o", s=20)
-        ax.set_xlim(interfacial_distances.min(), interfacial_distances.max())
-
-        fig.tight_layout(pad=0.4)
-        fig.savefig(output)
-        plt.close(fig)
-
-        return max_y
-
-    def run_z_shifts(
-        self,
-        interfacial_distances: np.ndarray = np.linspace(2.0, 4.0, 101),
-        fontsize: int = 12,
-        output: str = "z_shift.png",
-        shift: bool = True,
-    ) -> float:
-        z_shifts = interfacial_distances - self.d_interface
-        shifts = np.c_[
-            np.zeros((len(z_shifts), 2)), z_shifts
-        ] / np.linalg.norm(self.matrix[-1])
-        atoms_list = self._get_shifted_atoms_z(shifts)
-        inputs = self._generate_inputs(atoms_list)
-
-        coulomb_energy = self._calculate_coulomb(inputs)
-        born_energy = self._calculate_born(inputs)
-
-        sub_film_coulomb_energy = coulomb_energy[0]
-        interface_coulomb_energy = coulomb_energy[1:]
-
-        sub_film_born_energy = born_energy[0]
-        interface_born_energy = born_energy[1:]
-
-        coulomb_adh_energy = sub_film_coulomb_energy - interface_coulomb_energy
-        born_adh_energy = sub_film_born_energy - interface_born_energy
-
-        both_adh_energy = born_adh_energy + coulomb_adh_energy
-
-        max_ind = np.argmax(both_adh_energy)
-        max_x = interfacial_distances[max_ind]
-        max_y = both_adh_energy[max_ind]
-        max_shift = shifts[max_ind]
-
-        self.opt_z_shift = max_shift
-
-        fig, ax = plt.subplots(figsize=(4, 4), dpi=400)
-        ax.set_xlabel("Interfacial Distance ($\\AA$)", fontsize=fontsize)
-        ax.set_ylabel("$E_{adh}$", fontsize=fontsize)
-        ax.plot(
-            interfacial_distances,
-            both_adh_energy,
-            color="black",
-        )
-        ax.scatter([max_x], [max_y], color="black", marker="o", s=20)
-        ax.set_xlim(interfacial_distances.min(), interfacial_distances.max())
-
-        fig.tight_layout(pad=0.4)
-        fig.savefig(output)
-        plt.close(fig)
-
-        return max_y

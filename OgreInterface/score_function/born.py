@@ -41,6 +41,7 @@ class EnergyBorn(nn.Module):
         self,
         inputs: Dict[str, torch.Tensor],
         r0_dict: Dict[Tuple[int, int, int, int], float],
+        z_shift: bool = False,
     ) -> Dict[str, torch.Tensor]:
         """
         Compute the Born repulsion energy.
@@ -49,14 +50,18 @@ class EnergyBorn(nn.Module):
         Returns:
             dict(str, torch.Tensor): results with Coulomb energy.
         """
+        if z_shift:
+            z_str = "_z"
+        else:
+            z_str = ""
+
         q = inputs["partial_charges"].squeeze(-1)
         z = inputs["Z"]
 
         ns = inputs["ns"]
-        # r0s = inputs["r0s"]
         idx_m = inputs["idx_m"]
 
-        r_ij = inputs["Rij"]
+        r_ij = inputs[f"Rij{z_str}"]
         idx_i = inputs["idx_i"]
         idx_j = inputs["idx_j"]
         is_film = inputs["is_film"]

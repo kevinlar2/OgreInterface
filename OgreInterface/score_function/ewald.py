@@ -1,5 +1,5 @@
 from OgreInterface.score_function.scatter import scatter_add
-from typing import Dict
+from typing import Dict, Optional
 import numpy as np
 import torch.nn as nn
 import torch
@@ -23,6 +23,7 @@ class EnergyEwald(nn.Module):
         self,
         alpha: float,
         k_max: int,
+        cutoff: Optional[float] = None,
     ):
         super(EnergyEwald, self).__init__()
 
@@ -32,6 +33,9 @@ class EnergyEwald(nn.Module):
 
         # TODO: automatic computation of alpha
         self.register_buffer("alpha", torch.Tensor([alpha]))
+
+        cutoff = torch.tensor(cutoff)
+        self.register_buffer("cutoff", cutoff)
 
         # Set up lattice vectors
         self.k_max = k_max
@@ -55,25 +59,31 @@ class EnergyEwald(nn.Module):
         return kvecs
 
     def forward(
-        self, inputs: Dict[str, torch.Tensor]
+        self, inputs: Dict[str, torch.Tensor], z_shift: bool = False
     ) -> Dict[str, torch.Tensor]:
         """
         Compute the Coulomb energy of the periodic system.
         Args:
             inputs (dict(str,torch.Tensor)): Input batch.
+            z_shift: Determines if z_shifted film positions are used
         Returns:
             dict(str, torch.Tensor): results with Coulomb energy.
         """
+        if z_shift:
+            z_str = "_z"
+        else:
+            z_str = ""
+
         q = inputs["partial_charges"].squeeze(-1)
         idx_m = inputs["idx_m"]
 
-        r_ij = inputs["Rij"]
+        r_ij = inputs[f"Rij{z_str}"]
         idx_i = inputs["idx_i"]
         idx_j = inputs["idx_j"]
 
         d_ij = torch.norm(r_ij, dim=1)
 
-        positions = inputs["R"]
+        positions = inputs[f"R{z_str}"]
         cell = inputs["cell"]
 
         n_atoms = q.shape[0]
@@ -120,7 +130,18 @@ class EnergyEwald(nn.Module):
         # Combine functions and multiply with inverse distance
         f_r = f_erfc / d_ij
 
-        potential_ij = q[idx_i] * q[idx_j] * f_r
+        f_erfc_cutoff = torch.erfc(torch.sqrt(self.alpha) * self.cutoff)
+        f_r_cutoff = f_erfc_cutoff / self.cutoff
+
+        potential_ij = q[idx_i] * q[idx_j] * (f_r - f_r_cutoff)
+        # potential_ij = q[idx_i] * q[idx_j] * f_r
+
+        if self.cutoff is not None:
+            potential_ij = torch.where(
+                d_ij <= self.cutoff,
+                potential_ij,
+                torch.zeros_like(potential_ij),
+            )
 
         y = scatter_add(potential_ij, idx_i, dim_size=n_atoms)
         y = scatter_add(y, idx_m, dim_size=n_molecules)

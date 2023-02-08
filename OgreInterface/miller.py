@@ -86,12 +86,9 @@ class MillerSearch(object):
         self.max_angle_strain = max_angle_strain
         self.max_linear_strain = max_linear_strain
         self.max_area = max_area
-        print("Substrate:")
         self.substrate_inds = self._get_unique_miller_indices(
             self.substrate, self.max_substrate_index
         )
-        print("")
-        print("Film:")
         self.film_inds = self._get_unique_miller_indices(
             self.film, self.max_film_index
         )

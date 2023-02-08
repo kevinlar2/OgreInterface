@@ -154,11 +154,15 @@ class ZurMcGill:
                 )
 
                 total_film_transforms = np.repeat(
-                    np.eye(3).reshape(1, 3, 3).astype(int), n_matches, axis=0
+                    np.round(np.eye(3)).reshape(1, 3, 3).astype(int),
+                    n_matches,
+                    axis=0,
                 )
                 total_film_transforms[:, :2, :2] = eq_total_film_transforms_2d
                 total_sub_transforms = np.repeat(
-                    np.eye(3).reshape(1, 3, 3).astype(int), n_matches, axis=0
+                    np.round(np.eye(3)).reshape(1, 3, 3).astype(int),
+                    n_matches,
+                    axis=0,
                 )
                 total_sub_transforms[:, :2, :2] = eq_total_sub_transforms_2d
 
@@ -356,12 +360,14 @@ class ZurMcGill:
         x = np.c_[factors, upper_right]
 
         matrices = (
-            np.c_[
-                x[:, 0],
-                x[:, 2],
-                np.zeros(len(x)),
-                x[:, 1],
-            ]
+            np.round(
+                np.c_[
+                    x[:, 0],
+                    x[:, 2],
+                    np.zeros(len(x)),
+                    x[:, 1],
+                ]
+            )
             .reshape((-1, 2, 2))
             .astype(int)
         )
@@ -373,7 +379,7 @@ def reduce_vectors_zur_and_mcgill(vectors: np.ndarray) -> Iterable[np.ndarray]:
     n_vectors = len(vectors)
     reduced = np.zeros(n_vectors).astype(bool)
     mats = np.repeat(
-        np.eye(2).reshape((1, 2, 2)).astype(int), n_vectors, axis=0
+        np.round(np.eye(2)).reshape((1, 2, 2)).astype(int), n_vectors, axis=0
     )
 
     while not reduced.all():

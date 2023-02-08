@@ -226,8 +226,8 @@ class SurfaceGenerator:
     def _get_point_group_operations(self):
         sg = SpacegroupAnalyzer(self.bulk_structure)
         point_group_operations = sg.get_point_group_operations(cartesian=False)
-        operation_array = np.array(
-            [p.rotation_matrix for p in point_group_operations]
+        operation_array = np.round(
+            np.array([p.rotation_matrix for p in point_group_operations])
         ).astype(np.int8)
         unique_operations = np.unique(operation_array, axis=0)
 
@@ -838,14 +838,18 @@ class InterfaceGenerator:
                 film_scale_factors.append(match.film_sl_scale_factors)
                 sub_scale_factors.append(match.substrate_sl_scale_factors)
 
-            film_basis_vectors = np.vstack(film_basis_vectors).astype(np.int8)
-            sub_basis_vectors = np.vstack(sub_basis_vectors).astype(np.int8)
-            film_scale_factors = np.concatenate(film_scale_factors).astype(
+            film_basis_vectors = np.round(
+                np.vstack(film_basis_vectors)
+            ).astype(np.int8)
+            sub_basis_vectors = np.round(np.vstack(sub_basis_vectors)).astype(
                 np.int8
             )
-            sub_scale_factors = np.concatenate(sub_scale_factors).astype(
-                np.int8
-            )
+            film_scale_factors = np.round(
+                np.concatenate(film_scale_factors)
+            ).astype(np.int8)
+            sub_scale_factors = np.round(
+                np.concatenate(sub_scale_factors)
+            ).astype(np.int8)
 
             film_map = self._get_miller_index_map(
                 self.film.point_group_operations, film_basis_vectors

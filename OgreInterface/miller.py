@@ -1,5 +1,6 @@
 from OgreInterface.generate import SurfaceGenerator
 from OgreInterface.lattice_match import ZurMcGill
+from OgreInterface import utils
 
 from pymatgen.core.structure import Structure
 from pymatgen.io.ase import AseAtomsAdaptor
@@ -129,8 +130,7 @@ class MillerSearch(object):
         w = uvtw[-1]
 
         output = np.array([u, v, w])
-        gcd = np.abs(reduce(self._float_gcd, output))
-        output = output / gcd
+        output = utils._get_reduced_vector(output)
 
         return output.astype(int)
 
@@ -141,8 +141,7 @@ class MillerSearch(object):
         w = uvw[-1]
 
         output = np.array([u, v, t, w])
-        gcd = np.abs(reduce(self._float_gcd, output))
-        output /= gcd
+        output = utils._get_reduced_vector(output)
 
         return output.astype(int)
 
@@ -156,26 +155,24 @@ class MillerSearch(object):
 
         reduced_planes = []
         for plane in planes:
-            gcd = np.abs(reduce(self._float_gcd, plane))
-            reduced_plane = tuple((plane / gcd).astype(int))
-            reduced_planes.append(reduced_plane)
+            reduced_plane = utils._get_reduced_vector(
+                np.array(plane).astype(float)
+            )
+            reduced_plane = reduced_plane.astype(int)
+            reduced_planes.append(tuple(reduced_plane))
 
         reduced_planes = set(reduced_planes)
 
         planes_dict = {p: [] for p in reduced_planes}
 
         for plane in reduced_planes:
-            cart_vec = recip.get_cartesian_coords(plane)
-            frac_vec = lattice.get_fractional_coords(cart_vec)
+            frac_vec = np.array(plane).dot(recip.metric_tensor)
             if plane in planes_dict.keys():
                 for i, symmop in enumerate(symmops):
-                    frac_point_out = symmop.operate(frac_vec)
-                    cart_point_out = lattice.get_cartesian_coords(
-                        frac_point_out
-                    )
-                    point_out = recip.get_fractional_coords(cart_point_out)
-                    gcd = np.abs(reduce(self._float_gcd, point_out))
-                    point_out = tuple((point_out / gcd).astype(int))
+                    frac_point_out = symmop.apply_rotation_only(frac_vec)
+                    point_out = frac_point_out.dot(lattice.metric_tensor)
+                    point_out = utils._get_reduced_vector(point_out)
+                    point_out = tuple(point_out.astype(int))
                     planes_dict[plane].append(point_out)
                     if point_out != plane:
                         if point_out in planes_dict.keys():

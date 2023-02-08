@@ -124,7 +124,7 @@ def _get_reduced_vector(vector: np.ndarry) -> np.ndarray:
     vector /= abs_b[abs_b > 0.001].min()
     vector /= np.abs(reduce(_float_gcd, vector))
 
-    return vector
+    return np.round(vector)
 
 
 def _float_gcd(a, b, rtol=1e-05, atol=1e-08):

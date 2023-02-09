@@ -179,8 +179,8 @@ class ZurMcGill:
                         linear_strain=strains[i],
                         angle_strain=eq_angle_strain[i],
                         film_vectors=self.film_vectors,
-                        film_sl_vectors=eq_reduced_film_sl_vectors,
-                        film_zur_mcgill_transform=eq_film_transforms,
+                        film_sl_vectors=eq_reduced_film_sl_vectors[i],
+                        film_zur_mcgill_transform=eq_film_transforms[i],
                         film_sl_transform=total_film_transforms[i],
                         substrate_vectors=self.substrate_vectors,
                         substrate_sl_vectors=eq_reduced_sub_sl_vectors[i],
@@ -204,6 +204,37 @@ class ZurMcGill:
         )
 
         return sorted_matches
+
+    # def _2d_inv(self, vectors):
+    #     vecs_2d = vectors[:, :, :2]
+    #     dets = np.linalg.det(vecs_2d)
+    #     adj = np.c_[
+    #         vecs_2d[:, 1, 1],
+    #         -vecs_2d[:, 0, 1],
+    #         -vecs_2d[:, 1, 0],
+    #         vecs_2d[:, 0, 0],
+    #     ].reshape(-1, 2, 2)
+
+    #     inv = (1 / dets)[:, None, None] * adj
+
+    #     return inv
+
+    # def _build_a_to_i(self, vectors, a_norms) -> np.ndarray:
+    #     a_vecs = vectors[:, 0]
+    #     a_norm = a_vecs / a_norms[:, None]
+    #     a_to_i = np.c_[
+    #         a_norm[:, 0],
+    #         -a_norm[:, 1],
+    #         np.zeros(a_norms.shape),
+    #         a_norm[:, 1],
+    #         a_norm[:, 0],
+    #         np.zeros(a_norms.shape),
+    #         np.zeros(a_norms.shape),
+    #         np.zeros(a_norms.shape),
+    #         np.ones(a_norms.shape),
+    #     ].reshape(-1, 3, 3)
+
+    #     return a_to_i
 
     def _is_same(
         self, film_vectors: np.ndarray, sub_vectors: np.ndarray
@@ -399,10 +430,10 @@ def reduce_vectors_zur_and_mcgill(vectors: np.ndarray) -> Iterable[np.ndarray]:
             np.einsum(dot_str, uv[:, 1] - uv[:, 0], uv[:, 1] - uv[:, 0])
         )
 
-        c1 = dot < 0
-        c2 = a_norm > b_norm
-        c3 = b_norm > b_plus_a_norm
-        c4 = b_norm > b_minus_a_norm
+        c1 = np.round(dot, 6) < 0.0
+        c2 = np.round(a_norm, 6) > np.round(b_norm, 6)
+        c3 = np.round(b_norm, 6) > np.round(b_plus_a_norm, 6)
+        c4 = np.round(b_norm, 6) > np.round(b_minus_a_norm, 6)
 
         nc1 = np.logical_not(c1)
         nc2 = np.logical_not(c2)
@@ -434,5 +465,22 @@ def reduce_vectors_zur_and_mcgill(vectors: np.ndarray) -> Iterable[np.ndarray]:
 
         vectors[ui] = uv
         mats[ui] = umats
+
+    # Convert all vectors to be right handed
+    final_dot = np.einsum(dot_str, vectors[:, 0], vectors[:, 1])
+    dot_0 = np.isclose(np.round(final_dot, 5), 0.0)
+
+    basis = np.repeat(np.eye(3).reshape(1, 3, 3), vectors.shape[0], axis=0)
+    basis[:, :2] = vectors
+    det = np.linalg.det(basis)
+    lefty = det < 0
+    neg_change = np.logical_and(dot_0, lefty)
+    flip_change = np.logical_and(np.logical_not(dot_0), lefty)
+
+    vectors[neg_change, 1] *= -1
+    mats[neg_change, 1] *= -1
+
+    vectors[flip_change] = vectors[flip_change][:, [1, 0]]
+    mats[flip_change] = mats[flip_change][:, [1, 0]]
 
     return vectors, mats

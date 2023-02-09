@@ -1627,7 +1627,7 @@ class Interface:
         scale_factor = init_volume / strain_volume
 
         # Maintain constant volume
-        # strained_matrix[-1] *= scale_factor
+        strained_matrix[-1] *= scale_factor
 
         strained_film = Structure(
             lattice=Lattice(strained_matrix),

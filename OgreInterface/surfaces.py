@@ -1592,18 +1592,6 @@ class Interface:
         scale = supercell_slab.lattice.c / proj
 
         new_c_matrix = np.vstack([sc_matrix[:2], sub_non_orth_c_norm * scale])
-        new_c_matrix_test = np.vstack(
-            [sub_sc_matrix[:2], sub_non_orth_c_norm * scale]
-        )
-        # print(np.round(new_c_matrix[:2], 4))
-        # print(np.round(new_c_matrix_test[:2], 4))
-        # print("")
-        # print(
-        #     np.sign(np.linalg.det(new_c_matrix))
-        #     == np.sign(np.linalg.det(new_c_matrix_test))
-        # )
-        # # print(np.linalg.det(new_c_matrix_test))
-        # print("")
 
         oriented_film = Structure(
             lattice=Lattice(new_c_matrix),
@@ -1613,7 +1601,6 @@ class Interface:
             to_unit_cell=True,
             site_properties=supercell_slab.site_properties,
         )
-        Poscar(oriented_film).write_file("POSCAR_film_oriented")
 
         strained_matrix = np.vstack(
             [

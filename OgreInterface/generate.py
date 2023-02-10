@@ -900,7 +900,11 @@ class InterfaceGenerator:
 
             sorted_matches = sorted(
                 unique_matches,
-                key=lambda x: (x.area, max(x.linear_strain), x.angle_strain),
+                key=lambda x: (
+                    x.area,
+                    np.max(np.abs(x.linear_strain)),
+                    np.abs(x.angle_strain),
+                ),
             )
 
             return sorted_matches

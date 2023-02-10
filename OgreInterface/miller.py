@@ -278,7 +278,7 @@ class MillerSearch(object):
                     min_area_match = matches[0]
                     area = min_area_match.area
                     strain = min_area_match.linear_strain
-                    misfits[i, j] = strain.max()
+                    misfits[i, j] = np.abs(strain).max()
                     areas[i, j] = area / np.sqrt(substrate[1] * film[1])
 
         self.misfits = np.round(misfits.T, 8)

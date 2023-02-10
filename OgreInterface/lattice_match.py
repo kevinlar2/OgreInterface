@@ -257,9 +257,11 @@ class ZurMcGill:
         a_strain = (film_a_norm[film_inds] / sub_a_norm[sub_inds]) - 1
         b_strain = (film_b_norm[film_inds] / sub_b_norm[sub_inds]) - 1
         angle_strain = (film_angle[film_inds] / sub_angle[sub_inds]) - 1
-        a_same = np.abs(a_strain) < self.max_linear_strain
-        b_same = np.abs(b_strain) < self.max_linear_strain
-        ab_angle_same = np.abs(angle_strain) < self.max_angle_strain
+        a_same = np.round(np.abs(a_strain), 3) <= self.max_linear_strain
+        b_same = np.round(np.abs(b_strain), 3) <= self.max_linear_strain
+        ab_angle_same = (
+            np.round(np.abs(angle_strain), 3) <= self.max_angle_strain
+        )
 
         is_equal = np.c_[a_same, b_same, ab_angle_same].all(axis=1)
 
@@ -308,10 +310,11 @@ class ZurMcGill:
         film_over_sub = prod_array[:, 0] / prod_array[:, 1]
         sub_over_film = prod_array[:, 1] / prod_array[:, 0]
         film_over_sub_inds = (
-            np.abs(self.area_ratio - sub_over_film) < self.max_area_mismatch
+            np.round(np.abs(self.area_ratio - sub_over_film), 5)
+            < self.max_area_mismatch
         )
         sub_over_film_inds = (
-            np.abs((1 / self.area_ratio) - film_over_sub)
+            np.round(np.abs((1 / self.area_ratio) - film_over_sub), 5)
         ) < self.max_area_mismatch
         matching_areas = np.vstack(
             [prod_array[film_over_sub_inds], prod_array[sub_over_film_inds]]

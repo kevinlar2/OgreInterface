@@ -921,6 +921,32 @@ class Interface:
             else:
                 return self._non_orthogonal_film_structure
 
+    def get_substrate_layer_indices(self, layer_from_interface: int):
+        interface = self._non_orthogonal_structure
+        site_props = interface.site_properties
+        is_sub = np.array(site_props["is_sub"])
+        layer_index = np.array(site_props["layer_index"])
+        sub_n_layers = self.substrate.layers - 1
+        rel_layer_index = sub_n_layers - layer_index
+        is_layer = rel_layer_index == layer_from_interface
+
+        return np.where(np.logical_and(is_sub, is_layer))[0]
+
+    def replace_species(
+        self, site_index: int, species_mapping: Dict[str, str]
+    ):
+        species_str = self._orthogonal_structure[site_index].species_string
+
+        if species_str in species_mapping:
+            self._non_orthogonal_structure[site_index].species = Element(
+                species_mapping[species_str]
+            )
+            self._orthogonal_structure[site_index].species = Element(
+                species_mapping[species_str]
+            )
+        else:
+            raise ValueError("Species is not is species mapping")
+
     @property
     def area(self) -> float:
         """
@@ -1871,6 +1897,10 @@ class Interface:
             site_properties=interface_site_properties,
         )
         non_ortho_interface_struc.sort()
+
+        non_ortho_interface_struc.add_site_property(
+            "interface_equivalent", list(range(len(non_ortho_interface_struc)))
+        )
 
         if self.center:
             # Get the new vacuum length, needed for shifting

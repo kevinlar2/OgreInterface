@@ -921,7 +921,26 @@ class Interface:
             else:
                 return self._non_orthogonal_film_structure
 
-    def get_substrate_layer_indices(self, layer_from_interface: int):
+    def get_substrate_layer_indices(
+        self, layer_from_interface: int
+    ) -> np.ndarray:
+        """
+        This function is used to extract the atom-indicies of specific layers of the substrate part of the interface.
+
+        Examples:
+        ```
+        >>> interface.get_substrate_layer_indices(layer_from_interface=0)
+        >>> [234 235 236 237 254 255 256 257]
+        ```
+
+        Args:
+            layer_from_interface: The layer number of the substrate which you would like to get
+                atom-indices for. The layer number is reference from the interface, so layer_from_interface=0
+                would be the layer of the substrate that is at the interface.
+
+        Returns:
+            A numpy array of integer indices corresponding to the atom index of the interface structure
+        """
         interface = self._non_orthogonal_structure
         site_props = interface.site_properties
         is_sub = np.array(site_props["is_sub"])
@@ -932,20 +951,92 @@ class Interface:
 
         return np.where(np.logical_and(is_sub, is_layer))[0]
 
+    def get_film_layer_indices(self, layer_from_interface: int) -> np.ndarray:
+        """
+        This function is used to extract the atom-indicies of specific layers of the film part of the interface.
+
+        Examples:
+        ```
+        >>> interface.get_substrate_layer_indices(layer_from_interface=0)
+        >>> [0 1 2 3 4 5 6 7 8 9 10 11 12]
+        ```
+
+        Args:
+            layer_from_interface: The layer number of the film which you would like to get atom-indices for.
+            The layer number is reference from the interface, so layer_from_interface=0
+            would be the layer of the film that is at the interface.
+
+        Returns:
+            A numpy array of integer indices corresponding to the atom index of the interface structure
+        """
+        interface = self._non_orthogonal_structure
+        site_props = interface.site_properties
+        is_film = np.array(site_props["is_film"])
+        layer_index = np.array(site_props["layer_index"])
+        is_layer = layer_index == layer_from_interface
+
+        return np.where(np.logical_and(is_film, is_layer))[0]
+
     def replace_species(
         self, site_index: int, species_mapping: Dict[str, str]
-    ):
+    ) -> None:
+        """
+        This function can be used to replace the species at a given site in the interface structure
+
+        Examples:
+        ```
+        >>> interface.replace_species(site_index=42, species_mapping={"In": "Zn", "As": "Te"})
+        ```
+
+        Args:
+            site_index: Index of the site to be replaced
+            species_mapping: Dictionary showing the mapping between species.
+                For example if you wanted to replace InAs with ZnTe then the species mapping would
+                be as shown in the example above.
+        """
         species_str = self._orthogonal_structure[site_index].species_string
 
         if species_str in species_mapping:
+            is_sub = self._non_orthogonal_structure[site_index].properties[
+                "is_sub"
+            ]
             self._non_orthogonal_structure[site_index].species = Element(
                 species_mapping[species_str]
             )
             self._orthogonal_structure[site_index].species = Element(
                 species_mapping[species_str]
             )
+
+            if is_sub:
+                sub_iface_equiv = np.array(
+                    self._orthogonal_substrate_structure.site_properties[
+                        "interface_equivalent"
+                    ]
+                )
+                sub_site_ind = np.where(sub_iface_equiv == site_index)[0][0]
+                self._non_orthogonal_substrate_structure[
+                    sub_site_ind
+                ].species = Element(species_mapping[species_str])
+                self._orthogonal_substrate_structure[
+                    sub_site_ind
+                ].species = Element(species_mapping[species_str])
+            else:
+                film_iface_equiv = np.array(
+                    self._orthogonal_film_structure.site_properties[
+                        "interface_equivalent"
+                    ]
+                )
+                film_site_ind = np.where(film_iface_equiv == site_index)[0][0]
+                self._non_orthogonal_film_structure[
+                    film_site_ind
+                ].species = Element(species_mapping[species_str])
+                self._orthogonal_film_structure[
+                    film_site_ind
+                ].species = Element(species_mapping[species_str])
         else:
-            raise ValueError("Species is not is species mapping")
+            raise ValueError(
+                f"Species: {species_str} is not is species mapping"
+            )
 
     @property
     def area(self) -> float:

@@ -331,10 +331,14 @@ class Surface:
                     if hasattr(site.specie, "oxi_state"):
                         oxi = site.specie.oxi_state
 
-                        if oxi < 1.0:
+                        if oxi < 1.0 and oxi != 0.5:
                             H_str = "H" + f"{oxi:.2f}"[1:]
-                        elif oxi > 1.0:
+                        elif oxi == 0.5:
+                            H_str = "H.5"
+                        elif oxi > 1.0 and oxi != 1.5:
                             H_str = "H" + f"{oxi:.2f}"
+                        elif oxi == 1.5:
+                            H_str = "H1.5"
                         else:
                             H_str = "H"
 
@@ -443,10 +447,32 @@ class Surface:
             else:
                 valence += int(orb[2:])
 
-        if oxi_state >= 0:
+        if oxi_state > 0:
             charge = (8 - valence) / coordination
         else:
             charge = ((2 * coordination) - valence) / coordination
+
+        available_charges = np.array(
+            [
+                0.25,
+                0.33,
+                0.42,
+                0.5,
+                0.58,
+                0.66,
+                0.75,
+                1.00,
+                1.25,
+                1.33,
+                1.50,
+                1.66,
+                1.75,
+            ]
+        )
+
+        closest_charge = np.abs(charge - available_charges)
+        min_diff = np.isclose(closest_charge, closest_charge.min())
+        charge = np.min(available_charges[min_diff])
 
         return charge
 
@@ -1487,10 +1513,14 @@ class Interface:
                     if hasattr(site.specie, "oxi_state"):
                         oxi = site.specie.oxi_state
 
-                        if oxi < 1.0:
+                        if oxi < 1.0 and oxi != 0.5:
                             H_str = "H" + f"{oxi:.2f}"[1:]
-                        elif oxi > 1.0:
+                        elif oxi == 0.5:
+                            H_str = "H.5"
+                        elif oxi > 1.0 and oxi != 1.5:
                             H_str = "H" + f"{oxi:.2f}"
+                        elif oxi == 1.5:
+                            H_str = "H1.5"
                         else:
                             H_str = "H"
 

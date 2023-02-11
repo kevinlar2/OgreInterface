@@ -356,14 +356,22 @@ class SurfaceGenerator:
                 proj = np.abs(np.dot(vec, normal_vector) - d_hkl)
                 vec_length = np.linalg.norm(vec)
                 cosine = np.dot(vec / vec_length, normal_vector)
-                candidates.append((uvw, cosine, vec_length, proj))
+                candidates.append(
+                    (
+                        uvw,
+                        np.round(cosine, 5),
+                        np.round(vec_length, 5),
+                        np.round(proj, 5),
+                    )
+                )
                 if abs(abs(cosine) - 1) < 1e-8:
                     # If cosine of 1 is found, no need to search further.
                     break
             # We want the indices with the maximum absolute cosine,
             # but smallest possible length.
             uvw, cosine, l, diff = max(
-                candidates, key=lambda x: (-x[3], x[1], -x[2])
+                candidates,
+                key=lambda x: (-x[3], x[1], -x[2]),
             )
             basis = np.vstack([basis, uvw])
 

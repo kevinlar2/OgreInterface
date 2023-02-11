@@ -16,6 +16,7 @@ from pymatgen.analysis.local_env import CrystalNN
 from typing import Dict, Union, Iterable, List, Tuple
 import matplotlib.pyplot as plt
 from matplotlib.patches import Polygon
+from matplotlib.colors import to_rgb, to_rgba
 from itertools import combinations, groupby
 import numpy as np
 import copy
@@ -442,12 +443,13 @@ class Surface:
         valence = 0
         for orb in electronic_struc:
             if orb[1] == "d":
-                if int(orb[2:]) < 10:
-                    valence += int(orb[2:])
+                pass
+                # if int(orb[2:]) < 10:
+                #     valence += int(orb[2:])
             else:
                 valence += int(orb[2:])
 
-        if oxi_state > 0:
+        if oxi_state >= 0:
             charge = (8 - valence) / coordination
         else:
             charge = ((2 * coordination) - valence) / coordination
@@ -2359,7 +2361,277 @@ class Interface:
             )
             ax.add_patch(poly)
 
+    def _get_image(
+        self,
+        zero_coord,
+        supercell_shift,
+        cell_vetices,
+        slab_matrix,
+        slab_inv_matrix,
+        sc_inv_matrix,
+    ) -> Union[None, np.ndarray]:
+        cart_coords = (
+            zero_coord + supercell_shift + cell_vetices.dot(slab_matrix)
+        )
+        fc = np.round(cart_coords.dot(sc_inv_matrix), 3)
+        center = np.round(
+            np.mean(cart_coords[:-1], axis=0).dot(sc_inv_matrix),
+            3,
+        )
+        center_in = np.logical_and(-0.0001 <= center[:2], center[:2] <= 1.0001)
+
+        x_in = np.logical_and(fc[:, 0] > 0.0, fc[:, 0] < 1.0)
+        y_in = np.logical_and(fc[:, 1] > 0.0, fc[:, 1] < 1.0)
+        point_in = np.logical_and(x_in, y_in)
+
+        if point_in.any() or center_in.all():
+            shifted_zero_coord = zero_coord + supercell_shift
+            shifted_zero_frac = shifted_zero_coord.dot(slab_inv_matrix)
+
+            return np.round(shifted_zero_frac).astype(int)
+        else:
+            return None
+
+    def _get_oriented_cell_and_images(
+        self, strain: bool = True
+    ) -> List[np.ndarray]:
+        sub_struc = self.substrate._orthogonal_slab_structure.copy()
+        sub_a_to_i_op = SymmOp.from_rotation_and_translation(
+            rotation_matrix=self._substrate_a_to_i, translation_vec=np.zeros(3)
+        )
+        sub_struc.apply_operation(sub_a_to_i_op)
+
+        film_struc = self.film._orthogonal_slab_structure.copy()
+        film_a_to_i_op = SymmOp.from_rotation_and_translation(
+            rotation_matrix=self._film_a_to_i, translation_vec=np.zeros(3)
+        )
+        film_struc.apply_operation(film_a_to_i_op)
+
+        if strain:
+            unstrained_film_matrix = film_struc.lattice.matrix
+            strain_matrix = (
+                self._film_supercell.lattice.inv_matrix
+                @ self._strained_sub.lattice.matrix
+            )
+            strained_matrix = unstrained_film_matrix.dot(strain_matrix)
+            film_struc = Structure(
+                lattice=Lattice(strained_matrix),
+                species=film_struc.species,
+                coords=film_struc.frac_coords,
+                to_unit_cell=True,
+                coords_are_cartesian=False,
+                site_properties=film_struc.site_properties,
+            )
+
+        sub_matrix = sub_struc.lattice.matrix
+        film_matrix = film_struc.lattice.matrix
+
+        prim_sub_inv_matrix = sub_struc.lattice.inv_matrix
+        prim_film_inv_matrix = film_struc.lattice.inv_matrix
+
+        sub_sc_matrix = deepcopy(self._substrate_supercell.lattice.matrix)
+        film_sc_matrix = deepcopy(self._film_supercell.lattice.matrix)
+
+        coords = np.array(
+            [
+                [0, 0, 0],
+                [1, 0, 0],
+                [1, 1, 0],
+                [0, 1, 0],
+                [0, 0, 0],
+            ]
+        )
+
+        sc_shifts = np.array(
+            [
+                [0, 0, 0],
+                [1, 0, 0],
+                [0, 1, 0],
+                [-1, 0, 0],
+                [0, -1, 0],
+                [1, 1, 0],
+                [-1, -1, 0],
+                [1, -1, 0],
+                [-1, 1, 0],
+            ]
+        )
+
+        sub_sc_shifts = sc_shifts.dot(sub_sc_matrix)
+        film_sc_shifts = sc_shifts.dot(film_sc_matrix)
+
+        sub_struc, sub_inv_matrix = self._generate_sc_for_interface_view(
+            struc=sub_struc,
+            transformation_matrix=self.match.substrate_sl_transform,
+        )
+
+        film_struc, film_inv_matrix = self._generate_sc_for_interface_view(
+            struc=film_struc,
+            transformation_matrix=self.match.film_sl_transform,
+        )
+
+        sub_images = []
+
+        for c in sub_struc.cart_coords:
+            for shift in sub_sc_shifts:
+                sub_image = self._get_image(
+                    zero_coord=c,
+                    supercell_shift=shift,
+                    cell_vetices=coords,
+                    slab_matrix=sub_matrix,
+                    slab_inv_matrix=prim_sub_inv_matrix,
+                    sc_inv_matrix=sub_inv_matrix,
+                )
+
+                if sub_image is not None:
+                    sub_images.append(sub_image)
+
+        film_images = []
+
+        for c in film_struc.cart_coords:
+            for shift in film_sc_shifts:
+                film_image = self._get_image(
+                    zero_coord=c,
+                    supercell_shift=shift,
+                    cell_vetices=coords,
+                    slab_matrix=film_matrix,
+                    slab_inv_matrix=prim_film_inv_matrix,
+                    sc_inv_matrix=film_inv_matrix,
+                )
+                if film_image is not None:
+                    film_images.append(film_image)
+
+        return sub_matrix, sub_images, film_matrix, film_images
+
     def plot_interface(
+        self,
+        output: str = "interface_view.png",
+        strain: bool = True,
+        dpi: int = 400,
+        show_in_colab: bool = False,
+        # film_color: Union[str, list] = [0, 110 / 255, 144 / 255],
+        # substrate_color: Union[str, list] = [241 / 255, 143 / 255, 1 / 255],
+        film_color: Union[str, list] = "firebrick",
+        substrate_color: Union[str, list] = "blue",
+        film_alpha: float = 0.3,
+        substrate_alpha: float = 0.2,
+        film_linewidth: float = 2,
+        substrate_linewidth: float = 2,
+    ) -> None:
+        """
+        This function will show the relative alignment of the film and substrate supercells by plotting the in-plane unit cells on top of each other
+
+        Args:
+            output: File path for the output image
+            strain: Determines if the film lattice should be strained so it shows perfectly aligned lattice coincidence sites,
+                or if the film lattice should be unstrained, giving a better visual of the lattice mismatch.
+            dpi: dpi (dots per inch) of the output image.
+                Setting dpi=100 gives reasonably sized images when viewed in colab notebook
+            show_in_colab: Determines if the matplotlib figure is closed or not after the plot if made.
+                if show_in_colab=True the plot will show up after you run the cell in colab/jupyter notebook.
+        """
+        if type(film_color) == str:
+            film_rgb = to_rgb(film_color)
+        else:
+            film_rgb = tuple(film_color)
+
+        if type(substrate_color) == str:
+            sub_rgb = to_rgb(substrate_color)
+        else:
+            sub_rgb = tuple(substrate_color)
+
+        (
+            sub_matrix,
+            sub_images,
+            film_matrix,
+            film_images,
+        ) = self._get_oriented_cell_and_images(strain=strain)
+
+        interface_matrix = self._orthogonal_structure.lattice.matrix
+
+        coords = np.array(
+            [
+                [0, 0, 0],
+                [1, 0, 0],
+                [1, 1, 0],
+                [0, 1, 0],
+                [0, 0, 0],
+            ]
+        )
+
+        interface_coords = coords.dot(interface_matrix)
+
+        xlim = [0, 1]
+        ylim = [0, 1]
+
+        a = interface_matrix[0, :2]
+        b = interface_matrix[1, :2]
+        borders = np.vstack(
+            [
+                xlim[0] * a + ylim[0] * b,
+                xlim[1] * a + ylim[0] * b,
+                xlim[1] * a + ylim[1] * b,
+                xlim[0] * a + ylim[1] * b,
+                xlim[0] * a + ylim[0] * b,
+            ]
+        )
+        x_size = borders[:, 0].max() - borders[:, 0].min()
+        y_size = borders[:, 1].max() - borders[:, 1].min()
+        ratio = y_size / x_size
+
+        if ratio < 1:
+            figx = 5 / ratio
+            figy = 5
+        else:
+            figx = 5
+            figy = 5 * ratio
+
+        fig, ax = plt.subplots(
+            figsize=(figx, figy),
+            dpi=dpi,
+        )
+
+        for image in sub_images:
+            sub_coords = (coords + image).dot(sub_matrix)
+            poly = Polygon(
+                xy=sub_coords[:, :2],
+                closed=True,
+                facecolor=sub_rgb + (substrate_alpha,),
+                edgecolor=sub_rgb,
+                linewidth=substrate_linewidth,
+                zorder=0,
+            )
+            ax.add_patch(poly)
+
+        for image in film_images:
+            film_coords = (coords + image).dot(film_matrix)
+            poly = Polygon(
+                xy=film_coords[:, :2],
+                closed=True,
+                facecolor=film_rgb + (film_alpha,),
+                edgecolor=film_rgb,
+                linewidth=film_linewidth,
+                zorder=10,
+            )
+            ax.add_patch(poly)
+
+        ax.plot(
+            interface_coords[:, 0],
+            interface_coords[:, 1],
+            color="black",
+            linewidth=2,
+            zorder=20,
+        )
+
+        ax.set_aspect("equal")
+        ax.axis("off")
+
+        fig.tight_layout()
+        fig.savefig(output, bbox_inches="tight")
+
+        if not show_in_colab:
+            plt.close()
+
+    def plot_interface_old(
         self,
         output: str = "interface_view.png",
         strain: bool = True,

@@ -19,13 +19,9 @@ class BaseSurfaceMatcher:
     def __init__(
         self,
         interface: Interface,
-        grid_density_x: int = 15,
-        grid_density_y: int = 15,
-        xlim: List[float] = [0.0, 1.0],
-        ylim: List[float] = [0.0, 1.0],
+        grid_density_x: int = 10,
+        grid_density_y: int = 10,
     ):
-        self.xlim = xlim
-        self.ylim = ylim
         self.interface = interface
         self.matrix = deepcopy(interface._orthogonal_structure.lattice.matrix)
         self._vol = np.linalg.det(self.matrix)
@@ -37,7 +33,41 @@ class BaseSurfaceMatcher:
         self.grid_density_x = grid_density_x
         self.grid_density_y = grid_density_y
 
-        self.shifts, self.X, self.Y = self._generate_shifts()
+        (
+            self.shift_matrix,
+            self.shift_images,
+            self.shifts,
+        ) = self._generate_shifts()
 
-    def _generate_shifts(self):
-        pass
+    def _generate_shifts(self) -> List[np.ndarray]:
+        (
+            sub_matrix,
+            sub_images,
+            film_matrix,
+            film_images,
+        ) = self.interface._get_oriented_cell_and_images(strain=True)
+
+        if self.interface.substrate.area < self.interface.film.area:
+            shift_matrix = sub_matrix
+            shift_images = sub_images
+        else:
+            shift_matrix = film_matrix
+            shift_images = film_images
+
+        iface_inv_matrix = (
+            self.interface._orthogonal_structure.lattice.inv_matrix
+        )
+
+        grid_x = np.linspace(0, 1, self.grid_density_x)
+        grid_y = np.linspace(0, 1, self.grid_density_y)
+
+        X, Y = np.meshgrid(grid_x, grid_y)
+
+        prim_frac_shifts = (
+            np.c_[X.ravel(), Y.ravel(), np.zeros(Y.shape).ravel()]
+            + shift_images[0]
+        )
+        prim_cart_shifts = prim_frac_shifts.dot(shift_matrix)
+        iface_frac_shifts = prim_cart_shifts.dot(iface_inv_matrix)
+
+        return shift_matrix, shift_images, iface_frac_shifts

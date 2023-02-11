@@ -1,5 +1,4 @@
 from OgreInterface.score_function.overlap import SphereOverlap
-from OgreInterface.surface_match.base_surface_matcher import BaseSurfaceMatcher
 from OgreInterface.score_function.generate_inputs import generate_dict_torch
 from OgreInterface.surfaces import Interface
 from pymatgen.io.ase import AseAtomsAdaptor
@@ -17,7 +16,7 @@ from itertools import groupby, combinations_with_replacement, product
 from ase import Atoms
 
 
-class SphereSurfaceMatcher(BaseSurfaceMatcher):
+class SphereSurfaceMatcher:
     def __init__(
         self,
         interface: Interface,
@@ -27,20 +26,27 @@ class SphereSurfaceMatcher(BaseSurfaceMatcher):
         xlim: List[float] = [0.0, 1.0],
         ylim: List[float] = [0.0, 1.0],
     ):
-        super().__init__(
-            interface=interface,
-            grid_density_x=grid_density_x,
-            grid_density_y=grid_density_y,
-        )
+        self.xlim = xlim
+        self.ylim = ylim
+        self.interface = interface
+        self.matrix = deepcopy(interface._orthogonal_structure.lattice.matrix)
+        self._vol = np.linalg.det(self.matrix)
+
+        if self._vol < 0:
+            self.matrix *= -1
+            self._vol *= -1
 
         self.radius_dict = self._get_radii(radius_dict)
         self.cutoff = self._get_cutoff()
         self.d_interface = self.interface.interfacial_distance
         self.film_part = self.interface._orthogonal_film_structure
         self.sub_part = self.interface._orthogonal_substrate_structure
+        self.grid_density_x = grid_density_x
+        self.grid_density_y = grid_density_y
         self.opt_xy_shift = np.zeros(2)
-        self.xlim = xlim
-        self.ylim = ylim
+
+        self.shifts, self.X, self.Y = self._generate_shifts()
+        self.z_PES_data = None
 
     def get_optmized_structure(self):
         opt_shift = self.opt_xy_shift
@@ -64,6 +70,15 @@ class SphereSurfaceMatcher(BaseSurfaceMatcher):
         cutoff_val = (2 * max_radius) / (1e-3) ** (1 / 6)
 
         return cutoff_val
+
+    def _generate_shifts(self):
+        grid_x = np.linspace(self.xlim[0], self.xlim[1], self.grid_density_x)
+        grid_y = np.linspace(self.ylim[0], self.ylim[1], self.grid_density_y)
+        X, Y = np.meshgrid(grid_x, grid_y)
+
+        shifts = np.c_[X.ravel(), Y.ravel()]
+
+        return shifts, X, Y
 
     def _get_shifted_atoms(self, shifts: np.ndarray) -> List[Atoms]:
         sub_atoms = self.interface.get_substrate_supercell(return_atoms=True)
@@ -116,26 +131,23 @@ class SphereSurfaceMatcher(BaseSurfaceMatcher):
 
         return overlap
 
-    def _get_interpolated_data(self, Z, image):
-        x_grid = np.linspace(0, 1, self.grid_density_x)
-        y_grid = np.linspace(0, 1, self.grid_density_y)
+    def _get_interpolated_data(self, X, Y, Z):
+        x_grid = np.linspace(self.xlim[0], self.xlim[1], self.grid_density_x)
+        y_grid = np.linspace(self.ylim[0], self.ylim[1], self.grid_density_y)
         spline = RectBivariateSpline(y_grid, x_grid, Z)
 
-        x_grid_interp = np.linspace(self.xlim[0], self.xlim[1], 101)
-        y_grid_interp = np.linspace(self.ylim[0], self.ylim[1], 101)
+        x_grid_interp = np.linspace(self.xlim[0], self.xlim[1], 401)
+        y_grid_interp = np.linspace(self.ylim[0], self.ylim[1], 401)
 
         X_interp, Y_interp = np.meshgrid(x_grid_interp, y_grid_interp)
         Z_interp = spline.ev(xi=Y_interp, yi=X_interp)
-        frac_shifts = (
-            np.c_[
-                X_interp.ravel(),
-                Y_interp.ravel(),
-                np.zeros(X_interp.shape).ravel(),
-            ]
-            + image
-        )
+        frac_shifts = np.c_[
+            X_interp.ravel(),
+            Y_interp.ravel(),
+            np.zeros(X_interp.shape).ravel(),
+        ]
 
-        cart_shifts = frac_shifts.dot(self.shift_matrix)
+        cart_shifts = frac_shifts.dot(self.matrix)
 
         X_cart = cart_shifts[:, 0].reshape(X_interp.shape)
         Y_cart = cart_shifts[:, 1].reshape(Y_interp.shape)
@@ -208,15 +220,15 @@ class SphereSurfaceMatcher(BaseSurfaceMatcher):
         sub_overlap = overlap[0]
         film_overlap = overlap[1]
 
-        x_grid = np.linspace(0, 1, self.grid_density_x)
-        y_grid = np.linspace(0, 1, self.grid_density_y)
-        X, Y = np.meshgrid(x_grid, y_grid)
-
-        interface_overlap = overlap[2:].reshape(X.shape)
+        interface_overlap = overlap[2:].reshape(self.X.shape)
 
         Z = (
             sub_overlap + film_overlap - interface_overlap
         ) / self.interface.area
+
+        X_plot, Y_plot, Z_overlap = self._get_interpolated_data(
+            self.X, self.Y, Z
+        )
 
         a = self.matrix[0, :2]
         b = self.matrix[1, :2]
@@ -244,43 +256,36 @@ class SphereSurfaceMatcher(BaseSurfaceMatcher):
             figsize=(figx, figy),
             dpi=dpi,
         )
+        self._plot_heatmap(
+            fig=fig,
+            ax=ax,
+            X=X_plot,
+            Y=Y_plot,
+            Z=Z_overlap,
+            borders=borders,
+            cmap=cmap,
+            fontsize=fontsize,
+            show_max=show_max,
+        )
 
-        for i, image in enumerate(self.shift_images):
-            X_plot, Y_plot, Z_overlap = self._get_interpolated_data(Z, image)
+        frac_shifts = np.c_[
+            X_plot.ravel(), Y_plot.ravel(), np.zeros(Y_plot.shape).ravel()
+        ].dot(np.linalg.inv(self.matrix))
+        opt_shift = frac_shifts[np.argmax(Z_overlap.ravel())]
+        max_Z = np.max(Z_overlap)
+        plot_shift = opt_shift.dot(self.matrix)
 
-            self._plot_heatmap(
-                fig=fig,
-                ax=ax,
-                X=X_plot,
-                Y=Y_plot,
-                Z=Z_overlap,
-                borders=borders,
-                cmap=cmap,
-                fontsize=fontsize,
-                show_max=show_max,
-            )
+        ax.scatter(
+            [plot_shift[0]],
+            [plot_shift[1]],
+            fc="white",
+            ec="black",
+            marker="X",
+            s=100,
+            zorder=10,
+        )
 
-            if i == 0:
-                frac_shifts = np.c_[
-                    X_plot.ravel(),
-                    Y_plot.ravel(),
-                    np.zeros(Y_plot.shape).ravel(),
-                ].dot(np.linalg.inv(self.matrix))
-                opt_shift = frac_shifts[np.argmax(Z_overlap.ravel())]
-                max_Z = np.max(Z_overlap)
-                plot_shift = opt_shift.dot(self.matrix)
-
-                ax.scatter(
-                    [plot_shift[0]],
-                    [plot_shift[1]],
-                    fc="white",
-                    ec="black",
-                    marker="X",
-                    s=100,
-                    zorder=10,
-                )
-
-                self.opt_xy_shift = opt_shift[:2]
+        self.opt_xy_shift = opt_shift[:2]
 
         fig.tight_layout()
         fig.savefig(output, bbox_inches="tight")

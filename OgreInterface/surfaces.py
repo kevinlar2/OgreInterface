@@ -15,7 +15,7 @@ from pymatgen.analysis.local_env import CrystalNN
 
 from typing import Dict, Union, Iterable, List, Tuple
 import matplotlib.pyplot as plt
-from matplotlib.patches import Polygon
+from matplotlib.patches import Polygon, Circle
 from matplotlib.colors import to_rgb, to_rgba
 from itertools import combinations, groupby
 import numpy as np
@@ -2655,6 +2655,31 @@ class Interface:
         if not show_in_colab:
             plt.close()
 
+    def _add_arrows(self, ax, matrix, color, size, labels, fontsize):
+        norm_matrix = matrix / np.linalg.norm(matrix, axis=1)[:, None]
+        circ = Circle(
+            xy=[0, 0],
+            radius=1.5,
+            edgecolor=(0, 0, 0, 0.3),
+            facecolor=(1, 1, 1, 0),
+        )
+        ax.add_patch(circ)
+
+        for i in range(2):
+            ax.arrow(
+                x=0,
+                y=0,
+                dx=norm_matrix[i, 0],
+                dy=norm_matrix[i, 1],
+                color=color,
+                width=0.02,
+            )
+            ax.annotate(
+                labels[i],
+                xy=1.2 * norm_matrix[i, :2],
+                fontsize=fontsize,
+            )
+
     def plot_interface(
         self,
         output: str = "interface_view.png",
@@ -2665,8 +2690,8 @@ class Interface:
         # substrate_color: Union[str, list] = [241 / 255, 143 / 255, 1 / 255],
         film_color: Union[str, list] = "firebrick",
         substrate_color: Union[str, list] = "blue",
-        film_alpha: float = 0.0,
-        substrate_alpha: float = 0.0,
+        film_alpha: float = 0.3,
+        substrate_alpha: float = 0.3,
         film_linewidth: float = 2,
         substrate_linewidth: float = 2,
     ) -> None:
@@ -2738,42 +2763,81 @@ class Interface:
             figx = 5
             figy = 5 * ratio
 
-        mosaic = """
-            AD
-            BD
-            CD
-        """
+        # TODO add labels to the longer side, left or bottom/top to make the figure more square
+        if figy >= figx:
+            mosaic = """
+                AC
+                BC
+            """
+            x_expand = figy / 2.5
+            xtot = figx + x_expand
 
-        x_size = figx
-        x_expand = figy / 3
-        xtot = figx + x_expand
+            fig_area = xtot * figy
 
-        fig = plt.figure(figsize=(xtot, figy))
-        axd = fig.subplot_mosaic(
-            mosaic,
-            gridspec_kw={"width_ratios": [x_expand / xtot, x_size / xtot]},
-        )
+            fig = plt.figure(figsize=(xtot, figy))
+            axd = fig.subplot_mosaic(
+                mosaic,
+                gridspec_kw={"width_ratios": [x_expand / xtot, figx / xtot]},
+            )
+        else:
+            mosaic = """
+                CC
+                AB
+            """
+            y_expand = figx / 2.5
+            ytot = figy + y_expand
+
+            fig_area = figx * ytot
+
+            fig = plt.figure(figsize=(figx, ytot))
+            axd = fig.subplot_mosaic(
+                mosaic,
+                gridspec_kw={"height_ratios": [figy / ytot, y_expand / ytot]},
+            )
+
+        fontsize_scale = 16 / 5.92
+        # linewisth_scale = 1 / 5.92
+        fontsize = fontsize_scale * np.sqrt(fig_area)
+
         ax1 = axd["A"]
         ax2 = axd["B"]
-        ax3 = axd["C"]
         ax1.set_aspect("equal")
         ax2.set_aspect("equal")
-        ax3.set_aspect("equal")
         ax1.tick_params(
             left=False, labelleft=False, bottom=False, labelbottom=False
         )
         ax2.tick_params(
             left=False, labelleft=False, bottom=False, labelbottom=False
         )
-        ax3.tick_params(
-            left=False, labelleft=False, bottom=False, labelbottom=False
-        )
-        ax = axd["D"]
+        ax = axd["C"]
 
-        # fig, ax = plt.subplots(
-        #     figsize=(figx, figy),
-        #     dpi=dpi,
-        # )
+        ax1.axis("off")
+        ax2.axis("off")
+        ax1.set_xlim(-1.51, 1.51)
+        ax1.set_ylim(-1.51, 1.51)
+        ax2.set_xlim(-1.51, 1.51)
+        ax2.set_ylim(-1.51, 1.51)
+
+        self._add_arrows(
+            ax=ax1,
+            matrix=sub_matrix,
+            color=substrate_color,
+            size=0.02,
+            labels=["[111]", "[222]"],
+            fontsize=fontsize,
+        )
+
+        self._add_arrows(
+            ax=ax2,
+            matrix=film_matrix,
+            color=film_color,
+            size=0.02,
+            labels=["[111]", "[222]"],
+            fontsize=fontsize,
+        )
+
+        # ax2.set_xlim(-1.25, 1.25)
+        # ax2.set_ylim(-1.25, 1.25)
 
         for image in sub_images:
             sub_coords = (coords + image).dot(sub_matrix)
@@ -2804,16 +2868,52 @@ class Interface:
 
         X, Y = np.meshgrid(grid_x, grid_y)
 
+        sc_shifts = np.array(
+            [
+                [1, 0, 0],
+                [0, 1, 0],
+                [-1, 0, 0],
+                [0, -1, 0],
+                [1, 1, 0],
+                [-1, -1, 0],
+                [1, -1, 0],
+                [-1, 1, 0],
+            ]
+        )
+
+        for shift in sc_shifts:
+            shift_coords = (coords + shift).dot(interface_matrix)
+            poly = Polygon(
+                xy=shift_coords[:, :2],
+                closed=True,
+                facecolor="white",
+                edgecolor="white",
+                linewidth=1,
+                zorder=15,
+            )
+            ax.add_patch(poly)
+
         ax.plot(
             interface_coords[:, 0],
             interface_coords[:, 1],
             color="black",
-            linewidth=4,
+            linewidth=2,
             zorder=20,
         )
 
-        ax.set_xlim(interface_coords[:, 0].min(), interface_coords[:, 0].max())
-        ax.set_ylim(interface_coords[:, 1].min(), interface_coords[:, 1].max())
+        x_range = interface_coords[:, 0].max() - interface_coords[:, 0].min()
+        y_range = interface_coords[:, 1].max() - interface_coords[:, 1].min()
+        x_margin = 0.05 * x_range
+        y_margin = 0.05 * y_range
+
+        ax.set_xlim(
+            interface_coords[:, 0].min() - x_margin,
+            interface_coords[:, 0].max() + x_margin,
+        )
+        ax.set_ylim(
+            interface_coords[:, 1].min() - y_margin,
+            interface_coords[:, 1].max() + y_margin,
+        )
 
         ax.set_aspect("equal")
         ax.axis("off")

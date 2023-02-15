@@ -100,10 +100,23 @@ class IonicSurfaceMatcher:
             c2 = charge_dict[s2]
 
             if d is None:
-                d1_ionic = float(Element(s1).ionic_radii[c1])
-                d2_ionic = float(Element(s2).ionic_radii[c2])
+                try:
+                    d1 = float(Element(s1).ionic_radii[c1])
+                except KeyError:
+                    print(
+                        f"No ionic radius available for {s1}, using the atomic radius instead"
+                    )
+                    d1 = float(Element(s1).atomic_radius)
 
-                neighbor_dict[n] = d1_ionic + d2_ionic
+                try:
+                    d2 = float(Element(s2).ionic_radii[c2])
+                except KeyError:
+                    print(
+                        f"No ionic radius available for {s2}, using the atomic radius instead"
+                    )
+                    d2 = float(Element(s2).atomic_radius)
+
+                neighbor_dict[n] = d1 + d2
 
         return neighbor_dict
 

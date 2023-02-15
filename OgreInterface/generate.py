@@ -587,19 +587,10 @@ class SurfaceGenerator:
             structure=slab_base, layers=self.layers, vacuum_scale=vacuum_scale
         )
         non_orthogonal_slab.sort()
-        # non_orthogonal_min_atom = non_orthogonal_slab.frac_coords[
-        #     np.argmin(non_orthogonal_slab.frac_coords[:, -1])
-        # ]
-        # non_orthogonal_min_c = np.min(non_orthogonal_slab.frac_coords[:, -1])
-        # non_orthogonal_slab.translate_sites(
-        #     indices=range(len(non_orthogonal_slab)),
-        #     vector=-non_orthogonal_min_atom,
-        #     frac_coords=True,
-        #     to_unit_cell=True,
-        # )
 
         a, b, c = non_orthogonal_slab.lattice.matrix
         new_c = np.dot(c, self.surface_normal) * self.surface_normal
+        vacuum = self.oriented_bulk_structure.lattice.c * vacuum_scale
 
         orthogonal_matrix = np.vstack([a, b, new_c])
         orthogonal_slab = Structure(
@@ -632,6 +623,7 @@ class SurfaceGenerator:
             non_orthogonal_slab,
             bottom_layer_dist,
             top_layer_dist,
+            vacuum,
         )
 
     # def _get_ewald_energy(self, slab):
@@ -665,6 +657,7 @@ class SurfaceGenerator:
                 non_orthogonal_slab,
                 bottom_layer_dist,
                 top_layer_dist,
+                actual_vacuum,
             ) = self._get_slab(shift=possible_shifts[0])
             orthogonal_slab.sort_index = 0
             non_orthogonal_slab.sort_index = 0
@@ -681,6 +674,7 @@ class SurfaceGenerator:
                     non_orthogonal_slab,
                     bottom_layer_dist,
                     top_layer_dist,
+                    actual_vacuum,
                 ) = self._get_slab(shift=possible_shift)
                 orthogonal_slab.sort_index = i
                 non_orthogonal_slab.sort_index = i
@@ -709,7 +703,7 @@ class SurfaceGenerator:
                 transformation_matrix=self.transformation_matrix,
                 miller_index=self.miller_index,
                 layers=self.layers,
-                vacuum=self.vacuum,
+                vacuum=actual_vacuum,
                 uvw_basis=self.uvw_basis,
                 point_group_operations=self._point_group_operations,
                 bottom_layer_dist=bottom_layer_dists[i],

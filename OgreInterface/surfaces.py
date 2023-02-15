@@ -11,7 +11,7 @@ from pymatgen.io.vasp.inputs import Poscar
 from pymatgen.io.ase import AseAtomsAdaptor
 from pymatgen.symmetry.analyzer import SymmOp
 from pymatgen.analysis.molecule_structure_comparator import CovalentRadius
-from pymatgen.analysis.local_env import CrystalNN
+from pymatgen.analysis.local_env import CrystalNN, BrunnerNN_real
 
 from typing import Dict, Union, Iterable, List, Tuple
 import matplotlib.pyplot as plt
@@ -135,7 +135,7 @@ class Surface:
 
         self.surface_normal = surface_normal
         self.c_projection = c_projection
-        self.transformation_matrix = transformation_matrix
+        self._transformation_matrix = transformation_matrix
         self.miller_index = miller_index
         self.layers = layers
         self.vacuum = vacuum
@@ -181,6 +181,39 @@ class Surface:
                 raise ValueError(
                     "Please select either return_atoms=True OR return_structure=True to get an ASE atoms object or a Pymatgen Structure object."
                 )
+
+    @property
+    def slab_transformation_matrix(self) -> np.ndarray:
+        """
+        Transformation matrix to convert the primitive bulk lattice vectors to the
+        slab supercell lattice vectors (including the vacuum region)
+
+        Examples:
+        >>> surface.slab_transformation_matrix
+        >>> [[ -1   1   0]
+        ...  [  0   0   1]
+        ...  [ 15  15 -15]]
+        """
+        layer_mat = np.eye(3)
+        layer_mat[-1, -1] = self.layers + np.round(
+            self.vacuum / self.c_projection
+        )
+
+        return (layer_mat @ self._transformation_matrix).astype(int)
+
+    @property
+    def bulk_transformation_matrix(self) -> np.ndarray:
+        """
+        Transformation matrix to convert the primitive bulk unit cell to the smallest
+        oriented unit cell of the slab structure
+
+        Examples:
+        >>> surface.bulk_transformation_matrix
+        >>> [[ -1   1   0]
+        ...  [  0   0   1]
+        ...  [  1   1  -1]]
+        """
+        return self._transformation_matrix.astype(int)
 
     @property
     def formula(self) -> str:
@@ -403,7 +436,7 @@ class Surface:
 
         self._orthogonal_slab_structure.remove_sites(to_delete_conv)
 
-    def _get_surface_atoms(self) -> Tuple[Structure, List]:
+    def _get_surface_atoms(self, cutoff: float) -> Tuple[Structure, List]:
         obs = self.oriented_bulk_structure.copy()
         obs.add_oxidation_state_by_guess()
 
@@ -415,7 +448,8 @@ class Surface:
         bottom_inds = np.where(layer_inds == 0)[0]
         top_inds = np.where(layer_inds == np.max(layer_inds))[0]
 
-        cnn = CrystalNN()
+        cnn = CrystalNN(search_cutoff=cutoff)
+        # cnn = BrunnerNN_real(cutoff=3.0)
         top_neighborhood = []
         for i in top_inds:
             info_dict = cnn.get_nn_info(layer_struc, i)
@@ -436,16 +470,22 @@ class Surface:
 
         return layer_struc, neighborhool_list
 
-    def _get_pseudohydrogen_charge(self, site, coordination) -> float:
+    def _get_pseudohydrogen_charge(
+        self, site, coordination, include_d_valence: bool = False
+    ) -> float:
         electronic_struc = site.specie.electronic_structure.split(".")[1:]
         oxi_state = site.specie.oxi_state
         valence = 0
         for orb in electronic_struc:
-            if orb[1] == "d":
-                if int(orb[2:]) < 10:
+            if include_d_valence:
+                if orb[1] == "d":
+                    if int(orb[2:]) < 10:
+                        valence += int(orb[2:])
+                else:
                     valence += int(orb[2:])
             else:
-                valence += int(orb[2:])
+                if orb[1] != "d":
+                    valence += int(orb[2:])
 
         if oxi_state > 0:
             charge = (8 - valence) / coordination
@@ -477,13 +517,13 @@ class Surface:
         return charge
 
     def _get_bond_dict(
-        self,
+        self, cutoff: float, include_d_valence: bool
     ) -> Dict[str, Dict[int, Dict[str, Union[np.ndarray, float, str]]]]:
         image_map = {1: "+", 0: "=", -1: "-"}
         (
             layer_struc,
             surface_neighborhoods,
-        ) = self._get_surface_atoms()
+        ) = self._get_surface_atoms(cutoff)
 
         labels = ["bottom", "top"]
         bond_dict = {"bottom": {}, "top": {}}
@@ -509,7 +549,9 @@ class Surface:
                 neighbor_info = surface_atom[1]
                 coordination = len(neighbor_info)
                 charge = self._get_pseudohydrogen_charge(
-                    layer_struc[atom_index], coordination
+                    layer_struc[atom_index],
+                    coordination,
+                    include_d_valence,
                 )
                 broken_atoms = [
                     neighbor
@@ -524,7 +566,7 @@ class Surface:
                     broken_atom_equiv_index = broken_site.properties[
                         "oriented_bulk_equivalent"
                     ]
-                    broken_image = broken_site.image.astype(int)
+                    broken_image = np.array(broken_site.image).astype(int)
                     broken_atom_cart_coords = broken_site.coords
                     center_atom_cart_coords = layer_struc[atom_index].coords
                     bond_vector = (
@@ -689,6 +731,8 @@ class Surface:
         self,
         bottom: bool = True,
         top: bool = True,
+        cutoff: float = 3.0,
+        include_d_valence: bool = True,
         passivated_struc: Union[str, None] = None,
     ) -> None:
         """
@@ -706,10 +750,12 @@ class Surface:
         Args:
             bottom: Determines if the bottom of the structure should be passivated
             top: Determines of the top of the structure should be passivated
+            cutoff: Determines the cutoff in Angstroms for the nearest neighbor search. 3.0 seems to give reasonalble reasults.
+            include_d_valence: Determines if the d-orbital electrons are included the calculation of the pseudohydrogen charge.
             passivated_struc: File path to the CONTCAR/POSCAR file that contains the relaxed atomic positions of the pseudo-hydrogens.
                 This structure must have the same miller index and termination index.
         """
-        bond_dict = self._get_bond_dict()
+        bond_dict = self._get_bond_dict(cutoff, include_d_valence)
 
         if passivated_struc is not None:
             bond_dict = self._get_passivated_bond_dict(
@@ -1963,7 +2009,7 @@ class Interface:
 
         # Create the transformation matrix from the primtive bulk structure to the interface unit cell
         # this is only needed for band unfolding purposes
-        sub_M = self.substrate.transformation_matrix
+        sub_M = self.substrate._transformation_matrix
         layer_M = np.eye(3).astype(int)
         layer_M[-1, -1] = n_unit_cell
         interface_M = layer_M @ self.match.substrate_sl_transform @ sub_M

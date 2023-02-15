@@ -487,7 +487,11 @@ class Surface:
                 if orb[1] != "d":
                     valence += int(orb[2:])
 
-        if oxi_state > 0:
+        # TODO
+        if site.species_string == "In0+":
+            oxi_state = -1
+
+        if oxi_state < 0:
             charge = (8 - valence) / coordination
         else:
             charge = ((2 * coordination) - valence) / coordination

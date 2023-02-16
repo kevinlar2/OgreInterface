@@ -471,10 +471,21 @@ class Surface:
         return layer_struc, neighborhool_list
 
     def _get_pseudohydrogen_charge(
-        self, site, coordination, include_d_valence: bool = False
+        self,
+        site,
+        coordination,
+        include_d_valence: bool = True,
+        manual_oxidation_states: Union[Dict[str, float], None] = None,
     ) -> float:
         electronic_struc = site.specie.electronic_structure.split(".")[1:]
-        oxi_state = site.specie.oxi_state
+
+        # TODO automate anion/cation determination
+        if manual_oxidation_states:
+            species_str = str(site.specie._el)
+            oxi_state = manual_oxidation_states[species_str]
+        else:
+            oxi_state = site.specie.oxi_state
+
         valence = 0
         for orb in electronic_struc:
             if include_d_valence:
@@ -487,7 +498,7 @@ class Surface:
                 if orb[1] != "d":
                     valence += int(orb[2:])
 
-        if oxi_state > 0:
+        if oxi_state < 0:
             charge = (8 - valence) / coordination
         else:
             charge = ((2 * coordination) - valence) / coordination
@@ -517,7 +528,10 @@ class Surface:
         return charge
 
     def _get_bond_dict(
-        self, cutoff: float, include_d_valence: bool
+        self,
+        cutoff: float,
+        include_d_valence: bool,
+        manual_oxidation_states,
     ) -> Dict[str, Dict[int, Dict[str, Union[np.ndarray, float, str]]]]:
         image_map = {1: "+", 0: "=", -1: "-"}
         (
@@ -552,6 +566,7 @@ class Surface:
                     layer_struc[atom_index],
                     coordination,
                     include_d_valence,
+                    manual_oxidation_states,
                 )
                 broken_atoms = [
                     neighbor
@@ -734,6 +749,7 @@ class Surface:
         cutoff: float = 3.0,
         include_d_valence: bool = True,
         passivated_struc: Union[str, None] = None,
+        manual_oxidation_states: Union[Dict[str, float], None] = None,
     ) -> None:
         """
         This function will apply pseudohydrogen passivation to all broken bonds on the surface and assign charges to the pseudo-hydrogens based
@@ -754,8 +770,13 @@ class Surface:
             include_d_valence: Determines if the d-orbital electrons are included the calculation of the pseudohydrogen charge.
             passivated_struc: File path to the CONTCAR/POSCAR file that contains the relaxed atomic positions of the pseudo-hydrogens.
                 This structure must have the same miller index and termination index.
+            manual_oxidation_states: Option to pass in a dictionary determining which elements are anions vs cations.
+                This will be automated hopefully at some point.
+                (i.e {"Ti": 1, "Mn": 1, "In": -1} would mean Ti and Mn are cations and In is an anion)
         """
-        bond_dict = self._get_bond_dict(cutoff, include_d_valence)
+        bond_dict = self._get_bond_dict(
+            cutoff, include_d_valence, manual_oxidation_states
+        )
 
         if passivated_struc is not None:
             bond_dict = self._get_passivated_bond_dict(

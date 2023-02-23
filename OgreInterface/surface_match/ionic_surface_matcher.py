@@ -18,7 +18,7 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
     def __init__(
         self,
         interface: Interface,
-        grid_density: float = 0.4,
+        grid_density: float = 2.5,
     ):
         super().__init__(
             interface=interface,

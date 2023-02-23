@@ -10,7 +10,7 @@ class BaseSurfaceMatcher:
     def __init__(
         self,
         interface: Interface,
-        grid_density: float = 0.4,
+        grid_density: float = 2.5,
     ):
         self.interface = interface
         self.matrix = deepcopy(interface._orthogonal_structure.lattice.matrix)
@@ -48,10 +48,10 @@ class BaseSurfaceMatcher:
         )
 
         grid_density_x = int(
-            np.round(np.linalg.norm(shift_matrix[0]) / self.grid_density)
+            np.round(np.linalg.norm(shift_matrix[0]) * self.grid_density)
         )
         grid_density_y = int(
-            np.round(np.linalg.norm(shift_matrix[1]) / self.grid_density)
+            np.round(np.linalg.norm(shift_matrix[1]) * self.grid_density)
         )
 
         self.grid_density_x = grid_density_x

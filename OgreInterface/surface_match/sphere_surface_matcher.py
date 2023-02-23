@@ -15,7 +15,7 @@ class SphereSurfaceMatcher(BaseSurfaceMatcher):
         self,
         interface: Interface,
         radius_dict: Optional[Dict[str, float]] = None,
-        grid_density: float = 0.4,
+        grid_density: float = 2.5,
     ):
         super().__init__(
             interface=interface,

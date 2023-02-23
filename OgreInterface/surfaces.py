@@ -2503,157 +2503,157 @@ class Interface:
 
         return sub_matrix, sub_images, film_matrix, film_images
 
-    def plot_interface_bu(
-        self,
-        output: str = "interface_view.png",
-        strain: bool = True,
-        dpi: int = 400,
-        show_in_colab: bool = False,
-        # film_color: Union[str, list] = [0, 110 / 255, 144 / 255],
-        # substrate_color: Union[str, list] = [241 / 255, 143 / 255, 1 / 255],
-        film_color: Union[str, list] = "firebrick",
-        substrate_color: Union[str, list] = "blue",
-        film_alpha: float = 0.0,
-        substrate_alpha: float = 0.0,
-        film_linewidth: float = 2,
-        substrate_linewidth: float = 2,
-    ) -> None:
-        """
-        This function will show the relative alignment of the film and substrate supercells by plotting the in-plane unit cells on top of each other
+    # def plot_interface_bu(
+    #     self,
+    #     output: str = "interface_view.png",
+    #     strain: bool = True,
+    #     dpi: int = 400,
+    #     show_in_colab: bool = False,
+    #     # film_color: Union[str, list] = [0, 110 / 255, 144 / 255],
+    #     # substrate_color: Union[str, list] = [241 / 255, 143 / 255, 1 / 255],
+    #     film_color: Union[str, list] = "firebrick",
+    #     substrate_color: Union[str, list] = "blue",
+    #     film_alpha: float = 0.0,
+    #     substrate_alpha: float = 0.0,
+    #     film_linewidth: float = 2,
+    #     substrate_linewidth: float = 2,
+    # ) -> None:
+    #     """
+    #     This function will show the relative alignment of the film and substrate supercells by plotting the in-plane unit cells on top of each other
 
-        Args:
-            output: File path for the output image
-            strain: Determines if the film lattice should be strained so it shows perfectly aligned lattice coincidence sites,
-                or if the film lattice should be unstrained, giving a better visual of the lattice mismatch.
-            dpi: dpi (dots per inch) of the output image.
-                Setting dpi=100 gives reasonably sized images when viewed in colab notebook
-            show_in_colab: Determines if the matplotlib figure is closed or not after the plot if made.
-                if show_in_colab=True the plot will show up after you run the cell in colab/jupyter notebook.
-        """
-        if type(film_color) == str:
-            film_rgb = to_rgb(film_color)
-        else:
-            film_rgb = tuple(film_color)
+    #     Args:
+    #         output: File path for the output image
+    #         strain: Determines if the film lattice should be strained so it shows perfectly aligned lattice coincidence sites,
+    #             or if the film lattice should be unstrained, giving a better visual of the lattice mismatch.
+    #         dpi: dpi (dots per inch) of the output image.
+    #             Setting dpi=100 gives reasonably sized images when viewed in colab notebook
+    #         show_in_colab: Determines if the matplotlib figure is closed or not after the plot if made.
+    #             if show_in_colab=True the plot will show up after you run the cell in colab/jupyter notebook.
+    #     """
+    #     if type(film_color) == str:
+    #         film_rgb = to_rgb(film_color)
+    #     else:
+    #         film_rgb = tuple(film_color)
 
-        if type(substrate_color) == str:
-            sub_rgb = to_rgb(substrate_color)
-        else:
-            sub_rgb = tuple(substrate_color)
+    #     if type(substrate_color) == str:
+    #         sub_rgb = to_rgb(substrate_color)
+    #     else:
+    #         sub_rgb = tuple(substrate_color)
 
-        (
-            sub_matrix,
-            sub_images,
-            film_matrix,
-            film_images,
-        ) = self._get_oriented_cell_and_images(strain=strain)
+    #     (
+    #         sub_matrix,
+    #         sub_images,
+    #         film_matrix,
+    #         film_images,
+    #     ) = self._get_oriented_cell_and_images(strain=strain)
 
-        interface_matrix = self._orthogonal_structure.lattice.matrix
+    #     interface_matrix = self._orthogonal_structure.lattice.matrix
 
-        coords = np.array(
-            [
-                [0, 0, 0],
-                [1, 0, 0],
-                [1, 1, 0],
-                [0, 1, 0],
-                [0, 0, 0],
-            ]
-        )
+    #     coords = np.array(
+    #         [
+    #             [0, 0, 0],
+    #             [1, 0, 0],
+    #             [1, 1, 0],
+    #             [0, 1, 0],
+    #             [0, 0, 0],
+    #         ]
+    #     )
 
-        interface_coords = coords.dot(interface_matrix)
+    #     interface_coords = coords.dot(interface_matrix)
 
-        xlim = [0, 1]
-        ylim = [0, 1]
+    #     xlim = [0, 1]
+    #     ylim = [0, 1]
 
-        a = interface_matrix[0, :2]
-        b = interface_matrix[1, :2]
-        borders = np.vstack(
-            [
-                xlim[0] * a + ylim[0] * b,
-                xlim[1] * a + ylim[0] * b,
-                xlim[1] * a + ylim[1] * b,
-                xlim[0] * a + ylim[1] * b,
-                xlim[0] * a + ylim[0] * b,
-            ]
-        )
-        x_size = borders[:, 0].max() - borders[:, 0].min()
-        y_size = borders[:, 1].max() - borders[:, 1].min()
-        ratio = y_size / x_size
+    #     a = interface_matrix[0, :2]
+    #     b = interface_matrix[1, :2]
+    #     borders = np.vstack(
+    #         [
+    #             xlim[0] * a + ylim[0] * b,
+    #             xlim[1] * a + ylim[0] * b,
+    #             xlim[1] * a + ylim[1] * b,
+    #             xlim[0] * a + ylim[1] * b,
+    #             xlim[0] * a + ylim[0] * b,
+    #         ]
+    #     )
+    #     x_size = borders[:, 0].max() - borders[:, 0].min()
+    #     y_size = borders[:, 1].max() - borders[:, 1].min()
+    #     ratio = y_size / x_size
 
-        if ratio < 1:
-            figx = 5 / ratio
-            figy = 5
-        else:
-            figx = 5
-            figy = 5 * ratio
+    #     if ratio < 1:
+    #         figx = 5 / ratio
+    #         figy = 5
+    #     else:
+    #         figx = 5
+    #         figy = 5 * ratio
 
-        fig, ax = plt.subplots(
-            figsize=(figx, figy),
-            dpi=dpi,
-        )
+    #     fig, ax = plt.subplots(
+    #         figsize=(figx, figy),
+    #         dpi=dpi,
+    #     )
 
-        for image in sub_images:
-            sub_coords = (coords + image).dot(sub_matrix)
-            poly = Polygon(
-                xy=sub_coords[:, :2],
-                closed=True,
-                facecolor=sub_rgb + (substrate_alpha,),
-                edgecolor=sub_rgb,
-                linewidth=substrate_linewidth,
-                zorder=0,
-            )
-            ax.add_patch(poly)
+    #     for image in sub_images:
+    #         sub_coords = (coords + image).dot(sub_matrix)
+    #         poly = Polygon(
+    #             xy=sub_coords[:, :2],
+    #             closed=True,
+    #             facecolor=sub_rgb + (substrate_alpha,),
+    #             edgecolor=sub_rgb,
+    #             linewidth=substrate_linewidth,
+    #             zorder=0,
+    #         )
+    #         ax.add_patch(poly)
 
-        for image in film_images:
-            film_coords = (coords + image).dot(film_matrix)
-            poly = Polygon(
-                xy=film_coords[:, :2],
-                closed=True,
-                facecolor=film_rgb + (film_alpha,),
-                edgecolor=film_rgb,
-                linewidth=film_linewidth,
-                zorder=10,
-            )
-            ax.add_patch(poly)
+    #     for image in film_images:
+    #         film_coords = (coords + image).dot(film_matrix)
+    #         poly = Polygon(
+    #             xy=film_coords[:, :2],
+    #             closed=True,
+    #             facecolor=film_rgb + (film_alpha,),
+    #             edgecolor=film_rgb,
+    #             linewidth=film_linewidth,
+    #             zorder=10,
+    #         )
+    #         ax.add_patch(poly)
 
-        grid_x = np.linspace(0, 1, 11)
-        grid_y = np.linspace(0, 1, 11)
+    #     grid_x = np.linspace(0, 1, 11)
+    #     grid_y = np.linspace(0, 1, 11)
 
-        X, Y = np.meshgrid(grid_x, grid_y)
+    #     X, Y = np.meshgrid(grid_x, grid_y)
 
-        iface_inv_matrix = self._orthogonal_structure.lattice.inv_matrix
+    #     iface_inv_matrix = self._orthogonal_structure.lattice.inv_matrix
 
-        frac_shifts = (
-            np.c_[X.ravel(), Y.ravel(), np.zeros(Y.shape).ravel()]
-            + film_images[0]
-        )
-        cart_shifts = frac_shifts.dot(film_matrix)
-        # frac_shifts = cart_shifts.dot(iface_inv_matrix)
+    #     frac_shifts = (
+    #         np.c_[X.ravel(), Y.ravel(), np.zeros(Y.shape).ravel()]
+    #         + film_images[0]
+    #     )
+    #     cart_shifts = frac_shifts.dot(film_matrix)
+    #     # frac_shifts = cart_shifts.dot(iface_inv_matrix)
 
-        ax.scatter(
-            cart_shifts[:, 0],
-            cart_shifts[:, 1],
-            c="black",
-        )
+    #     ax.scatter(
+    #         cart_shifts[:, 0],
+    #         cart_shifts[:, 1],
+    #         c="black",
+    #     )
 
-        ax.plot(
-            interface_coords[:, 0],
-            interface_coords[:, 1],
-            color="black",
-            linewidth=4,
-            zorder=20,
-        )
+    #     ax.plot(
+    #         interface_coords[:, 0],
+    #         interface_coords[:, 1],
+    #         color="black",
+    #         linewidth=4,
+    #         zorder=20,
+    #     )
 
-        ax.set_xlim(interface_coords[:, 0].min(), interface_coords[:, 0].max())
-        ax.set_ylim(interface_coords[:, 1].min(), interface_coords[:, 1].max())
+    #     ax.set_xlim(interface_coords[:, 0].min(), interface_coords[:, 0].max())
+    #     ax.set_ylim(interface_coords[:, 1].min(), interface_coords[:, 1].max())
 
-        ax.set_aspect("equal")
-        ax.axis("off")
+    #     ax.set_aspect("equal")
+    #     ax.axis("off")
 
-        fig.tight_layout()
-        fig.savefig(output, bbox_inches="tight")
+    #     fig.tight_layout()
+    #     fig.savefig(output, bbox_inches="tight")
 
-        if not show_in_colab:
-            plt.close()
+    #     if not show_in_colab:
+    #         plt.close()
 
     def _add_arrows(
         self, ax, matrix, arrow_color, color, size, labels, fontsize, linewidth
@@ -2771,306 +2771,306 @@ class Interface:
 
         return "[" + " ".join(label) + "]"
 
-    def plot_interface_old2(
-        self,
-        output: str = "interface_view.png",
-        strain: bool = True,
-        dpi: int = 400,
-        show_in_colab: bool = False,
-        film_color: Union[str, list] = "firebrick",
-        substrate_color: Union[str, list] = "blue",
-        film_alpha: float = 0.05,
-        substrate_alpha: float = 0.05,
-        film_linewidth: float = 2,
-        substrate_linewidth: float = 2,
-    ) -> None:
-        """
-        This function will show the relative alignment of the film and substrate supercells by plotting the in-plane unit cells on top of each other
+    # def plot_interface_old2(
+    #     self,
+    #     output: str = "interface_view.png",
+    #     strain: bool = True,
+    #     dpi: int = 400,
+    #     show_in_colab: bool = False,
+    #     film_color: Union[str, list] = "firebrick",
+    #     substrate_color: Union[str, list] = "blue",
+    #     film_alpha: float = 0.05,
+    #     substrate_alpha: float = 0.05,
+    #     film_linewidth: float = 2,
+    #     substrate_linewidth: float = 2,
+    # ) -> None:
+    #     """
+    #     This function will show the relative alignment of the film and substrate supercells by plotting the in-plane unit cells on top of each other
 
-        Args:
-            output: File path for the output image
-            strain: Determines if the film lattice should be strained so it shows perfectly aligned lattice coincidence sites,
-                or if the film lattice should be unstrained, giving a better visual of the lattice mismatch.
-            dpi: dpi (dots per inch) of the output image.
-                Setting dpi=100 gives reasonably sized images when viewed in colab notebook
-            show_in_colab: Determines if the matplotlib figure is closed or not after the plot if made.
-                if show_in_colab=True the plot will show up after you run the cell in colab/jupyter notebook.
-        """
-        if type(film_color) == str:
-            film_rgb = to_rgb(film_color)
-        else:
-            film_rgb = tuple(film_color)
+    #     Args:
+    #         output: File path for the output image
+    #         strain: Determines if the film lattice should be strained so it shows perfectly aligned lattice coincidence sites,
+    #             or if the film lattice should be unstrained, giving a better visual of the lattice mismatch.
+    #         dpi: dpi (dots per inch) of the output image.
+    #             Setting dpi=100 gives reasonably sized images when viewed in colab notebook
+    #         show_in_colab: Determines if the matplotlib figure is closed or not after the plot if made.
+    #             if show_in_colab=True the plot will show up after you run the cell in colab/jupyter notebook.
+    #     """
+    #     if type(film_color) == str:
+    #         film_rgb = to_rgb(film_color)
+    #     else:
+    #         film_rgb = tuple(film_color)
 
-        if type(substrate_color) == str:
-            sub_rgb = to_rgb(substrate_color)
-        else:
-            sub_rgb = tuple(substrate_color)
+    #     if type(substrate_color) == str:
+    #         sub_rgb = to_rgb(substrate_color)
+    #     else:
+    #         sub_rgb = tuple(substrate_color)
 
-        (
-            sub_matrix,
-            sub_images,
-            film_matrix,
-            film_images,
-        ) = self._get_oriented_cell_and_images(strain=strain)
+    #     (
+    #         sub_matrix,
+    #         sub_images,
+    #         film_matrix,
+    #         film_images,
+    #     ) = self._get_oriented_cell_and_images(strain=strain)
 
-        interface_matrix = self._orthogonal_structure.lattice.matrix
+    #     interface_matrix = self._orthogonal_structure.lattice.matrix
 
-        coords = np.array(
-            [
-                [0, 0, 0],
-                [1, 0, 0],
-                [1, 1, 0],
-                [0, 1, 0],
-                [0, 0, 0],
-            ]
-        )
+    #     coords = np.array(
+    #         [
+    #             [0, 0, 0],
+    #             [1, 0, 0],
+    #             [1, 1, 0],
+    #             [0, 1, 0],
+    #             [0, 0, 0],
+    #         ]
+    #     )
 
-        interface_coords = coords.dot(interface_matrix)
+    #     interface_coords = coords.dot(interface_matrix)
 
-        xlim = [0, 1]
-        ylim = [0, 1]
+    #     xlim = [0, 1]
+    #     ylim = [0, 1]
 
-        a = interface_matrix[0, :2]
-        b = interface_matrix[1, :2]
-        borders = np.vstack(
-            [
-                xlim[0] * a + ylim[0] * b,
-                xlim[1] * a + ylim[0] * b,
-                xlim[1] * a + ylim[1] * b,
-                xlim[0] * a + ylim[1] * b,
-                xlim[0] * a + ylim[0] * b,
-            ]
-        )
-        x_size = borders[:, 0].max() - borders[:, 0].min()
-        y_size = borders[:, 1].max() - borders[:, 1].min()
-        ratio = y_size / x_size
+    #     a = interface_matrix[0, :2]
+    #     b = interface_matrix[1, :2]
+    #     borders = np.vstack(
+    #         [
+    #             xlim[0] * a + ylim[0] * b,
+    #             xlim[1] * a + ylim[0] * b,
+    #             xlim[1] * a + ylim[1] * b,
+    #             xlim[0] * a + ylim[1] * b,
+    #             xlim[0] * a + ylim[0] * b,
+    #         ]
+    #     )
+    #     x_size = borders[:, 0].max() - borders[:, 0].min()
+    #     y_size = borders[:, 1].max() - borders[:, 1].min()
+    #     ratio = y_size / x_size
 
-        if ratio < 1:
-            figx = 5 / ratio
-            figy = 5
-        else:
-            figx = 5
-            figy = 5 * ratio
+    #     if ratio < 1:
+    #         figx = 5 / ratio
+    #         figy = 5
+    #     else:
+    #         figx = 5
+    #         figy = 5 * ratio
 
-        # TODO add labels to the longer side, left or bottom/top to make the figure more square
-        if figy >= figx:
-            mosaic = """
-                ACD
-                BCE
-            """
-            x_expand = 2 * (figy / 2.5)
-            xtot = figx + x_expand
+    #     # TODO add labels to the longer side, left or bottom/top to make the figure more square
+    #     if figy >= figx:
+    #         mosaic = """
+    #             ACD
+    #             BCE
+    #         """
+    #         x_expand = 2 * (figy / 2.5)
+    #         xtot = figx + x_expand
 
-            fig_area = xtot * figy
+    #         fig_area = xtot * figy
 
-            fig = plt.figure(figsize=(xtot, figy))
-            axd = fig.subplot_mosaic(
-                mosaic,
-                gridspec_kw={
-                    "width_ratios": [
-                        0.5 * x_expand / xtot,
-                        figx / xtot,
-                        0.5 * x_expand / xtot,
-                    ]
-                },
-            )
-        else:
-            mosaic = """
-                AB
-                CC
-                DE
-            """
-            y_expand = 2 * (figx / 2.5)
-            ytot = figy + y_expand
+    #         fig = plt.figure(figsize=(xtot, figy))
+    #         axd = fig.subplot_mosaic(
+    #             mosaic,
+    #             gridspec_kw={
+    #                 "width_ratios": [
+    #                     0.5 * x_expand / xtot,
+    #                     figx / xtot,
+    #                     0.5 * x_expand / xtot,
+    #                 ]
+    #             },
+    #         )
+    #     else:
+    #         mosaic = """
+    #             AB
+    #             CC
+    #             DE
+    #         """
+    #         y_expand = 2 * (figx / 2.5)
+    #         ytot = figy + y_expand
 
-            fig_area = figx * ytot
+    #         fig_area = figx * ytot
 
-            fig = plt.figure(figsize=(figx, ytot))
-            axd = fig.subplot_mosaic(
-                mosaic,
-                gridspec_kw={
-                    "height_ratios": [
-                        0.5 * y_expand / ytot,
-                        figy / ytot,
-                        0.5 * y_expand / ytot,
-                    ]
-                },
-            )
+    #         fig = plt.figure(figsize=(figx, ytot))
+    #         axd = fig.subplot_mosaic(
+    #             mosaic,
+    #             gridspec_kw={
+    #                 "height_ratios": [
+    #                     0.5 * y_expand / ytot,
+    #                     figy / ytot,
+    #                     0.5 * y_expand / ytot,
+    #                 ]
+    #             },
+    #         )
 
-        fontsize_scale = 14 / 5.92
-        fontsize = fontsize_scale * np.sqrt(fig_area)
+    #     fontsize_scale = 14 / 5.92
+    #     fontsize = fontsize_scale * np.sqrt(fig_area)
 
-        ax1 = axd["A"]
-        ax2 = axd["B"]
-        ax3 = axd["D"]
-        ax4 = axd["E"]
+    #     ax1 = axd["A"]
+    #     ax2 = axd["B"]
+    #     ax3 = axd["D"]
+    #     ax4 = axd["E"]
 
-        self._setup_label_axis(ax1)
-        self._setup_label_axis(ax2)
-        self._setup_label_axis(ax3)
-        self._setup_label_axis(ax4)
+    #     self._setup_label_axis(ax1)
+    #     self._setup_label_axis(ax2)
+    #     self._setup_label_axis(ax3)
+    #     self._setup_label_axis(ax4)
 
-        ax = axd["C"]
+    #     ax = axd["C"]
 
-        sub_a_label = self._get_miller_label(self.substrate.miller_index_a)
-        sub_b_label = self._get_miller_label(self.substrate.miller_index_b)
+    #     sub_a_label = self._get_miller_label(self.substrate.miller_index_a)
+    #     sub_b_label = self._get_miller_label(self.substrate.miller_index_b)
 
-        film_a_label = self._get_miller_label(self.film.miller_index_a)
-        film_b_label = self._get_miller_label(self.film.miller_index_b)
+    #     film_a_label = self._get_miller_label(self.film.miller_index_a)
+    #     film_b_label = self._get_miller_label(self.film.miller_index_b)
 
-        sub_sc_a_label = self._get_miller_label(self.substrate_a)
-        sub_sc_b_label = self._get_miller_label(self.substrate_b)
+    #     sub_sc_a_label = self._get_miller_label(self.substrate_a)
+    #     sub_sc_b_label = self._get_miller_label(self.substrate_b)
 
-        film_sc_a_label = self._get_miller_label(self.film_a)
-        film_sc_b_label = self._get_miller_label(self.film_b)
+    #     film_sc_a_label = self._get_miller_label(self.film_a)
+    #     film_sc_b_label = self._get_miller_label(self.film_b)
 
-        self._add_arrows(
-            ax=ax1,
-            matrix=sub_matrix,
-            arrow_color=sub_rgb,
-            color=sub_rgb + (0.05,),
-            size=0.03,
-            labels=[sub_a_label, sub_b_label],
-            fontsize=fontsize,
-        )
+    #     self._add_arrows(
+    #         ax=ax1,
+    #         matrix=sub_matrix,
+    #         arrow_color=sub_rgb,
+    #         color=sub_rgb + (0.05,),
+    #         size=0.03,
+    #         labels=[sub_a_label, sub_b_label],
+    #         fontsize=fontsize,
+    #     )
 
-        self._add_arrows(
-            ax=ax2,
-            matrix=film_matrix,
-            arrow_color=film_rgb,
-            color=film_rgb + (0.05,),
-            size=0.03,
-            labels=[film_a_label, film_b_label],
-            fontsize=fontsize,
-        )
+    #     self._add_arrows(
+    #         ax=ax2,
+    #         matrix=film_matrix,
+    #         arrow_color=film_rgb,
+    #         color=film_rgb + (0.05,),
+    #         size=0.03,
+    #         labels=[film_a_label, film_b_label],
+    #         fontsize=fontsize,
+    #     )
 
-        self._add_arrows(
-            ax=ax3,
-            matrix=interface_matrix,
-            arrow_color="black",
-            color=sub_rgb + (0.05,),
-            size=0.03,
-            labels=[
-                f"{int(self._substrate_supercell_scale_factors[0])} \\,"
-                + sub_sc_a_label,
-                f"{int(self._substrate_supercell_scale_factors[1])} \\,"
-                + sub_sc_b_label,
-            ],
-            fontsize=fontsize,
-        )
+    #     self._add_arrows(
+    #         ax=ax3,
+    #         matrix=interface_matrix,
+    #         arrow_color="black",
+    #         color=sub_rgb + (0.05,),
+    #         size=0.03,
+    #         labels=[
+    #             f"{int(self._substrate_supercell_scale_factors[0])} \\,"
+    #             + sub_sc_a_label,
+    #             f"{int(self._substrate_supercell_scale_factors[1])} \\,"
+    #             + sub_sc_b_label,
+    #         ],
+    #         fontsize=fontsize,
+    #     )
 
-        self._add_arrows(
-            ax=ax4,
-            matrix=interface_matrix,
-            arrow_color="black",
-            color=film_rgb + (0.05,),
-            size=0.03,
-            labels=[
-                f"{int(self._film_supercell_scale_factors[0])} \\,"
-                + film_sc_a_label,
-                f"{int(self._film_supercell_scale_factors[1])} \\,"
-                + film_sc_b_label,
-            ],
-            fontsize=fontsize,
-        )
+    #     self._add_arrows(
+    #         ax=ax4,
+    #         matrix=interface_matrix,
+    #         arrow_color="black",
+    #         color=film_rgb + (0.05,),
+    #         size=0.03,
+    #         labels=[
+    #             f"{int(self._film_supercell_scale_factors[0])} \\,"
+    #             + film_sc_a_label,
+    #             f"{int(self._film_supercell_scale_factors[1])} \\,"
+    #             + film_sc_b_label,
+    #         ],
+    #         fontsize=fontsize,
+    #     )
 
-        for image in sub_images:
-            sub_coords = (coords + image).dot(sub_matrix)
-            poly = Polygon(
-                xy=sub_coords[:, :2],
-                closed=True,
-                facecolor=sub_rgb + (substrate_alpha,),
-                edgecolor=sub_rgb,
-                linewidth=substrate_linewidth,
-                zorder=0,
-            )
-            ax.add_patch(poly)
+    #     for image in sub_images:
+    #         sub_coords = (coords + image).dot(sub_matrix)
+    #         poly = Polygon(
+    #             xy=sub_coords[:, :2],
+    #             closed=True,
+    #             facecolor=sub_rgb + (substrate_alpha,),
+    #             edgecolor=sub_rgb,
+    #             linewidth=substrate_linewidth,
+    #             zorder=0,
+    #         )
+    #         ax.add_patch(poly)
 
-        for image in film_images:
-            film_coords = (coords + image).dot(film_matrix)
-            poly = Polygon(
-                xy=film_coords[:, :2],
-                closed=True,
-                facecolor=film_rgb + (film_alpha,),
-                edgecolor=film_rgb,
-                linewidth=film_linewidth,
-                zorder=10,
-            )
-            ax.add_patch(poly)
+    #     for image in film_images:
+    #         film_coords = (coords + image).dot(film_matrix)
+    #         poly = Polygon(
+    #             xy=film_coords[:, :2],
+    #             closed=True,
+    #             facecolor=film_rgb + (film_alpha,),
+    #             edgecolor=film_rgb,
+    #             linewidth=film_linewidth,
+    #             zorder=10,
+    #         )
+    #         ax.add_patch(poly)
 
-        grid_x = np.linspace(0, 1, 11)
-        grid_y = np.linspace(0, 1, 11)
+    #     grid_x = np.linspace(0, 1, 11)
+    #     grid_y = np.linspace(0, 1, 11)
 
-        X, Y = np.meshgrid(grid_x, grid_y)
+    #     X, Y = np.meshgrid(grid_x, grid_y)
 
-        sc_shifts = np.array(
-            [
-                [1, 0, 0],
-                [0, 1, 0],
-                [-1, 0, 0],
-                [0, -1, 0],
-                [1, 1, 0],
-                [-1, -1, 0],
-                [1, -1, 0],
-                [-1, 1, 0],
-            ]
-        )
+    #     sc_shifts = np.array(
+    #         [
+    #             [1, 0, 0],
+    #             [0, 1, 0],
+    #             [-1, 0, 0],
+    #             [0, -1, 0],
+    #             [1, 1, 0],
+    #             [-1, -1, 0],
+    #             [1, -1, 0],
+    #             [-1, 1, 0],
+    #         ]
+    #     )
 
-        for shift in sc_shifts:
-            shift_coords = (coords + shift).dot(interface_matrix)
-            poly = Polygon(
-                xy=shift_coords[:, :2],
-                closed=True,
-                facecolor="white",
-                edgecolor="white",
-                linewidth=1,
-                zorder=15,
-            )
-            ax.add_patch(poly)
+    #     for shift in sc_shifts:
+    #         shift_coords = (coords + shift).dot(interface_matrix)
+    #         poly = Polygon(
+    #             xy=shift_coords[:, :2],
+    #             closed=True,
+    #             facecolor="white",
+    #             edgecolor="white",
+    #             linewidth=1,
+    #             zorder=15,
+    #         )
+    #         ax.add_patch(poly)
 
-        ax.plot(
-            interface_coords[:, 0],
-            interface_coords[:, 1],
-            color="black",
-            linewidth=3,
-            zorder=20,
-        )
+    #     ax.plot(
+    #         interface_coords[:, 0],
+    #         interface_coords[:, 1],
+    #         color="black",
+    #         linewidth=3,
+    #         zorder=20,
+    #     )
 
-        x_range = interface_coords[:, 0].max() - interface_coords[:, 0].min()
-        y_range = interface_coords[:, 1].max() - interface_coords[:, 1].min()
-        x_margin = 0.05 * x_range
-        y_margin = 0.05 * y_range
+    #     x_range = interface_coords[:, 0].max() - interface_coords[:, 0].min()
+    #     y_range = interface_coords[:, 1].max() - interface_coords[:, 1].min()
+    #     x_margin = 0.05 * x_range
+    #     y_margin = 0.05 * y_range
 
-        ax.set_xlim(
-            interface_coords[:, 0].min() - x_margin,
-            interface_coords[:, 0].max() + x_margin,
-        )
-        ax.set_ylim(
-            interface_coords[:, 1].min() - y_margin,
-            interface_coords[:, 1].max() + y_margin,
-        )
+    #     ax.set_xlim(
+    #         interface_coords[:, 0].min() - x_margin,
+    #         interface_coords[:, 0].max() + x_margin,
+    #     )
+    #     ax.set_ylim(
+    #         interface_coords[:, 1].min() - y_margin,
+    #         interface_coords[:, 1].max() + y_margin,
+    #     )
 
-        ax.set_aspect("equal")
-        ax.axis("off")
+    #     ax.set_aspect("equal")
+    #     ax.axis("off")
 
-        fig.tight_layout()
-        fig.savefig(output, bbox_inches="tight")
+    #     fig.tight_layout()
+    #     fig.savefig(output, bbox_inches="tight")
 
-        if not show_in_colab:
-            plt.close()
+    #     if not show_in_colab:
+    #         plt.close()
 
     def plot_interface(
         self,
         output: str = "interface_view.png",
         strain: bool = True,
         dpi: int = 400,
-        show_in_colab: bool = False,
         film_color: Union[str, list] = "firebrick",
         substrate_color: Union[str, list] = "blue",
         film_alpha: float = 0.05,
         substrate_alpha: float = 0.05,
         film_linewidth: float = 2,
         substrate_linewidth: float = 2,
+        show_in_colab: bool = False,
     ) -> None:
         """
         This function will show the relative alignment of the film and substrate supercells by plotting the in-plane unit cells on top of each other
@@ -3081,6 +3081,12 @@ class Interface:
                 or if the film lattice should be unstrained, giving a better visual of the lattice mismatch.
             dpi: dpi (dots per inch) of the output image.
                 Setting dpi=100 gives reasonably sized images when viewed in colab notebook
+            film_color: Color to represent the film lattice vectors
+            substrate_color: Color to represent the substrate lattice vectors
+            film_alpha: Tranparency of the film color (ranging from 0 to 1)
+            substrate_alpha: Tranparency of the substrate color (ranging from 0 to 1)
+            film_linewidth: Linewidth of the film lattice vector edges
+            substrate_linewidth: Linewidth of the substrate lattice vector edges
             show_in_colab: Determines if the matplotlib figure is closed or not after the plot if made.
                 if show_in_colab=True the plot will show up after you run the cell in colab/jupyter notebook.
         """
@@ -3115,20 +3121,11 @@ class Interface:
 
         interface_coords = coords.dot(interface_matrix)
 
-        xlim = [0, 1]
-        ylim = [0, 1]
-
         a = interface_matrix[0, :2]
         b = interface_matrix[1, :2]
-        borders = np.vstack(
-            [
-                xlim[0] * a + ylim[0] * b,
-                xlim[1] * a + ylim[0] * b,
-                xlim[1] * a + ylim[1] * b,
-                xlim[0] * a + ylim[1] * b,
-                xlim[0] * a + ylim[0] * b,
-            ]
-        )
+
+        borders = np.vstack([np.zeros(2), a, a + b, b, np.zeros(2)])
+
         x_size = borders[:, 0].max() - borders[:, 0].min()
         y_size = borders[:, 1].max() - borders[:, 1].min()
         ratio = y_size / x_size
@@ -3405,125 +3402,125 @@ class Interface:
         if not show_in_colab:
             plt.close()
 
-    def plot_interface_old(
-        self,
-        output: str = "interface_view.png",
-        strain: bool = True,
-        dpi: int = 400,
-        show_in_colab: bool = False,
-    ) -> None:
-        """
-        This function will show the relative alignment of the film and substrate supercells by plotting the in-plane unit cells on top of each other
+    # def plot_interface_old(
+    #     self,
+    #     output: str = "interface_view.png",
+    #     strain: bool = True,
+    #     dpi: int = 400,
+    #     show_in_colab: bool = False,
+    # ) -> None:
+    #     """
+    #     This function will show the relative alignment of the film and substrate supercells by plotting the in-plane unit cells on top of each other
 
-        Args:
-            output: File path for the output image
-            strain: Determines if the film lattice should be strained so it shows perfectly aligned lattice coincidence sites,
-                or if the film lattice should be unstrained, giving a better visual of the lattice mismatch.
-            dpi: dpi (dots per inch) of the output image.
-                Setting dpi=100 gives reasonably sized images when viewed in colab notebook
-            show_in_colab: Determines if the matplotlib figure is closed or not after the plot if made.
-                if show_in_colab=True the plot will show up after you run the cell in colab/jupyter notebook.
-        """
-        sub_struc = self.substrate._orthogonal_slab_structure.copy()
-        sub_a_to_i_op = SymmOp.from_rotation_and_translation(
-            rotation_matrix=self._substrate_a_to_i, translation_vec=np.zeros(3)
-        )
-        sub_struc.apply_operation(sub_a_to_i_op)
+    #     Args:
+    #         output: File path for the output image
+    #         strain: Determines if the film lattice should be strained so it shows perfectly aligned lattice coincidence sites,
+    #             or if the film lattice should be unstrained, giving a better visual of the lattice mismatch.
+    #         dpi: dpi (dots per inch) of the output image.
+    #             Setting dpi=100 gives reasonably sized images when viewed in colab notebook
+    #         show_in_colab: Determines if the matplotlib figure is closed or not after the plot if made.
+    #             if show_in_colab=True the plot will show up after you run the cell in colab/jupyter notebook.
+    #     """
+    #     sub_struc = self.substrate._orthogonal_slab_structure.copy()
+    #     sub_a_to_i_op = SymmOp.from_rotation_and_translation(
+    #         rotation_matrix=self._substrate_a_to_i, translation_vec=np.zeros(3)
+    #     )
+    #     sub_struc.apply_operation(sub_a_to_i_op)
 
-        film_struc = self.film._orthogonal_slab_structure.copy()
-        film_a_to_i_op = SymmOp.from_rotation_and_translation(
-            rotation_matrix=self._film_a_to_i, translation_vec=np.zeros(3)
-        )
-        film_struc.apply_operation(film_a_to_i_op)
+    #     film_struc = self.film._orthogonal_slab_structure.copy()
+    #     film_a_to_i_op = SymmOp.from_rotation_and_translation(
+    #         rotation_matrix=self._film_a_to_i, translation_vec=np.zeros(3)
+    #     )
+    #     film_struc.apply_operation(film_a_to_i_op)
 
-        sub_matrix = sub_struc.lattice.matrix
-        film_matrix = film_struc.lattice.matrix
+    #     sub_matrix = sub_struc.lattice.matrix
+    #     film_matrix = film_struc.lattice.matrix
 
-        sub_sc_matrix = deepcopy(self._substrate_supercell.lattice.matrix)
-        film_sc_matrix = deepcopy(self._film_supercell.lattice.matrix)
+    #     sub_sc_matrix = deepcopy(self._substrate_supercell.lattice.matrix)
+    #     film_sc_matrix = deepcopy(self._film_supercell.lattice.matrix)
 
-        coords = np.array(
-            [
-                [0, 0, 0],
-                [1, 0, 0],
-                [1, 1, 0],
-                [0, 1, 0],
-                [0, 0, 0],
-            ]
-        )
+    #     coords = np.array(
+    #         [
+    #             [0, 0, 0],
+    #             [1, 0, 0],
+    #             [1, 1, 0],
+    #             [0, 1, 0],
+    #             [0, 0, 0],
+    #         ]
+    #     )
 
-        sc_shifts = np.array(
-            [
-                [0, 0, 0],
-                [1, 0, 0],
-                [0, 1, 0],
-                [-1, 0, 0],
-                [0, -1, 0],
-                [1, 1, 0],
-                [-1, -1, 0],
-                [1, -1, 0],
-                [-1, 1, 0],
-            ]
-        )
+    #     sc_shifts = np.array(
+    #         [
+    #             [0, 0, 0],
+    #             [1, 0, 0],
+    #             [0, 1, 0],
+    #             [-1, 0, 0],
+    #             [0, -1, 0],
+    #             [1, 1, 0],
+    #             [-1, -1, 0],
+    #             [1, -1, 0],
+    #             [-1, 1, 0],
+    #         ]
+    #     )
 
-        sub_sc_shifts = sc_shifts.dot(sub_sc_matrix)
-        film_sc_shifts = sc_shifts.dot(film_sc_matrix)
-        sub_sl = coords.dot(sub_sc_matrix)
+    #     sub_sc_shifts = sc_shifts.dot(sub_sc_matrix)
+    #     film_sc_shifts = sc_shifts.dot(film_sc_matrix)
+    #     sub_sl = coords.dot(sub_sc_matrix)
 
-        sub_struc, sub_inv_matrix = self._generate_sc_for_interface_view(
-            struc=sub_struc,
-            transformation_matrix=self.match.substrate_sl_transform,
-        )
+    #     sub_struc, sub_inv_matrix = self._generate_sc_for_interface_view(
+    #         struc=sub_struc,
+    #         transformation_matrix=self.match.substrate_sl_transform,
+    #     )
 
-        film_struc, film_inv_matrix = self._generate_sc_for_interface_view(
-            struc=film_struc,
-            transformation_matrix=self.match.film_sl_transform,
-        )
+    #     film_struc, film_inv_matrix = self._generate_sc_for_interface_view(
+    #         struc=film_struc,
+    #         transformation_matrix=self.match.film_sl_transform,
+    #     )
 
-        fig, ax = plt.subplots(figsize=(4, 4), dpi=dpi)
+    #     fig, ax = plt.subplots(figsize=(4, 4), dpi=dpi)
 
-        for c in sub_struc.cart_coords:
-            for shift in sub_sc_shifts:
-                self._plot_interface_view(
-                    ax=ax,
-                    zero_coord=c,
-                    supercell_shift=shift,
-                    cell_vetices=coords,
-                    slab_matrix=sub_matrix,
-                    sc_inv_matrix=sub_inv_matrix,
-                    is_film=False,
-                    strain=strain,
-                    facecolor=(0, 0, 1, 0.2),
-                    edgecolor=(0, 0, 1, 1),
-                )
+    #     for c in sub_struc.cart_coords:
+    #         for shift in sub_sc_shifts:
+    #             self._plot_interface_view(
+    #                 ax=ax,
+    #                 zero_coord=c,
+    #                 supercell_shift=shift,
+    #                 cell_vetices=coords,
+    #                 slab_matrix=sub_matrix,
+    #                 sc_inv_matrix=sub_inv_matrix,
+    #                 is_film=False,
+    #                 strain=strain,
+    #                 facecolor=(0, 0, 1, 0.2),
+    #                 edgecolor=(0, 0, 1, 1),
+    #             )
 
-        for c in film_struc.cart_coords:
-            for shift in film_sc_shifts:
-                self._plot_interface_view(
-                    ax=ax,
-                    zero_coord=c,
-                    supercell_shift=shift,
-                    cell_vetices=coords,
-                    slab_matrix=film_matrix,
-                    sc_inv_matrix=film_inv_matrix,
-                    is_film=True,
-                    strain=strain,
-                    facecolor=(200 / 255, 0, 0, 0.2),
-                    edgecolor=(200 / 255, 0, 0, 1),
-                )
+    #     for c in film_struc.cart_coords:
+    #         for shift in film_sc_shifts:
+    #             self._plot_interface_view(
+    #                 ax=ax,
+    #                 zero_coord=c,
+    #                 supercell_shift=shift,
+    #                 cell_vetices=coords,
+    #                 slab_matrix=film_matrix,
+    #                 sc_inv_matrix=film_inv_matrix,
+    #                 is_film=True,
+    #                 strain=strain,
+    #                 facecolor=(200 / 255, 0, 0, 0.2),
+    #                 edgecolor=(200 / 255, 0, 0, 1),
+    #             )
 
-        ax.plot(
-            sub_sl[:, 0],
-            sub_sl[:, 1],
-            color="black",
-            linewidth=3,
-        )
+    #     ax.plot(
+    #         sub_sl[:, 0],
+    #         sub_sl[:, 1],
+    #         color="black",
+    #         linewidth=3,
+    #     )
 
-        ax.set_aspect("equal")
-        ax.axis("off")
+    #     ax.set_aspect("equal")
+    #     ax.axis("off")
 
-        fig.tight_layout()
-        fig.savefig(output, bbox_inches="tight")
+    #     fig.tight_layout()
+    #     fig.savefig(output, bbox_inches="tight")
 
-        if not show_in_colab:
-            plt.close()
+    #     if not show_in_colab:
+    #         plt.close()

@@ -2,36 +2,28 @@ from OgreInterface.score_function.ewald import EnergyEwald
 from OgreInterface.score_function.born import EnergyBorn
 from OgreInterface.score_function.generate_inputs import generate_dict_torch
 from OgreInterface.surfaces import Interface
-from pymatgen.io.ase import AseAtomsAdaptor
+from OgreInterface.surface_match.base_surface_matcher import BaseSurfaceMatcher
 from pymatgen.core.periodic_table import Element
 from pymatgen.analysis.local_env import CrystalNN
-from ase.data import atomic_numbers, chemical_symbols
-from typing import Dict, List
+from ase.data import chemical_symbols
+from typing import List
 from ase import Atoms
 import numpy as np
-from matplotlib.colors import Normalize
 import matplotlib.pyplot as plt
-from mpl_toolkits.axes_grid1 import make_axes_locatable
-from scipy.interpolate import RectBivariateSpline, CubicSpline
-from copy import deepcopy
+from scipy.interpolate import RectBivariateSpline
 from itertools import groupby, combinations_with_replacement, product
 
 
-class IonicSurfaceMatcher:
+class IonicSurfaceMatcher(BaseSurfaceMatcher):
     def __init__(
         self,
         interface: Interface,
-        grid_density_x: int = 15,
-        grid_density_y: int = 15,
+        grid_density: float = 0.4,
     ):
-        self.interface = interface
-        self.matrix = deepcopy(interface._orthogonal_structure.lattice.matrix)
-        self._vol = np.linalg.det(self.matrix)
-
-        if self._vol < 0:
-            self.matrix *= -1
-            self._vol *= -1
-
+        super().__init__(
+            interface=interface,
+            grid_density=grid_density,
+        )
         self.cutoff, self.alpha, self.k_max = self._get_ewald_parameters()
         self.k_max = 10
         self.charge_dict = self._get_charges()
@@ -44,11 +36,8 @@ class IonicSurfaceMatcher:
         self.d_interface = self.interface.interfacial_distance
         self.film_part = self.interface._orthogonal_film_structure
         self.sub_part = self.interface._orthogonal_film_structure
-        self.grid_density_x = grid_density_x
-        self.grid_density_y = grid_density_y
         self.opt_xy_shift = np.zeros(2)
 
-        self.shifts, self.X, self.Y = self._generate_shifts()
         self.z_PES_data = None
 
     def get_optmized_structure(self):
@@ -100,10 +89,23 @@ class IonicSurfaceMatcher:
             c2 = charge_dict[s2]
 
             if d is None:
-                d1_ionic = float(Element(s1).ionic_radii[c1])
-                d2_ionic = float(Element(s2).ionic_radii[c2])
+                try:
+                    d1 = float(Element(s1).ionic_radii[c1])
+                except KeyError:
+                    print(
+                        f"No ionic radius available for {s1}, using the atomic radius instead"
+                    )
+                    d1 = float(Element(s1).atomic_radius)
 
-                neighbor_dict[n] = d1_ionic + d2_ionic
+                try:
+                    d2 = float(Element(s2).ionic_radii[c2])
+                except KeyError:
+                    print(
+                        f"No ionic radius available for {s2}, using the atomic radius instead"
+                    )
+                    d2 = float(Element(s2).atomic_radius)
+
+                neighbor_dict[n] = d1 + d2
 
         return neighbor_dict
 
@@ -115,12 +117,21 @@ class IonicSurfaceMatcher:
             np.concatenate([sub.atomic_numbers, film.atomic_numbers])
         )
 
-        ionic_radius_dict = {
-            n: Element(chemical_symbols[n]).ionic_radii[
-                charge_dict[chemical_symbols[n]]
-            ]
-            for n in interface_atomic_numbers
-        }
+        ionic_radius_dict = {}
+
+        for n in interface_atomic_numbers:
+            element = Element(chemical_symbols[n])
+
+            try:
+                d = element.ionic_radii[charge_dict[chemical_symbols[n]]]
+            except KeyError:
+                print(
+                    f"No ionic radius available for {chemical_symbols[n]}, using the atomic radius instead"
+                )
+                d = float(element.atomic_radius)
+
+            ionic_radius_dict[n] = d
+
         interface_combos = product(interface_atomic_numbers, repeat=2)
         interface_neighbor_dict = {}
         for c in interface_combos:
@@ -193,7 +204,6 @@ class IonicSurfaceMatcher:
 
     def _get_ewald_parameters(self):
         struc_vol = self.interface._structure_volume
-        # struc_vol = self._vol
         accf = np.sqrt(np.log(10**4))
         w = 1 / 2**0.5
         alpha = np.pi * (
@@ -203,15 +213,6 @@ class IonicSurfaceMatcher:
         k_max = 2 * np.sqrt(alpha) * accf
 
         return cutoff, alpha, k_max
-
-    def _generate_shifts(self):
-        grid_x = np.linspace(0, 1, self.grid_density_x)
-        grid_y = np.linspace(0, 1, self.grid_density_y)
-        X, Y = np.meshgrid(grid_x, grid_y)
-
-        shifts = np.c_[X.ravel(), Y.ravel()]
-
-        return shifts, X, Y
 
     def _get_shifted_atoms(self, shifts: np.ndarray) -> List[Atoms]:
         atoms = []
@@ -270,75 +271,31 @@ class IonicSurfaceMatcher:
 
         return born_energy
 
-    def _get_interpolated_data(self, X, Y, Z):
+    def _get_interpolated_data(self, Z, image):
         x_grid = np.linspace(0, 1, self.grid_density_x)
         y_grid = np.linspace(0, 1, self.grid_density_y)
         spline = RectBivariateSpline(y_grid, x_grid, Z)
 
-        x_grid_interp = np.linspace(0, 1, 401)
-        y_grid_interp = np.linspace(0, 1, 401)
+        x_grid_interp = np.linspace(0, 1, 101)
+        y_grid_interp = np.linspace(0, 1, 101)
 
         X_interp, Y_interp = np.meshgrid(x_grid_interp, y_grid_interp)
         Z_interp = spline.ev(xi=Y_interp, yi=X_interp)
-        frac_shifts = np.c_[
-            X_interp.ravel(),
-            Y_interp.ravel(),
-            np.zeros(X_interp.shape).ravel(),
-        ]
+        frac_shifts = (
+            np.c_[
+                X_interp.ravel(),
+                Y_interp.ravel(),
+                np.zeros(X_interp.shape).ravel(),
+            ]
+            + image
+        )
 
-        cart_shifts = frac_shifts.dot(self.matrix)
+        cart_shifts = frac_shifts.dot(self.shift_matrix)
 
         X_cart = cart_shifts[:, 0].reshape(X_interp.shape)
         Y_cart = cart_shifts[:, 1].reshape(Y_interp.shape)
 
         return X_cart, Y_cart, Z_interp
-
-    def _plot_heatmap(
-        self, fig, ax, X, Y, Z, borders, cmap, fontsize, show_max
-    ):
-        ax.set_xlabel(r"Shift in $x$ ($\AA$)", fontsize=fontsize)
-        ax.set_ylabel(r"Shift in $y$ ($\AA$)", fontsize=fontsize)
-
-        im = ax.contourf(
-            X,
-            Y,
-            Z,
-            cmap=cmap,
-            levels=200,
-            norm=Normalize(vmin=np.nanmin(Z), vmax=np.nanmax(Z)),
-        )
-
-        ax.plot(
-            borders[:, 0],
-            borders[:, 1],
-            color="black",
-            linewidth=2,
-        )
-
-        divider = make_axes_locatable(ax)
-        cax = divider.append_axes("top", size="5%", pad=0.1)
-        cbar = fig.colorbar(im, cax=cax, orientation="horizontal")
-        cbar.ax.tick_params(labelsize=fontsize)
-        cbar.ax.locator_params(nbins=3)
-
-        if show_max:
-            E_max = np.max(Z)
-            label = (
-                "$E_{adh}$ (eV/$\\AA^{2}$) : "
-                + "$E_{max}$ = "
-                + f"{E_max:.4f}"
-            )
-            cbar.set_label(label, fontsize=fontsize)
-        else:
-            label = "$E_{adh}$ (eV/$\\AA^{2}$)"
-            cbar.set_label(label, fontsize=fontsize)
-
-        cax.xaxis.set_ticks_position("top")
-        cax.xaxis.set_label_position("top")
-        ax.tick_params(labelsize=fontsize)
-        ax.set_xlim(borders[:, 0].min(), borders[:, 0].max())
-        ax.set_ylim(borders[:, 1].min(), borders[:, 1].max())
-        ax.set_aspect("equal")
 
     def run_surface_matching(
         self,
@@ -354,11 +311,15 @@ class IonicSurfaceMatcher:
         atoms_list = self._get_shifted_atoms(shifts)
         inputs = self._generate_inputs(atoms_list)
 
+        x_grid = np.linspace(0, 1, self.grid_density_x)
+        y_grid = np.linspace(0, 1, self.grid_density_y)
+        X, Y = np.meshgrid(x_grid, y_grid)
+
         if self.z_PES_data is None:
             z_coulomb_energy = self._calculate_coulomb(inputs, z_shift=True)
             z_born_energy = self._calculate_born(inputs, z_shift=True)
-            z_interface_coulomb_energy = z_coulomb_energy.reshape(self.X.shape)
-            z_interface_born_energy = z_born_energy.reshape(self.X.shape)
+            z_interface_coulomb_energy = z_coulomb_energy.reshape(X.shape)
+            z_interface_born_energy = z_born_energy.reshape(X.shape)
             self.z_PES_data = [
                 z_interface_coulomb_energy,
                 z_interface_born_energy,
@@ -370,22 +331,13 @@ class IonicSurfaceMatcher:
         coulomb_energy = self._calculate_coulomb(inputs, z_shift=False)
         born_energy = self._calculate_born(inputs, z_shift=False)
 
-        interface_coulomb_energy = coulomb_energy.reshape(self.X.shape)
-        interface_born_energy = born_energy.reshape(self.X.shape)
+        interface_coulomb_energy = coulomb_energy.reshape(X.shape)
+        interface_born_energy = born_energy.reshape(X.shape)
 
         coulomb_adh_energy = (
             z_interface_coulomb_energy - interface_coulomb_energy
         )
         born_adh_energy = z_interface_born_energy - interface_born_energy
-
-        X_plot, Y_plot, Z_born = self._get_interpolated_data(
-            self.X, self.Y, born_adh_energy
-        )
-        _, _, Z_coulomb = self._get_interpolated_data(
-            self.X, self.Y, coulomb_adh_energy
-        )
-
-        Z_both = Z_born + Z_coulomb
 
         a = self.matrix[0, :2]
         b = self.matrix[1, :2]
@@ -401,91 +353,78 @@ class IonicSurfaceMatcher:
                 dpi=dpi,
             )
 
-            self._plot_heatmap(
+            self._plot_surface_matching(
                 fig=fig,
                 ax=ax1,
-                X=X_plot,
-                Y=Y_plot,
-                Z=Z_born / (self.interface.area),
-                borders=borders,
-                cmap=cmap,
-                fontsize=fontsize,
-                show_max=False,
-            )
-            self._plot_heatmap(
-                fig=fig,
-                ax=ax2,
-                X=X_plot,
-                Y=Y_plot,
-                Z=Z_coulomb / (self.interface.area),
-                borders=borders,
-                cmap=cmap,
-                fontsize=fontsize,
-                show_max=False,
-            )
-            self._plot_heatmap(
-                fig=fig,
-                ax=ax3,
-                X=X_plot,
-                Y=Y_plot,
-                Z=Z_both / (self.interface.area),
-                borders=borders,
+                X=X,
+                Y=Y,
+                Z=born_adh_energy / self.interface.area,
+                dpi=dpi,
                 cmap=cmap,
                 fontsize=fontsize,
                 show_max=show_max,
+                shift=False,
             )
 
-            frac_shifts = np.c_[
-                X_plot.ravel(), Y_plot.ravel(), np.zeros(Y_plot.shape).ravel()
-            ].dot(np.linalg.inv(self.matrix))
-            opt_shift = frac_shifts[np.argmax(Z_both.ravel())]
-            max_Z = np.max(Z_both)
-            plot_shift = opt_shift.dot(self.matrix)
-
-            ax3.scatter(
-                [plot_shift[0]],
-                [plot_shift[1]],
-                fc="white",
-                ec="black",
-                marker="X",
-                s=100,
-                zorder=10,
+            self._plot_surface_matching(
+                fig=fig,
+                ax=ax2,
+                X=X,
+                Y=Y,
+                Z=coulomb_adh_energy / self.interface.area,
+                dpi=dpi,
+                cmap=cmap,
+                fontsize=fontsize,
+                show_max=show_max,
+                shift=False,
             )
+
+            max_Z = self._plot_surface_matching(
+                fig=fig,
+                ax=ax3,
+                X=X,
+                Y=Y,
+                Z=(born_adh_energy + coulomb_adh_energy) / self.interface.area,
+                dpi=dpi,
+                cmap=cmap,
+                fontsize=fontsize,
+                show_max=show_max,
+                shift=True,
+            )
+
+            ax1.set_xlim(borders[:, 0].min(), borders[:, 0].max())
+            ax1.set_ylim(borders[:, 1].min(), borders[:, 1].max())
+            ax1.set_aspect("equal")
+
+            ax2.set_xlim(borders[:, 0].min(), borders[:, 0].max())
+            ax2.set_ylim(borders[:, 1].min(), borders[:, 1].max())
+            ax2.set_aspect("equal")
+
+            ax3.set_xlim(borders[:, 0].min(), borders[:, 0].max())
+            ax3.set_ylim(borders[:, 1].min(), borders[:, 1].max())
+            ax3.set_aspect("equal")
         else:
             fig, ax = plt.subplots(
                 figsize=(5, 5 * ratio),
                 dpi=dpi,
             )
-            self._plot_heatmap(
+
+            max_Z = self._plot_surface_matching(
                 fig=fig,
                 ax=ax,
-                X=X_plot,
-                Y=Y_plot,
-                Z=Z_both / (self.interface.area),
-                borders=borders,
+                X=X,
+                Y=Y,
+                Z=(born_adh_energy + coulomb_adh_energy) / self.interface.area,
+                dpi=dpi,
                 cmap=cmap,
                 fontsize=fontsize,
                 show_max=show_max,
+                shift=True,
             )
 
-            frac_shifts = np.c_[
-                X_plot.ravel(), Y_plot.ravel(), np.zeros(Y_plot.shape).ravel()
-            ].dot(np.linalg.inv(self.matrix))
-            opt_shift = frac_shifts[np.argmax(Z_both.ravel())]
-            max_Z = np.max(Z_both)
-            plot_shift = opt_shift.dot(self.matrix)
-
-            ax.scatter(
-                [plot_shift[0]],
-                [plot_shift[1]],
-                fc="white",
-                ec="black",
-                marker="X",
-                s=100,
-                zorder=10,
-            )
-
-        self.opt_xy_shift = opt_shift[:2]
+            ax.set_xlim(borders[:, 0].min(), borders[:, 0].max())
+            ax.set_ylim(borders[:, 1].min(), borders[:, 1].max())
+            ax.set_aspect("equal")
 
         fig.tight_layout()
         fig.savefig(output, bbox_inches="tight")

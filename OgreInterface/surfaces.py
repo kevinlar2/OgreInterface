@@ -854,7 +854,7 @@ class Surface:
 
         Examples:
             >>> surface.get_termination()
-            >>> {"bottom": "In", "top": "As"}
+            >>> {"bottom": {"In": 1, "As": 0}, "top": {"In": 0, "As": 1}
         """
         raise NotImplementedError
 

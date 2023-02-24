@@ -5,14 +5,20 @@ from OgreInterface.surfaces import Surface, Interface
 from OgreInterface import utils
 from OgreInterface.lattice_match import ZurMcGill, OgreMatch
 
-from pymatgen.core.structure import Structure
-from pymatgen.analysis.structure_matcher import StructureMatcher
+from pymatgen.core.structure import Structure, Molecule
 from pymatgen.core.lattice import Lattice
 from pymatgen.io.vasp.inputs import Poscar
 from pymatgen.io.ase import AseAtomsAdaptor
 from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
-from pymatgen.analysis.interfaces.zsl import ZSLGenerator
 from pymatgen.core.operations import SymmOp
+from pymatgen.analysis.graphs import StructureGraph
+from pymatgen.analysis.local_env import JmolNN
+from pymatgen.analysis.molecule_matcher import (
+    IsomorphismMolAtomMapper,
+)
+import networkx as nx
+import numpy as np
+
 
 from tqdm import tqdm
 import numpy as np
@@ -23,6 +29,7 @@ from itertools import combinations, product, groupby
 from ase import Atoms
 from multiprocessing import Pool, cpu_count
 import time
+from collections.abc import Sequence
 
 from scipy.cluster.hierarchy import fcluster, linkage
 from scipy.spatial.distance import squareform
@@ -30,6 +37,11 @@ from scipy.spatial.distance import squareform
 SelfSurfaceGenerator = TypeVar(
     "SelfSurfaceGenerator", bound="SurfaceGenerator"
 )
+
+SelfOrganicSurfaceGenerator = TypeVar(
+    "SelfOrganicSurfaceGenerator", bound="OrganicSurfaceGenerator"
+)
+
 SelfInterfaceGenerator = TypeVar(
     "SelfInterfaceGenerator", bound="InterfaceGenerator"
 )
@@ -41,7 +53,7 @@ class TolarenceError(RuntimeError):
     pass
 
 
-class SurfaceGenerator:
+class SurfaceGenerator(Sequence):
     """Class for generating surfaces from a given bulk structure.
 
     The SurfaceGenerator classes generates surfaces with all possible terminations and contains
@@ -108,6 +120,7 @@ class SurfaceGenerator:
         filter_ionic_slabs: bool = False,
         lazy: bool = False,
     ) -> None:
+        super().__init__()
         self.convert_to_conventional = convert_to_conventional
 
         (
@@ -140,12 +153,25 @@ class SurfaceGenerator:
         ) = self._get_oriented_bulk_structure()
 
         if not self.lazy:
-            self.slabs = self._generate_slabs()
+            self._slabs = self._generate_slabs()
+        else:
+            self._slabs = None
+
+    def __getitem__(self, i):
+        if self._slabs:
+            return self._slabs[i]
+        else:
+            print(
+                "The slabs have not been generated yet, please use the generate_slabs() function to create them."
+            )
+
+    def __len__(self):
+        return len(self._slabs)
 
     def generate_slabs(self) -> None:
         """Used to generate list of Surface objects if lazy=True"""
         if self.lazy:
-            self.slabs = self._generate_slabs()
+            self._slabs = self._generate_slabs()
         else:
             print(
                 "The slabs are already generated upon initialization. This function is only needed if lazy=True"
@@ -202,12 +228,14 @@ class SurfaceGenerator:
                 f"structure accepts 'pymatgen.core.structure.Structure' or 'ase.Atoms' not '{type(atoms_or_struc).__name__}'"
             )
 
-        sg = SpacegroupAnalyzer(init_structure)
-        prim_structure = sg.get_primitive_standard_structure()
-        prim_atoms = AseAtomsAdaptor.get_atoms(prim_structure)
-
         if self.convert_to_conventional:
+            sg = SpacegroupAnalyzer(init_structure)
             conventional_structure = sg.get_conventional_standard_structure()
+            prim_structure = self._add_symmetry_info(
+                conventional_structure, return_primitive=True
+            )
+            # prim_structure = sg.get_primitive_standard_structure()
+            prim_atoms = AseAtomsAdaptor.get_atoms(prim_structure)
             conventional_atoms = AseAtomsAdaptor.get_atoms(
                 conventional_structure
             )
@@ -219,7 +247,15 @@ class SurfaceGenerator:
                 prim_atoms,
             )
         else:
+            if "molecule_index" in init_structure.site_properties:
+                self._add_symmetry_info_molecule(init_structure)
+            else:
+                self._add_symmetry_info(init_structure, return_primitive=False)
+
             init_atoms = AseAtomsAdaptor().get_atoms(init_structure)
+
+            prim_structure = init_structure.get_primitive_structure()
+            prim_atoms = AseAtomsAdaptor().get_atoms(prim_structure)
 
             return init_structure, init_atoms, prim_structure, prim_atoms
 
@@ -233,6 +269,41 @@ class SurfaceGenerator:
 
         return unique_operations
 
+    def _add_symmetry_info(self, struc, return_primitive=False):
+        sg = SpacegroupAnalyzer(struc)
+        dataset = sg.get_symmetry_dataset()
+        struc.add_site_property("bulk_wyckoff", dataset["wyckoffs"])
+        struc.add_site_property(
+            "bulk_equivalent",
+            dataset["equivalent_atoms"].tolist(),
+        )
+
+        if return_primitive:
+            prim_mapping = dataset["mapping_to_primitive"]
+            _, prim_inds = np.unique(prim_mapping, return_index=True)
+            prim_bulk = sg.get_primitive_standard_structure()
+
+            prim_bulk.add_site_property(
+                "bulk_wyckoff",
+                [dataset["wyckoffs"][i] for i in prim_inds],
+            )
+            prim_bulk.add_site_property(
+                "bulk_equivalent",
+                dataset["equivalent_atoms"][prim_inds].tolist(),
+            )
+
+            return prim_bulk
+
+    def _add_symmetry_info_molecule(self, struc):
+        sg = SpacegroupAnalyzer(struc)
+        dataset = sg.get_symmetry_dataset()
+        wyckoffs = dataset["wyckoffs"]
+        equivalent_atoms = dataset["equivalent_atoms"]
+        molecule_index = struc.site_properties["molecule_index"]
+        equivalent_molecules = [molecule_index[i] for i in equivalent_atoms]
+        struc.add_site_property("bulk_wyckoff", wyckoffs)
+        struc.add_site_property("bulk_equivalent", equivalent_molecules)
+
     def _get_oriented_bulk_structure(self):
         bulk = self.bulk_structure
         prim_bulk = self.primitive_structure
@@ -241,40 +312,22 @@ class SurfaceGenerator:
         prim_lattice = prim_bulk.lattice
 
         recip_lattice = lattice.reciprocal_lattice_crystallographic
-        prim_recip_lattice = prim_lattice.reciprocal_lattice_crystallographic
 
         miller_index = self.miller_index
 
         d_hkl = lattice.d_hkl(miller_index)
-        normal_vector = recip_lattice.get_cartesian_coords(miller_index)
-        prim_miller_index = prim_recip_lattice.get_fractional_coords(
-            normal_vector
+
+        normal_vector = lattice.get_cartesian_coords(
+            np.array(miller_index).dot(recip_lattice.metric_tensor)
         )
+        prim_normal_vector = prim_lattice.get_fractional_coords(normal_vector)
+        prim_miller_index = prim_normal_vector.dot(prim_lattice.metric_tensor)
+        prim_miller_index = prim_miller_index
         prim_miller_index = utils._get_reduced_vector(
             prim_miller_index
         ).astype(int)
 
         normal_vector /= np.linalg.norm(normal_vector)
-
-        sg = SpacegroupAnalyzer(bulk)
-        prim_mapping = sg.get_symmetry_dataset()["mapping_to_primitive"]
-        _, prim_inds = np.unique(prim_mapping, return_index=True)
-
-        bulk.add_site_property(
-            "bulk_wyckoff", sg.get_symmetry_dataset()["wyckoffs"]
-        )
-        bulk.add_site_property(
-            "bulk_equivalent",
-            sg.get_symmetry_dataset()["equivalent_atoms"].tolist(),
-        )
-        prim_bulk.add_site_property(
-            "bulk_wyckoff",
-            [sg.get_symmetry_dataset()["wyckoffs"][i] for i in prim_inds],
-        )
-        prim_bulk.add_site_property(
-            "bulk_equivalent",
-            sg.get_symmetry_dataset()["equivalent_atoms"][prim_inds].tolist(),
-        )
 
         if not self._use_prim:
             intercepts = np.array(
@@ -294,6 +347,9 @@ class SurfaceGenerator:
 
         if len(non_zero_points) == 1:
             basis = np.eye(3)
+            basis[non_zero_points[0], non_zero_points[0]] *= intercepts[
+                non_zero_points[0]
+            ]
             dot_products = basis.dot(normal_vector)
             sort_inds = np.argsort(dot_products)
             basis = basis[sort_inds]
@@ -403,6 +459,15 @@ class SurfaceGenerator:
             ortho_basis, translation_vec=np.zeros(3)
         )
 
+        # if "molecules" in init_oriented_struc.site_properties:
+        #     for site in init_oriented_struc:
+        #         mol = site.properties["molecules"]
+        #         planar_mol = mol.copy()
+        #         planar_mol.translate_sites(range(len(mol)), site.coords)
+        #         planar_mol.apply_operation(to_planar_operation)
+        #         centered_mol = planar_mol.get_centered_molecule()
+        #         site.properties["molecules"] = centered_mol
+
         planar_oriented_struc = init_oriented_struc.copy()
         planar_oriented_struc.apply_operation(to_planar_operation)
 
@@ -425,12 +490,23 @@ class SurfaceGenerator:
         a_to_i_operation = SymmOp.from_rotation_and_translation(
             a_to_i.T, translation_vec=np.zeros(3)
         )
+
+        # if "molecules" in planar_oriented_struc.site_properties:
+        #     for site in planar_oriented_struc:
+        #         mol = site.properties["molecules"]
+        #         a_to_i_mol = mol.copy()
+        #         a_to_i_mol.translate_sites(range(len(mol)), site.coords)
+        #         a_to_i_mol.apply_operation(a_to_i_operation)
+        #         centered_mol = a_to_i_mol.get_centered_molecule()
+        #         site.properties["molecules"] = centered_mol
+
         planar_oriented_struc.apply_operation(a_to_i_operation)
 
-        planar_oriented_struc.add_site_property(
-            "oriented_bulk_equivalent",
-            list(range(len(planar_oriented_struc))),
-        )
+        if "molecule_index" not in planar_oriented_struc.site_properties:
+            planar_oriented_struc.add_site_property(
+                "oriented_bulk_equivalent",
+                list(range(len(planar_oriented_struc))),
+            )
 
         planar_oriented_struc.sort()
 
@@ -617,6 +693,11 @@ class SurfaceGenerator:
             to_unit_cell=True,
         )
 
+        if "molecules" in slab_base.site_properties:
+            slab_base = self._add_molecules(slab_base)
+            orthogonal_slab = self._add_molecules(orthogonal_slab)
+            non_orthogonal_slab = self._add_molecules(non_orthogonal_slab)
+
         return (
             slab_base,
             orthogonal_slab,
@@ -626,14 +707,37 @@ class SurfaceGenerator:
             vacuum,
         )
 
-    # def _get_ewald_energy(self, slab):
-    #     slab = deepcopy(slab)
-    #     bulk = deepcopy(self.pmg_structure)
-    #     slab.add_oxidation_state_by_guess()
-    #     bulk.add_oxidation_state_by_guess()
-    #     E_slab = EwaldSummation(slab).total_energy
-    #     E_bulk = EwaldSummation(bulk).total_energy
-    #     return E_slab, E_bulk
+    def _add_molecules(self, struc):
+        mol_coords = []
+        mol_atom_nums = []
+
+        properties = list(struc.site_properties.keys())
+        properties.remove("molecules")
+        # properties.remove("basis")
+        site_props = {p: [] for p in properties}
+        site_props["molecule_index"] = []
+
+        for i, site in enumerate(struc):
+            site_mol = site.properties["molecules"]
+            mol_coords.append(site_mol.cart_coords + site.coords)
+            mol_atom_nums.extend(site_mol.atomic_numbers)
+
+            site_props["molecule_index"].extend([i] * len(site_mol))
+
+            for p in properties:
+                site_props[p].extend([site.properties[p]] * len(site_mol))
+
+        mol_layer_struc = Structure(
+            lattice=struc.lattice,
+            species=mol_atom_nums,
+            coords=np.vstack(mol_coords),
+            to_unit_cell=True,
+            coords_are_cartesian=True,
+            site_properties=site_props,
+        )
+        mol_layer_struc.sort()
+
+        return mol_layer_struc
 
     def _generate_slabs(self):
         """
@@ -717,7 +821,7 @@ class SurfaceGenerator:
         return surfaces
 
     def __len__(self):
-        return len(self.slabs)
+        return len(self._slabs)
 
     @property
     def nslabs(self):
@@ -731,7 +835,279 @@ class SurfaceGenerator:
         """
         Return the terminations of each slab generated by the SurfaceGenerator
         """
-        return {i: slab.get_termination() for i, slab in enumerate(self.slabs)}
+        return {
+            i: slab.get_termination() for i, slab in enumerate(self._slabs)
+        }
+
+
+class OrganicSurfaceGenerator(SurfaceGenerator):
+    """Class for generating surfaces from a given bulk structure.
+
+    The SurfaceGenerator classes generates surfaces with all possible terminations and contains
+    information pertinent to generating interfaces with the InterfaceGenerator.
+
+    Examples:
+        Creating a SurfaceGenerator object using PyMatGen to load the structure:
+        >>> from OgreInterface.generate import SurfaceGenerator
+        >>> from pymatgen.core.structure import Structure
+        >>> bulk = Structure.from_file("POSCAR_bulk")
+        >>> surfaces = SurfaceGenerator(bulk=bulk, miller_index=[1, 1, 1], layers=5, vacuum=60)
+        >>> surface = surfaces.slabs[0] # OgreInterface.Surface object
+
+        Creating a SurfaceGenerator object using the build in from_file() method:
+        >>> from OgreInterface.generate import SurfaceGenerator
+        >>> surfaces = SurfaceGenerator.from_file(filename="POSCAR_bulk", miller_index=[1, 1, 1], layers=5, vacuum=60)
+        >>> surface = surfaces.slabs[0] # OgreInterface.Surface object
+
+    Args:
+        bulk: Bulk crystal structure used to create the surface
+        miller_index: Miller index of the surface
+        layers: Number of layers to include in the surface
+        vacuum: Size of the vacuum to include over the surface in Angstroms
+        generate_all: Determines if all possible surface terminations are generated.
+        lazy: Determines if the surfaces are actually generated, or if only the surface basis vectors are found.
+            (this is used for the MillerIndex search to make things faster)
+
+    Attributes:
+        slabs (list): List of OgreInterface Surface objects with different surface terminations.
+        bulk_structure (Structure): Pymatgen Structure class for the conventional cell of the input bulk structure
+        bulk_atoms (Atoms): ASE Atoms class for the conventional cell of the input bulk structure
+        primitive_structure (Structure): Pymatgen Structure class for the primitive cell of the input bulk structure
+        primitive_atoms (Atoms): ASE Atoms class for the primitive cell of the input bulk structure
+        miller_index (list): Miller index of the surface
+        layers (int): Number of layers to include in the surface
+        vacuum (float): Size of the vacuum to include over the surface in Angstroms
+        generate_all (bool): Determines if all possible surface terminations are generated.
+        filter_ionic_slab (bool): Determines if the terminations of ionic crystals should be filtered out based on their
+            predicted stability calculated using the IonicScoreFunction
+        lazy (bool): Determines if the surfaces are actually generated, or if only the surface basis vectors are found.
+            (this is used for the MillerIndex search to make things faster)
+        oriented_bulk_structure (Structure): Pymatgen Structure class of the smallest building block of the slab,
+            which will eventually be used to build the slab supercell
+        oriented_bulk_atoms (Atoms): Pymatgen Atoms class of the smallest building block of the slab,
+            which will eventually be used to build the slab supercell
+        uvw_basis (list): The miller indices of the slab lattice vectors.
+        transformation_matrix: Transformation matrix used to convert from the bulk basis to the slab basis
+            (usefull for band unfolding calculations)
+        inplane_vectors (list): The cartesian vectors of the in-plane lattice vectors.
+        surface_normal (list): The normal vector of the surface
+        c_projection (float): The projections of the c-lattice vector onto the surface normal
+    """
+
+    def __init__(
+        self,
+        bulk: Union[Structure, Atoms],
+        miller_index: List[int],
+        layers: int,
+        vacuum: float,
+        generate_all: bool = True,
+        lazy: bool = False,
+    ) -> None:
+        dummy_bulk = self._get_dummy_bulk(bulk)
+        labeled_bulk = self._add_molecules(dummy_bulk)
+        super().__init__(
+            bulk=labeled_bulk,
+            miller_index=miller_index,
+            layers=layers,
+            vacuum=vacuum,
+            convert_to_conventional=False,
+            generate_all=generate_all,
+            filter_ionic_slabs=False,
+            lazy=True,
+        )
+
+        obs = self.oriented_bulk_structure
+        dummy_obs = self._get_dummy_bulk(obs)
+        dummy_obs.add_site_property(
+            "oriented_bulk_equivalent", range(len(dummy_obs))
+        )
+        self.oriented_bulk_structure = dummy_obs
+
+        if not lazy:
+            self.generate_slabs()
+
+    def _get_dummy_bulk(self, s) -> Structure:
+        # Create a structure graph so we can extract the molecules
+        struc_graph = StructureGraph.with_local_env_strategy(s, JmolNN())
+
+        # Extract a list of the unique molecules on the structure
+        mols = struc_graph.get_subgraphs_as_molecules()
+
+        # Get all the molecults from the initial structure
+        g = nx.Graph(struc_graph.graph)
+        sub_graphs = [g.subgraph(c) for c in nx.connected_components(g)]
+
+        # Assign a molecule index to each atom in each molecule
+        mol_index = np.zeros(len(s)).astype(int)
+        for i, sub_g in enumerate(sub_graphs):
+            for site in sub_g.nodes:
+                mol_index[site] = i
+
+        # Add the molecule index as a site propery for each atom
+        s.add_site_property("molecule_index", mol_index.tolist())
+
+        # Find the center of masses of all the molecules in the unit cell
+        # We can do this similar to how the get_subgraphs_as_molecules()
+        # function works by creating a 3x3 supercell and only keeping the
+        # molecules that don't intersect the boundary of the unit cell
+        supercell = s.copy()
+        supercell_sg = StructureGraph.with_local_env_strategy(
+            supercell,
+            JmolNN(),
+        )
+
+        # Create supercell of the graph
+        supercell_sg *= (3, 3, 3)
+        supercell_g = nx.Graph(supercell_sg.graph)
+
+        # Extract all molecule subgraphs
+        all_subgraphs = [
+            supercell_g.subgraph(c)
+            for c in nx.connected_components(supercell_g)
+        ]
+
+        # Only keep that molecules that are completely contained in the 3x3 supercell
+        molecule_subgraphs = []
+        for subgraph in all_subgraphs:
+            intersects_boundary = any(
+                d["to_jimage"] != (0, 0, 0)
+                for u, v, d in subgraph.edges(data=True)
+            )
+            if not intersects_boundary:
+                molecule_subgraphs.append(nx.MultiDiGraph(subgraph))
+
+        # Get the center of mass and the molecule index
+        center_of_masses = []
+        site_props = list(s.site_properties.keys())
+        site_props.remove("molecule_index")
+        props = {p: [] for p in site_props}
+        # bulk_equivalents = []
+        # bulk_wyckoffs = []
+        for subgraph in molecule_subgraphs:
+            cart_coords = np.vstack(
+                [supercell_sg.structure[n].coords for n in subgraph]
+            )
+            weights = np.array(
+                [supercell_sg.structure[n].species.weight for n in subgraph]
+            )
+            mol_ind = [
+                supercell_sg.structure[n].properties["molecule_index"]
+                for n in subgraph
+            ]
+
+            for p in props:
+                ind = list(subgraph.nodes.keys())[0]
+                props[p].append(supercell_sg.structure[ind].properties[p])
+
+            center_of_mass = (
+                np.sum(cart_coords * weights[:, None], axis=0) / weights.sum()
+            )
+            center_of_masses.append(np.round(center_of_mass, 6))
+
+        center_of_masses = np.vstack(center_of_masses)
+
+        # Now we can find which center of masses are contained in the original unit cell
+        # First we can shift the center of masses by the [1, 1, 1] vector of the original unit cell
+        # so the center unit cell of the 3x3 supercell is positioned at (0, 0, 0)
+        shift = s.lattice.get_cartesian_coords([1, 1, 1])
+        inv_matrix = s.lattice.inv_matrix
+
+        # Shift the center of masses
+        center_of_masses -= shift
+
+        # Convert to fractional coordinates in the basis of the original unit cell
+        frac_com = center_of_masses.dot(inv_matrix)
+
+        # The center of masses in the unit cell should have fractional coordinates between [0, 1)
+        in_original_cell = np.logical_and(
+            0 <= np.round(frac_com, 6), np.round(frac_com, 6) < 1
+        ).all(axis=1)
+
+        # Extract the fractional coordinates in the original cell
+        frac_coords_in_cell = frac_com[in_original_cell]
+        props_in_cell = {
+            p: [l[i] for i in in_original_cell] for p, l in props.items()
+        }
+
+        # Extract the molecules who's center of mass is in the original cell
+        molecules = []
+        for i in np.where(in_original_cell)[0]:
+            m_graph = molecule_subgraphs[i]
+            coords = [
+                supercell_sg.structure[n].coords for n in m_graph.nodes()
+            ]
+            species = [
+                supercell_sg.structure[n].specie for n in m_graph.nodes()
+            ]
+            molecule = Molecule(species, coords)
+            molecule = molecule.get_centered_molecule()
+            molecules.append(molecule)
+
+        # To identify the unique orientations of the molecules an orthogonal basis can be created
+        # by using 3 equivalent atomic positions in each molecule.
+        mol_basis = []
+        for mol in molecules:
+            # Find equivalent indices between the two molecules in reference to the first molecule in the list
+            mol_match = IsomorphismMolAtomMapper()
+            l1, l2 = mol_match.uniform_labels(molecules[0], mol)
+
+            # Extract the first three atom indices to create the basis
+            a, b, c = l2[:3]
+
+            # Using atom-b as the center atom find the vector from b-a and b-c
+            ba_vec = mol.cart_coords[a] - mol.cart_coords[b]
+            ba_vec /= np.linalg.norm(ba_vec)
+            bc_vec = mol.cart_coords[c] - mol.cart_coords[b]
+            bc_vec /= np.linalg.norm(bc_vec)
+
+            # Get an orthogonal vector to the b-a and b-c by taking the cross product
+            cross1 = np.cross(ba_vec, bc_vec)
+            cross1 /= np.linalg.norm(cross1)
+
+            # Get and orthogonal vector from b-a and the previous cross product to create and orthogonal basis
+            cross2 = np.cross(ba_vec, cross1)
+            cross2 /= np.linalg.norm(cross2)
+
+            # Create the basis matrix
+            basis = np.vstack([ba_vec, cross1, cross2])
+            mol_basis.append(np.round(basis, 5))
+
+        # Find the unique basis sets
+        comp_basis = np.vstack([m.ravel() for m in mol_basis])
+        unique_basis, unique_inds, inv_inds = np.unique(
+            comp_basis, axis=0, return_index=True, return_inverse=True
+        )
+
+        # # Get the neccesary data to create the center-of-mass structure with dummy atoms at the center of mass
+        # struc_data = []
+        # struc_props = {p: [] for p in props_in_cell}
+        # for i in inv_inds:
+        #     mol_ind = unique_inds[i]
+        #     mol = molecules[mol_ind]
+        #     basis = unique_basis[i].reshape(3, 3)
+        #     com = frac_coords_in_cell[mol_ind]
+        #     struc_data.append((mol_ind + 3, com, basis, mol))
+
+        # # Create the structure with the center of mass
+        # species, frac_coords, bases, mols = list(zip(*struc_data))
+        species = [i + 3 for i in range(len(molecules))]
+        frac_coords = frac_coords_in_cell
+        struc_props = {
+            # "basis": [c.reshape(3, 3) for c in comp_basis],
+            "molecules": molecules,
+        }
+        struc_props.update(props_in_cell)
+
+        dummy_struc = Structure(
+            lattice=s.lattice,
+            coords=frac_coords,
+            species=species,
+            site_properties=struc_props,
+        )
+
+        print(dummy_struc)
+
+        return dummy_struc
 
 
 class InterfaceGenerator:

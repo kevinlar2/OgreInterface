@@ -679,24 +679,29 @@ class SurfaceGenerator(Sequence):
         )
         orthogonal_slab.sort()
 
-        shift = 0.5 * (vacuum_scale / (vacuum_scale + self.layers))
+        center_shift = 0.5 * (vacuum_scale / (vacuum_scale + self.layers))
         non_orthogonal_slab.translate_sites(
             indices=range(len(non_orthogonal_slab)),
-            vector=[0, 0, shift],
+            vector=[0, 0, center_shift],
             frac_coords=True,
             to_unit_cell=True,
         )
         orthogonal_slab.translate_sites(
             indices=range(len(orthogonal_slab)),
-            vector=[0, 0, shift],
+            vector=[0, 0, center_shift],
             frac_coords=True,
             to_unit_cell=True,
         )
+
+        shift_str = f"{shift:.3f}".replace(".", "")
+        Poscar(non_orthogonal_slab).write_file(f"POSCAR_slab_com_{shift_str}")
 
         if "molecules" in slab_base.site_properties:
             slab_base = self._add_molecules(slab_base)
             orthogonal_slab = self._add_molecules(orthogonal_slab)
             non_orthogonal_slab = self._add_molecules(non_orthogonal_slab)
+
+        Poscar(non_orthogonal_slab).write_file(f"POSCAR_slab_mol_{shift_str}")
 
         return (
             slab_base,
@@ -713,7 +718,6 @@ class SurfaceGenerator(Sequence):
 
         properties = list(struc.site_properties.keys())
         properties.remove("molecules")
-        # properties.remove("basis")
         site_props = {p: [] for p in properties}
         site_props["molecule_index"] = []
 
@@ -749,6 +753,7 @@ class SurfaceGenerator(Sequence):
         """
         # Determine if all possible terminations are generated
         possible_shifts = self._calculate_possible_shifts()
+        print(possible_shifts)
         shifted_slab_bases = []
         orthogonal_slabs = []
         non_orthogonal_slabs = []
@@ -903,8 +908,11 @@ class OrganicSurfaceGenerator(SurfaceGenerator):
         generate_all: bool = True,
         lazy: bool = False,
     ) -> None:
+        Poscar(bulk).write_file("POSCAR_mol_bulk")
         dummy_bulk = self._get_dummy_bulk(bulk)
+        Poscar(dummy_bulk).write_file("POSCAR_com_bulk")
         labeled_bulk = self._add_molecules(dummy_bulk)
+        Poscar(labeled_bulk).write_file("POSCAR_mol2_bulk")
         super().__init__(
             bulk=labeled_bulk,
             miller_index=miller_index,
@@ -917,7 +925,9 @@ class OrganicSurfaceGenerator(SurfaceGenerator):
         )
 
         obs = self.oriented_bulk_structure
+        Poscar(obs).write_file("POSCAR_mol_obs")
         dummy_obs = self._get_dummy_bulk(obs)
+        Poscar(dummy_obs).write_file("POSCAR_com_obs")
         dummy_obs.add_site_property(
             "oriented_bulk_equivalent", range(len(dummy_obs))
         )
@@ -981,8 +991,6 @@ class OrganicSurfaceGenerator(SurfaceGenerator):
         site_props = list(s.site_properties.keys())
         site_props.remove("molecule_index")
         props = {p: [] for p in site_props}
-        # bulk_equivalents = []
-        # bulk_wyckoffs = []
         for subgraph in molecule_subgraphs:
             cart_coords = np.vstack(
                 [supercell_sg.structure[n].coords for n in subgraph]
@@ -994,6 +1002,12 @@ class OrganicSurfaceGenerator(SurfaceGenerator):
                 supercell_sg.structure[n].properties["molecule_index"]
                 for n in subgraph
             ]
+
+            if "dummy_species" in supercell_sg.structure.site_properties:
+                dummy_ind = [
+                    supercell_sg.structure[n].properties["dummy_species"]
+                    for n in subgraph
+                ]
 
             for p in props:
                 ind = list(subgraph.nodes.keys())[0]
@@ -1026,7 +1040,8 @@ class OrganicSurfaceGenerator(SurfaceGenerator):
         # Extract the fractional coordinates in the original cell
         frac_coords_in_cell = frac_com[in_original_cell]
         props_in_cell = {
-            p: [l[i] for i in in_original_cell] for p, l in props.items()
+            p: [l[i] for i in np.where(in_original_cell)[0]]
+            for p, l in props.items()
         }
 
         # Extract the molecules who's center of mass is in the original cell
@@ -1078,22 +1093,16 @@ class OrganicSurfaceGenerator(SurfaceGenerator):
             comp_basis, axis=0, return_index=True, return_inverse=True
         )
 
-        # # Get the neccesary data to create the center-of-mass structure with dummy atoms at the center of mass
-        # struc_data = []
-        # struc_props = {p: [] for p in props_in_cell}
-        # for i in inv_inds:
-        #     mol_ind = unique_inds[i]
-        #     mol = molecules[mol_ind]
-        #     basis = unique_basis[i].reshape(3, 3)
-        #     com = frac_coords_in_cell[mol_ind]
-        #     struc_data.append((mol_ind + 3, com, basis, mol))
-
         # # Create the structure with the center of mass
         # species, frac_coords, bases, mols = list(zip(*struc_data))
-        species = [i + 3 for i in range(len(molecules))]
+        if "dummy_species" not in props_in_cell:
+            species = [i + 3 for i in range(len(molecules))]
+            props_in_cell["dummy_species"] = species
+        else:
+            species = props_in_cell["dummy_species"]
+
         frac_coords = frac_coords_in_cell
         struc_props = {
-            # "basis": [c.reshape(3, 3) for c in comp_basis],
             "molecules": molecules,
         }
         struc_props.update(props_in_cell)
@@ -1104,8 +1113,7 @@ class OrganicSurfaceGenerator(SurfaceGenerator):
             species=species,
             site_properties=struc_props,
         )
-
-        print(dummy_struc)
+        dummy_struc.sort()
 
         return dummy_struc
 

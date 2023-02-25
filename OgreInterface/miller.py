@@ -89,9 +89,11 @@ class MillerSearch(object):
         self.substrate_inds = self._get_unique_miller_indices(
             self.substrate, self.max_substrate_index
         )
+
         self.film_inds = self._get_unique_miller_indices(
             self.film, self.max_film_index
         )
+
         self._misfit_data = None
         self._area_data = None
 
@@ -108,15 +110,36 @@ class MillerSearch(object):
         if self.convert_to_conventional:
             sg = SpacegroupAnalyzer(init_structure)
             conventional_structure = sg.get_conventional_standard_structure()
-            conventional_atoms = AseAtomsAdaptor.get_atoms(
-                conventional_structure
-            )
+            prim_structure = sg.get_primitive_standard_structure()
 
-            return conventional_structure, conventional_atoms
+            return (conventional_structure, prim_structure)
         else:
-            init_atoms = AseAtomsAdaptor().get_atoms(init_structure)
+            prim_structure = init_structure.get_primitive_structure()
 
-            return init_structure, init_atoms
+            return init_structure, prim_structure
+
+    # def _get_bulk(self, atoms_or_struc):
+    #     if type(atoms_or_struc) == Atoms:
+    #         init_structure = AseAtomsAdaptor.get_structure(atoms_or_struc)
+    #     elif type(atoms_or_struc) == Structure:
+    #         init_structure = atoms_or_struc
+    #     else:
+    #         raise TypeError(
+    #             f"structure accepts 'pymatgen.core.structure.Structure' or 'ase.Atoms' not '{type(atoms_or_struc).__name__}'"
+    #         )
+
+    #     if self.convert_to_conventional:
+    #         sg = SpacegroupAnalyzer(init_structure)
+    #         conventional_structure = sg.get_conventional_standard_structure()
+    #         conventional_atoms = AseAtomsAdaptor.get_atoms(
+    #             conventional_structure
+    #         )
+
+    #         return conventional_structure, conventional_atoms
+    #     else:
+    #         init_atoms = AseAtomsAdaptor().get_atoms(init_structure)
+
+    #         return init_structure, init_atoms
 
     def _float_gcd(self, a, b, rtol=1e-05, atol=1e-08):
         t = min(abs(a), abs(b))
@@ -171,7 +194,7 @@ class MillerSearch(object):
                 for i, symmop in enumerate(symmops):
                     frac_point_out = symmop.apply_rotation_only(frac_vec)
                     point_out = frac_point_out.dot(lattice.metric_tensor)
-                    point_out = utils._get_reduced_vector(point_out)
+                    point_out = utils._get_reduced_vector(np.round(point_out))
                     point_out = tuple(point_out.astype(int))
                     planes_dict[plane].append(point_out)
                     if point_out != plane:

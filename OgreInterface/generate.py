@@ -323,6 +323,11 @@ class SurfaceGenerator(Sequence):
         prim_normal_vector = prim_lattice.get_fractional_coords(normal_vector)
         prim_miller_index = prim_normal_vector.dot(prim_lattice.metric_tensor)
         prim_miller_index = prim_miller_index
+
+        print(miller_index)
+        print(np.round(prim_miller_index, 5))
+        print("")
+
         prim_miller_index = utils._get_reduced_vector(
             prim_miller_index
         ).astype(int)
@@ -908,11 +913,15 @@ class OrganicSurfaceGenerator(SurfaceGenerator):
         generate_all: bool = True,
         lazy: bool = False,
     ) -> None:
-        Poscar(bulk).write_file("POSCAR_mol_bulk")
+        # Poscar(bulk).write_file("POSCAR_mol_bulk")
+        s = time.time()
         dummy_bulk = self._get_dummy_bulk(bulk)
-        Poscar(dummy_bulk).write_file("POSCAR_com_bulk")
+        print("First Dummy =", time.time() - s)
+        # Poscar(dummy_bulk).write_file("POSCAR_com_bulk")
+        s = time.time()
         labeled_bulk = self._add_molecules(dummy_bulk)
-        Poscar(labeled_bulk).write_file("POSCAR_mol2_bulk")
+        print("Add Molecules =", time.time() - s)
+        # Poscar(labeled_bulk).write_file("POSCAR_mol2_bulk")
         super().__init__(
             bulk=labeled_bulk,
             miller_index=miller_index,
@@ -925,9 +934,11 @@ class OrganicSurfaceGenerator(SurfaceGenerator):
         )
 
         obs = self.oriented_bulk_structure
-        Poscar(obs).write_file("POSCAR_mol_obs")
+        # Poscar(obs).write_file("POSCAR_mol_obs")
+        s = time.time()
         dummy_obs = self._get_dummy_bulk(obs)
-        Poscar(dummy_obs).write_file("POSCAR_com_obs")
+        print("Second Dummy =", time.time() - s)
+        # Poscar(dummy_obs).write_file("POSCAR_com_obs")
         dummy_obs.add_site_property(
             "oriented_bulk_equivalent", range(len(dummy_obs))
         )
@@ -941,7 +952,7 @@ class OrganicSurfaceGenerator(SurfaceGenerator):
         struc_graph = StructureGraph.with_local_env_strategy(s, JmolNN())
 
         # Extract a list of the unique molecules on the structure
-        mols = struc_graph.get_subgraphs_as_molecules()
+        # mols = struc_graph.get_subgraphs_as_molecules()
 
         # Get all the molecults from the initial structure
         g = nx.Graph(struc_graph.graph)
@@ -1060,43 +1071,43 @@ class OrganicSurfaceGenerator(SurfaceGenerator):
 
         # To identify the unique orientations of the molecules an orthogonal basis can be created
         # by using 3 equivalent atomic positions in each molecule.
-        mol_basis = []
-        for mol in molecules:
-            # Find equivalent indices between the two molecules in reference to the first molecule in the list
-            mol_match = IsomorphismMolAtomMapper()
-            l1, l2 = mol_match.uniform_labels(molecules[0], mol)
+        # mol_basis = []
+        # for mol in molecules:
+        #     # Find equivalent indices between the two molecules in reference to the first molecule in the list
+        #     mol_match = IsomorphismMolAtomMapper()
+        #     l1, l2 = mol_match.uniform_labels(molecules[0], mol)
 
-            # Extract the first three atom indices to create the basis
-            a, b, c = l2[:3]
+        #     # Extract the first three atom indices to create the basis
+        #     a, b, c = l2[:3]
 
-            # Using atom-b as the center atom find the vector from b-a and b-c
-            ba_vec = mol.cart_coords[a] - mol.cart_coords[b]
-            ba_vec /= np.linalg.norm(ba_vec)
-            bc_vec = mol.cart_coords[c] - mol.cart_coords[b]
-            bc_vec /= np.linalg.norm(bc_vec)
+        #     # Using atom-b as the center atom find the vector from b-a and b-c
+        #     ba_vec = mol.cart_coords[a] - mol.cart_coords[b]
+        #     ba_vec /= np.linalg.norm(ba_vec)
+        #     bc_vec = mol.cart_coords[c] - mol.cart_coords[b]
+        #     bc_vec /= np.linalg.norm(bc_vec)
 
-            # Get an orthogonal vector to the b-a and b-c by taking the cross product
-            cross1 = np.cross(ba_vec, bc_vec)
-            cross1 /= np.linalg.norm(cross1)
+        #     # Get an orthogonal vector to the b-a and b-c by taking the cross product
+        #     cross1 = np.cross(ba_vec, bc_vec)
+        #     cross1 /= np.linalg.norm(cross1)
 
-            # Get and orthogonal vector from b-a and the previous cross product to create and orthogonal basis
-            cross2 = np.cross(ba_vec, cross1)
-            cross2 /= np.linalg.norm(cross2)
+        #     # Get and orthogonal vector from b-a and the previous cross product to create and orthogonal basis
+        #     cross2 = np.cross(ba_vec, cross1)
+        #     cross2 /= np.linalg.norm(cross2)
 
-            # Create the basis matrix
-            basis = np.vstack([ba_vec, cross1, cross2])
-            mol_basis.append(np.round(basis, 5))
+        #     # Create the basis matrix
+        #     basis = np.vstack([ba_vec, cross1, cross2])
+        #     mol_basis.append(np.round(basis, 5))
 
         # Find the unique basis sets
-        comp_basis = np.vstack([m.ravel() for m in mol_basis])
-        unique_basis, unique_inds, inv_inds = np.unique(
-            comp_basis, axis=0, return_index=True, return_inverse=True
-        )
+        # comp_basis = np.vstack([m.ravel() for m in mol_basis])
+        # unique_basis, unique_inds, inv_inds = np.unique(
+        #     comp_basis, axis=0, return_index=True, return_inverse=True
+        # )
 
         # # Create the structure with the center of mass
         # species, frac_coords, bases, mols = list(zip(*struc_data))
         if "dummy_species" not in props_in_cell:
-            species = [i + 3 for i in range(len(molecules))]
+            species = [i + 22 for i in range(len(molecules))]
             props_in_cell["dummy_species"] = species
         else:
             species = props_in_cell["dummy_species"]
@@ -1116,6 +1127,27 @@ class OrganicSurfaceGenerator(SurfaceGenerator):
         dummy_struc.sort()
 
         return dummy_struc
+
+    def _get_dummy_bulk2(self, s) -> Structure:
+        # Create a structure graph so we can extract the molecules
+        struc_graph = StructureGraph.with_local_env_strategy(s, JmolNN())
+
+        # Get all the molecults from the initial structure
+        g = nx.Graph(struc_graph.graph)
+        sub_graphs = [g.subgraph(c) for c in nx.connected_components(g)]
+
+        # Assign a molecule index to each atom in each molecule
+        mol_index = np.zeros(len(s)).astype(int)
+        for i, sub_g in enumerate(sub_graphs):
+            for site in sub_g.nodes:
+                mol_index[site] = i
+
+        # Add the molecule index as a site propery for each atom
+        s.add_site_property("molecule_index", mol_index.tolist())
+
+        for sub_graph in sub_graphs:
+            for edge in sub_graph:
+                print(edge)
 
 
 class InterfaceGenerator:

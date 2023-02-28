@@ -150,7 +150,6 @@ class Surface:
     def get_surface(
         self,
         orthogonal: bool = True,
-        return_structure: bool = True,
         return_atoms: bool = False,
     ) -> Union[Atoms, Structure]:
         """
@@ -158,30 +157,24 @@ class Surface:
 
         Args:
             orthogonal: Determines if the orthogonalized structure is returned
-            return_structure: Determines if the Pymatgen Structure object is returned
             return_atoms: Determines if the ASE Atoms object is returned
 
         Returns:
             Either a Pymatgen Structure of ASE Atoms object of the surface structure
         """
+
         if orthogonal:
-            if return_structure and not return_atoms:
-                return self._orthogonal_slab_structure
-            elif return_atoms and not return_structure:
-                return self._orthogonal_slab_atoms
-            else:
-                raise ValueError(
-                    "Please select either return_atoms=True OR return_structure=True to get an ASE atoms object or a Pymatgen Structure object."
-                )
+            return_struc = self._orthogonal_slab_structure
         else:
-            if return_structure and not return_atoms:
-                return self._non_orthogonal_slab_structure
-            elif return_atoms and not return_structure:
-                return self._non_orthogonal_slab_atoms
-            else:
-                raise ValueError(
-                    "Please select either return_atoms=True OR return_structure=True to get an ASE atoms object or a Pymatgen Structure object."
-                )
+            return_struc = self._non_orthogonal_slab_structure
+
+        if "molecules" in return_struc.site_properties:
+            return_struc = utils.add_molecules(return_struc)
+
+        if return_atoms:
+            return utils.get_atoms(return_struc)
+        else:
+            return return_struc
 
     @property
     def slab_transformation_matrix(self) -> np.ndarray:
@@ -311,8 +304,8 @@ class Surface:
 
     def write_file(
         self,
-        orthogonal: bool = True,
         output: str = "POSCAR_slab",
+        orthogonal: bool = True,
         relax: bool = False,
     ) -> None:
         """
@@ -335,6 +328,9 @@ class Surface:
             slab = self._orthogonal_slab_structure
         else:
             slab = self._non_orthogonal_slab_structure
+
+        if "molecules" in slab.site_properties:
+            slab = utils.add_molecules(slab)
 
         comment = "|".join(
             [
@@ -1774,6 +1770,10 @@ class Interface:
         a_to_i_operation = SymmOp.from_rotation_and_translation(
             a_to_i, translation_vec=np.zeros(3)
         )
+
+        if "molecules" in supercell.site_properties:
+            utils.apply_op_to_mols(supercell, a_to_i_operation)
+
         supercell.apply_operation(a_to_i_operation)
 
         return a_to_i
@@ -1977,6 +1977,12 @@ class Interface:
         # Get the strained substrate and film
         strained_sub = self._strained_sub
         strained_film = self._strained_film
+
+        if "molecules" in strained_sub.site_properties:
+            strained_sub = utils.add_molecules(strained_sub)
+
+        if "molecules" in strained_film.site_properties:
+            strained_film = utils.add_molecules(strained_film)
 
         # Get the oriented bulk structure of the substrate
         oriented_bulk_c = self.substrate.oriented_bulk_structure.lattice.c

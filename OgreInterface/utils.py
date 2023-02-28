@@ -2,13 +2,183 @@ from __future__ import annotations
 import numpy as np
 import copy
 from functools import reduce
-from pymatgen.core.structure import Structure
+from pymatgen.core.structure import Structure, Molecule
 from pymatgen.core.lattice import Lattice
 from pymatgen.io.ase import AseAtomsAdaptor
+from pymatgen.io.vasp.inputs import Poscar
+from pymatgen.core.periodic_table import DummySpecies
 import itertools
 import functools
 import math
 import collections
+from pymatgen.analysis.graphs import StructureGraph
+from pymatgen.analysis.local_env import JmolNN
+import networkx as nx
+
+
+def _get_colored_molecules(struc, output):
+    colored_struc = struc.copy()
+    for site in colored_struc:
+        if "dummy_species" in site.properties:
+            ds = site.properties["dummy_species"]
+        else:
+            ds = site.species.Z
+
+        site.species = DummySpecies(symbol=f"Q{chr(ds - 22 + ord('a'))}")
+
+    colored_struc.sort()
+    Poscar(colored_struc).write_file(output)
+
+
+def apply_op_to_mols(struc, op):
+    for site in struc:
+        mol = site.properties["molecules"]
+        op_mol = mol.copy()
+        op_mol.translate_sites(range(len(mol)), site.coords)
+        op_mol.apply_operation(op)
+        centered_mol = op_mol.get_centered_molecule()
+        site.properties["molecules"] = centered_mol
+
+
+def replace_molecules_with_atoms(s: Structure) -> Structure:
+    # Create a structure graph so we can extract the molecules
+    struc_graph = StructureGraph.with_local_env_strategy(s, JmolNN())
+
+    # Find the center of masses of all the molecules in the unit cell
+    # We can do this similar to how the get_subgraphs_as_molecules()
+    # function works by creating a 3x3 supercell and only keeping the
+    # molecules that don't intersect the boundary of the unit cell
+    struc_graph *= (3, 3, 3)
+    supercell_g = nx.Graph(struc_graph.graph)
+
+    # Extract all molecule subgraphs
+    all_subgraphs = [
+        supercell_g.subgraph(c) for c in nx.connected_components(supercell_g)
+    ]
+
+    # Only keep that molecules that are completely contained in the 3x3 supercell
+    molecule_subgraphs = []
+    for subgraph in all_subgraphs:
+        intersects_boundary = any(
+            d["to_jimage"] != (0, 0, 0)
+            for u, v, d in subgraph.edges(data=True)
+        )
+        if not intersects_boundary:
+            molecule_subgraphs.append(nx.MultiDiGraph(subgraph))
+
+    # Get the center of mass and the molecule index
+    center_of_masses = []
+    site_props = list(s.site_properties.keys())
+    # site_props.remove("molecule_index")
+    props = {p: [] for p in site_props}
+    for subgraph in molecule_subgraphs:
+        cart_coords = np.vstack(
+            [struc_graph.structure[n].coords for n in subgraph]
+        )
+        weights = np.array(
+            [struc_graph.structure[n].species.weight for n in subgraph]
+        )
+
+        for p in props:
+            ind = list(subgraph.nodes.keys())[0]
+            props[p].append(struc_graph.structure[ind].properties[p])
+
+        center_of_mass = (
+            np.sum(cart_coords * weights[:, None], axis=0) / weights.sum()
+        )
+        center_of_masses.append(np.round(center_of_mass, 6))
+
+    center_of_masses = np.vstack(center_of_masses)
+
+    # Now we can find which center of masses are contained in the original unit cell
+    # First we can shift the center of masses by the [1, 1, 1] vector of the original unit cell
+    # so the center unit cell of the 3x3 supercell is positioned at (0, 0, 0)
+    shift = s.lattice.get_cartesian_coords([1, 1, 1])
+    inv_matrix = s.lattice.inv_matrix
+
+    # Shift the center of masses
+    center_of_masses -= shift
+
+    # Convert to fractional coordinates in the basis of the original unit cell
+    frac_com = center_of_masses.dot(inv_matrix)
+
+    # The center of masses in the unit cell should have fractional coordinates between [0, 1)
+    in_original_cell = np.logical_and(
+        0 <= np.round(frac_com, 6), np.round(frac_com, 6) < 1
+    ).all(axis=1)
+
+    # Extract the fractional coordinates in the original cell
+    frac_coords_in_cell = frac_com[in_original_cell]
+    props_in_cell = {
+        p: [l[i] for i in np.where(in_original_cell)[0]]
+        for p, l in props.items()
+    }
+
+    # Extract the molecules who's center of mass is in the original cell
+    molecules = []
+    for i in np.where(in_original_cell)[0]:
+        m_graph = molecule_subgraphs[i]
+        coords = [struc_graph.structure[n].coords for n in m_graph.nodes()]
+        species = [struc_graph.structure[n].specie for n in m_graph.nodes()]
+        molecule = Molecule(species, coords)
+        molecule = molecule.get_centered_molecule()
+        molecules.append(molecule)
+
+    # Create the structure with the center of mass
+    # species, frac_coords, bases, mols = list(zip(*struc_data))
+    if "dummy_species" not in props_in_cell:
+        species = [i + 22 for i in range(len(molecules))]
+        props_in_cell["dummy_species"] = species
+    else:
+        species = props_in_cell["dummy_species"]
+
+    frac_coords = frac_coords_in_cell
+    struc_props = {
+        "molecules": molecules,
+    }
+    struc_props.update(props_in_cell)
+
+    dummy_struc = Structure(
+        lattice=s.lattice,
+        coords=frac_coords,
+        species=species,
+        site_properties=struc_props,
+    )
+    dummy_struc.sort()
+
+    return dummy_struc
+
+
+def add_molecules(struc):
+    mol_coords = []
+    mol_atom_nums = []
+
+    properties = list(struc.site_properties.keys())
+    properties.remove("molecules")
+    site_props = {p: [] for p in properties}
+    site_props["molecule_index"] = []
+
+    for i, site in enumerate(struc):
+        site_mol = site.properties["molecules"]
+        mol_coords.append(site_mol.cart_coords + site.coords)
+        mol_atom_nums.extend(site_mol.atomic_numbers)
+
+        site_props["molecule_index"].extend([i] * len(site_mol))
+
+        for p in properties:
+            site_props[p].extend([site.properties[p]] * len(site_mol))
+
+    mol_layer_struc = Structure(
+        lattice=struc.lattice,
+        species=mol_atom_nums,
+        coords=np.vstack(mol_coords),
+        to_unit_cell=True,
+        coords_are_cartesian=True,
+        site_properties=site_props,
+    )
+    mol_layer_struc.sort()
+
+    return mol_layer_struc
 
 
 def conv_a_to_b(struc_a: Structure, struc_b: Structure) -> np.ndarray:

@@ -1797,6 +1797,29 @@ class Interface:
         sc_matrix = supercell_slab.lattice.matrix
         sub_sc_matrix = self._substrate_supercell.lattice.matrix
 
+        strained_matrix = np.vstack(
+            [
+                sub_sc_matrix[:2],
+                sc_matrix[-1],
+            ]
+        )
+
+        init_volume = supercell_slab.volume
+        strain_volume = np.abs(np.linalg.det(strained_matrix))
+        scale_factor = init_volume / strain_volume
+
+        # Maintain constant volume
+        strained_matrix[-1] *= scale_factor
+
+        strained_film = Structure(
+            lattice=Lattice(strained_matrix),
+            species=supercell_slab.species,
+            coords=supercell_slab.frac_coords,
+            coords_are_cartesian=False,
+            to_unit_cell=True,
+            site_properties=supercell_slab.site_properties,
+        )
+
         sub_non_orth_c_vec = self._substrate_supercell.lattice.matrix[-1]
         sub_non_orth_c_norm = sub_non_orth_c_vec / np.linalg.norm(
             sub_non_orth_c_vec
@@ -1804,9 +1827,11 @@ class Interface:
 
         norm = self.film.surface_normal
         proj = np.dot(norm, sub_non_orth_c_norm)
-        scale = supercell_slab.lattice.c / proj
+        scale = strained_film.lattice.c / proj
 
-        new_c_matrix = np.vstack([sc_matrix[:2], sub_non_orth_c_norm * scale])
+        new_c_matrix = np.vstack(
+            [sub_sc_matrix[:2], sub_non_orth_c_norm * scale]
+        )
 
         oriented_film = Structure(
             lattice=Lattice(new_c_matrix),
@@ -1817,67 +1842,94 @@ class Interface:
             site_properties=supercell_slab.site_properties,
         )
 
-        strained_matrix = np.vstack(
-            [
-                sub_sc_matrix[:2],
-                oriented_film.lattice.matrix[-1],
-            ]
-        )
+        return oriented_film
 
-        init_volume = oriented_film.volume
-        strain_volume = np.abs(np.linalg.det(strained_matrix))
-        scale_factor = init_volume / strain_volume
+    # def _prepare_film_old(self) -> Structure:
+    #     supercell_slab = self._film_supercell
+    #     sc_matrix = supercell_slab.lattice.matrix
+    #     sub_sc_matrix = self._substrate_supercell.lattice.matrix
 
-        # Maintain constant volume
-        strained_matrix[-1] *= scale_factor
+    #     sub_non_orth_c_vec = self._substrate_supercell.lattice.matrix[-1]
+    #     sub_non_orth_c_norm = sub_non_orth_c_vec / np.linalg.norm(
+    #         sub_non_orth_c_vec
+    #     )
 
-        strained_film = Structure(
-            lattice=Lattice(strained_matrix),
-            species=oriented_film.species,
-            coords=oriented_film.frac_coords,
-            coords_are_cartesian=False,
-            to_unit_cell=True,
-            site_properties=supercell_slab.site_properties,
-        )
+    #     norm = self.film.surface_normal
+    #     proj = np.dot(norm, sub_non_orth_c_norm)
+    #     scale = supercell_slab.lattice.c / proj
 
-        return strained_film
+    #     new_c_matrix = np.vstack([sc_matrix[:2], sub_non_orth_c_norm * scale])
 
-    def _prepare_film_old(self) -> Tuple[Structure, np.ndarray, np.ndarray]:
-        matrix = self.match.film_sl_transform
-        supercell_slab = self.film._non_orthogonal_slab_structure.copy()
-        supercell_slab.make_supercell(scaling_matrix=matrix)
+    #     oriented_film = Structure(
+    #         lattice=Lattice(new_c_matrix),
+    #         species=supercell_slab.species,
+    #         coords=supercell_slab.cart_coords,
+    #         coords_are_cartesian=True,
+    #         to_unit_cell=True,
+    #         site_properties=supercell_slab.site_properties,
+    #     )
 
-        sc_matrix = supercell_slab.lattice.matrix
-        sub_non_orth_c_vec = (
-            self.substrate._non_orthogonal_slab_structure.lattice.matrix[-1]
-        )
-        sub_non_orth_c_norm = sub_non_orth_c_vec / np.linalg.norm(
-            sub_non_orth_c_vec
-        )
+    #     strained_matrix = np.vstack(
+    #         [
+    #             sub_sc_matrix[:2],
+    #             oriented_film.lattice.matrix[-1],
+    #         ]
+    #     )
 
-        norm = self.film.surface_normal
-        proj = np.dot(norm, sub_non_orth_c_norm)
-        scale = self.film._orthogonal_slab_structure.lattice.c / proj
+    #     init_volume = oriented_film.volume
+    #     strain_volume = np.abs(np.linalg.det(strained_matrix))
+    #     scale_factor = init_volume / strain_volume
 
-        new_matrix = np.vstack([sc_matrix[:2], sub_non_orth_c_norm * scale])
+    #     # Maintain constant volume
+    #     strained_matrix[-1] *= scale_factor
 
-        oriented_supercell_slab = Structure(
-            lattice=Lattice(new_matrix),
-            species=supercell_slab.species,
-            coords=supercell_slab.cart_coords,
-            coords_are_cartesian=True,
-            to_unit_cell=True,
-            site_properties=supercell_slab.site_properties,
-        )
+    #     strained_film = Structure(
+    #         lattice=Lattice(strained_matrix),
+    #         species=oriented_film.species,
+    #         coords=oriented_film.frac_coords,
+    #         coords_are_cartesian=False,
+    #         to_unit_cell=True,
+    #         site_properties=supercell_slab.site_properties,
+    #     )
 
-        uvw_supercell = matrix @ self.film.uvw_basis
-        scale_factors = []
-        for i, b in enumerate(uvw_supercell):
-            scale = np.abs(reduce(utils._float_gcd, b))
-            uvw_supercell[i] = uvw_supercell[i] / scale
-            scale_factors.append(scale)
+    #     return strained_film
 
-        return oriented_supercell_slab, uvw_supercell, scale_factors
+    # def _prepare_film_old(self) -> Tuple[Structure, np.ndarray, np.ndarray]:
+    #     matrix = self.match.film_sl_transform
+    #     supercell_slab = self.film._non_orthogonal_slab_structure.copy()
+    #     supercell_slab.make_supercell(scaling_matrix=matrix)
+
+    #     sc_matrix = supercell_slab.lattice.matrix
+    #     sub_non_orth_c_vec = (
+    #         self.substrate._non_orthogonal_slab_structure.lattice.matrix[-1]
+    #     )
+    #     sub_non_orth_c_norm = sub_non_orth_c_vec / np.linalg.norm(
+    #         sub_non_orth_c_vec
+    #     )
+
+    #     norm = self.film.surface_normal
+    #     proj = np.dot(norm, sub_non_orth_c_norm)
+    #     scale = self.film._orthogonal_slab_structure.lattice.c / proj
+
+    #     new_matrix = np.vstack([sc_matrix[:2], sub_non_orth_c_norm * scale])
+
+    #     oriented_supercell_slab = Structure(
+    #         lattice=Lattice(new_matrix),
+    #         species=supercell_slab.species,
+    #         coords=supercell_slab.cart_coords,
+    #         coords_are_cartesian=True,
+    #         to_unit_cell=True,
+    #         site_properties=supercell_slab.site_properties,
+    #     )
+
+    #     uvw_supercell = matrix @ self.film.uvw_basis
+    #     scale_factors = []
+    #     for i, b in enumerate(uvw_supercell):
+    #         scale = np.abs(reduce(utils._float_gcd, b))
+    #         uvw_supercell[i] = uvw_supercell[i] / scale
+    #         scale_factors.append(scale)
+
+    #     return oriented_supercell_slab, uvw_supercell, scale_factors
 
     # def _strain_and_orient_film(self) -> Tuple[Structure, np.ndarray]:
     #     sub_in_plane_vecs = self._substrate_supercell.lattice.matrix[:2]

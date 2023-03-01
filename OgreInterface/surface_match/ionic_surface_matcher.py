@@ -107,7 +107,7 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
 
                 neighbor_dict[n] = d1 + d2
 
-            print(f"{s1}-{s2} ", neighbor_dict[n])
+            # print(f"{s1}-{s2} ", neighbor_dict[n])
 
         return neighbor_dict
 

@@ -65,7 +65,7 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
 
         neighbor_list = []
 
-        cnn = CrystalNN()
+        cnn = CrystalNN(search_cutoff=7.0, cation_anion=True)
         for i, site in enumerate(struc.sites):
             info_dict = cnn.get_nn_info(struc, i)
             for neighbor in info_dict:
@@ -106,6 +106,8 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
                     d2 = float(Element(s2).atomic_radius)
 
                 neighbor_dict[n] = d1 + d2
+
+            print(f"{s1}-{s2} ", neighbor_dict[n])
 
         return neighbor_dict
 

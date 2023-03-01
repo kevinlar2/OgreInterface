@@ -173,6 +173,14 @@ class SphereSurfaceMatcher(BaseSurfaceMatcher):
             dpi=dpi,
         )
 
+        ax.plot(
+            borders[:, 0],
+            borders[:, 1],
+            color="black",
+            linewidth=1,
+            zorder=300,
+        )
+
         max_Z = self._plot_surface_matching(
             fig=fig,
             ax=ax,

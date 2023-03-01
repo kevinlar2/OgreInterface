@@ -353,6 +353,30 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
                 dpi=dpi,
             )
 
+            ax1.plot(
+                borders[:, 0],
+                borders[:, 1],
+                color="black",
+                linewidth=1,
+                zorder=300,
+            )
+
+            ax2.plot(
+                borders[:, 0],
+                borders[:, 1],
+                color="black",
+                linewidth=1,
+                zorder=300,
+            )
+
+            ax3.plot(
+                borders[:, 0],
+                borders[:, 1],
+                color="black",
+                linewidth=1,
+                zorder=300,
+            )
+
             self._plot_surface_matching(
                 fig=fig,
                 ax=ax1,
@@ -407,6 +431,14 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
             fig, ax = plt.subplots(
                 figsize=(5, 5 * ratio),
                 dpi=dpi,
+            )
+
+            ax.plot(
+                borders[:, 0],
+                borders[:, 1],
+                color="black",
+                linewidth=1,
+                zorder=300,
             )
 
             max_Z = self._plot_surface_matching(

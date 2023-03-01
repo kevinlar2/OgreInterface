@@ -3,6 +3,7 @@ from typing import List
 import numpy as np
 from matplotlib.colors import Normalize
 from mpl_toolkits.axes_grid1 import make_axes_locatable
+from matplotlib.patches import Polygon
 from copy import deepcopy
 
 
@@ -178,5 +179,40 @@ class BaseSurfaceMatcher:
                     show_max=show_max,
                     add_color_bar=False,
                 )
+
+            coords = np.array(
+                [
+                    [0, 0, 0],
+                    [1, 0, 0],
+                    [1, 1, 0],
+                    [0, 1, 0],
+                    [0, 0, 0],
+                ]
+            )
+
+            sc_shifts = np.array(
+                [
+                    [1, 0, 0],
+                    [0, 1, 0],
+                    [-1, 0, 0],
+                    [0, -1, 0],
+                    [1, 1, 0],
+                    [-1, -1, 0],
+                    [1, -1, 0],
+                    [-1, 1, 0],
+                ]
+            )
+
+            for shift in sc_shifts:
+                shift_coords = (coords + shift).dot(self.matrix)
+                poly = Polygon(
+                    xy=shift_coords[:, :2],
+                    closed=True,
+                    facecolor="white",
+                    edgecolor="white",
+                    linewidth=1,
+                    zorder=200,
+                )
+                ax.add_patch(poly)
 
         return max_Z

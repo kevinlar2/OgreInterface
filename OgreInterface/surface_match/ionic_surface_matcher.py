@@ -312,18 +312,30 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
         show_max: bool = False,
     ) -> float:
         shifts = self.shifts
-        atoms_list = self._get_shifted_atoms(shifts)
-        inputs = self._generate_inputs(atoms_list)
+        batch_atoms_list = [self._get_shifted_atoms(shift) for shift in shifts]
+        batch_inputs = [self._generate_inputs(b) for b in batch_atoms_list]
+
+        # atoms_list = self._get_shifted_atoms(shifts)
+        # inputs = self._generate_inputs(atoms_list)
 
         x_grid = np.linspace(0, 1, self.grid_density_x)
         y_grid = np.linspace(0, 1, self.grid_density_y)
         X, Y = np.meshgrid(x_grid, y_grid)
 
         if self.z_PES_data is None:
-            z_coulomb_energy = self._calculate_coulomb(inputs, z_shift=True)
-            z_born_energy = self._calculate_born(inputs, z_shift=True)
-            z_interface_coulomb_energy = z_coulomb_energy.reshape(X.shape)
-            z_interface_born_energy = z_born_energy.reshape(X.shape)
+            z_interface_coulomb_energy = np.vstack(
+                [
+                    self._calculate_coulomb(b, z_shift=True)
+                    for b in batch_inputs
+                ]
+            )
+            z_interface_born_energy = np.vstack(
+                [self._calculate_born(b, z_shift=True) for b in batch_inputs]
+            )
+            # z_coulomb_energy = self._calculate_coulomb(inputs, z_shift=True)
+            # z_born_energy = self._calculate_born(inputs, z_shift=True)
+            # z_interface_coulomb_energy = z_coulomb_energy.reshape(X.shape)
+            # z_interface_born_energy = z_born_energy.reshape(X.shape)
             self.z_PES_data = [
                 z_interface_coulomb_energy,
                 z_interface_born_energy,
@@ -332,11 +344,17 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
             z_interface_coulomb_energy = self.z_PES_data[0]
             z_interface_born_energy = self.z_PES_data[1]
 
-        coulomb_energy = self._calculate_coulomb(inputs, z_shift=False)
-        born_energy = self._calculate_born(inputs, z_shift=False)
+        interface_coulomb_energy = np.vstack(
+            [self._calculate_coulomb(b, z_shift=False) for b in batch_inputs]
+        )
+        interface_born_energy = np.vstack(
+            [self._calculate_born(b, z_shift=False) for b in batch_inputs]
+        )
 
-        interface_coulomb_energy = coulomb_energy.reshape(X.shape)
-        interface_born_energy = born_energy.reshape(X.shape)
+        # coulomb_energy = self._calculate_coulomb(inputs, z_shift=False)
+        # born_energy = self._calculate_born(inputs, z_shift=False)
+        # interface_coulomb_energy = coulomb_energy.reshape(X.shape)
+        # interface_born_energy = born_energy.reshape(X.shape)
 
         coulomb_adh_energy = (
             z_interface_coulomb_energy - interface_coulomb_energy

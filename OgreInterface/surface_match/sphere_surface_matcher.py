@@ -46,13 +46,7 @@ class SphereSurfaceMatcher(BaseSurfaceMatcher):
         return cutoff_val
 
     def _get_shifted_atoms(self, shifts: np.ndarray) -> List[Atoms]:
-        sub_atoms = self.interface.get_substrate_supercell(return_atoms=True)
-        sub_atoms.set_array("is_film", np.zeros(len(sub_atoms)).astype(bool))
-
-        film_atoms = self.interface.get_film_supercell(return_atoms=True)
-        film_atoms.set_array("is_film", np.ones(len(film_atoms)).astype(bool))
-
-        atoms = [sub_atoms, film_atoms]
+        atoms_list = []
 
         for shift in shifts:
             # Shift in-plane
@@ -78,9 +72,9 @@ class SphereSurfaceMatcher(BaseSurfaceMatcher):
             )
 
             # Add atoms to the list
-            atoms.append(shifted_atoms)
+            atoms_list.append(shifted_atoms)
 
-        return atoms
+        return atoms_list
 
     def _generate_inputs(self, atoms_list):
         inputs = generate_dict_torch(
@@ -133,19 +127,31 @@ class SphereSurfaceMatcher(BaseSurfaceMatcher):
         show_max: bool = False,
     ) -> float:
         shifts = self.shifts
-        atoms_list = self._get_shifted_atoms(shifts)
+        batch_atoms_list = [self._get_shifted_atoms(shift) for shift in shifts]
+        batch_inputs = [self._generate_inputs(b) for b in batch_atoms_list]
 
-        inputs = self._generate_inputs(atoms_list)
-        overlap = self._calculate_overlap(inputs)
+        sub_atoms = self.interface.get_substrate_supercell(return_atoms=True)
+        sub_atoms.set_array("is_film", np.zeros(len(sub_atoms)).astype(bool))
 
-        sub_overlap = overlap[0]
-        film_overlap = overlap[1]
+        film_atoms = self.interface.get_film_supercell(return_atoms=True)
+        film_atoms.set_array("is_film", np.ones(len(film_atoms)).astype(bool))
+
+        sub_film_atoms = [sub_atoms, film_atoms]
+        sub_film_inputs = self._generate_inputs(sub_film_atoms)
+        sub_film_overlap = self._calculate_overlap(sub_film_inputs)
+
+        interface_overlap = np.vstack(
+            [self._calculate_overlap(b) for b in batch_inputs]
+        )
+
+        sub_overlap = sub_film_overlap[0]
+        film_overlap = sub_film_overlap[1]
 
         x_grid = np.linspace(0, 1, self.grid_density_x)
         y_grid = np.linspace(0, 1, self.grid_density_y)
         X, Y = np.meshgrid(x_grid, y_grid)
 
-        interface_overlap = overlap[2:].reshape(X.shape)
+        # interface_overlap = overlap[2:].reshape(X.shape)
 
         Z = (
             sub_overlap + film_overlap - interface_overlap

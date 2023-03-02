@@ -68,7 +68,9 @@ class BaseSurfaceMatcher:
             + shift_images[0]
         )
         prim_cart_shifts = prim_frac_shifts.dot(shift_matrix)
-        iface_frac_shifts = prim_cart_shifts.dot(iface_inv_matrix)
+        iface_frac_shifts = prim_cart_shifts.dot(iface_inv_matrix).reshape(
+            X.shape + (-1,)
+        )
 
         return shift_matrix, shift_images, iface_frac_shifts
 

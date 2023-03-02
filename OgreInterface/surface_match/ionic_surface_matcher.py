@@ -148,7 +148,7 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
 
         for key in unique_keys:
             rev_key = tuple(reversed(key))
-            sum_d = ionic_radius_dict[key[0]] + ionic_radius_dict[key[1]]
+            ionic_sum_d = ionic_radius_dict[key[0]] + ionic_radius_dict[key[1]]
             if key in sub_dict and key in film_dict:
                 sub_d = sub_dict[key]
                 film_d = film_dict[key]
@@ -168,39 +168,41 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
             if key in sub_dict and key not in film_dict:
                 sub_d = sub_dict[key]
                 interface_neighbor_dict[(0, 0) + key] = sub_d
-                interface_neighbor_dict[(1, 1) + key] = sum_d
+                interface_neighbor_dict[(1, 1) + key] = ionic_sum_d
                 interface_neighbor_dict[(0, 1) + key] = sub_d
                 interface_neighbor_dict[(1, 0) + key] = sub_d
                 interface_neighbor_dict[(0, 0) + rev_key] = sub_d
-                interface_neighbor_dict[(1, 1) + rev_key] = sum_d
+                interface_neighbor_dict[(1, 1) + rev_key] = ionic_sum_d
                 interface_neighbor_dict[(0, 1) + rev_key] = sub_d
                 interface_neighbor_dict[(1, 0) + rev_key] = sub_d
 
             if key not in sub_dict and key in film_dict:
                 film_d = film_dict[key]
                 interface_neighbor_dict[(1, 1) + key] = film_d
-                interface_neighbor_dict[(0, 0) + key] = sum_d
+                interface_neighbor_dict[(0, 0) + key] = ionic_sum_d
                 interface_neighbor_dict[(0, 1) + key] = film_d
                 interface_neighbor_dict[(1, 0) + key] = film_d
                 interface_neighbor_dict[(1, 1) + rev_key] = film_d
-                interface_neighbor_dict[(0, 0) + rev_key] = sum_d
+                interface_neighbor_dict[(0, 0) + rev_key] = ionic_sum_d
                 interface_neighbor_dict[(0, 1) + rev_key] = film_d
                 interface_neighbor_dict[(1, 0) + rev_key] = film_d
 
             if key not in sub_dict and key not in film_dict:
-                interface_neighbor_dict[(0, 0) + key] = sub_d
-                interface_neighbor_dict[(1, 1) + key] = sum_d
-                interface_neighbor_dict[(0, 1) + key] = sum_d
-                interface_neighbor_dict[(1, 0) + key] = sum_d
-                interface_neighbor_dict[(0, 0) + rev_key] = sub_d
-                interface_neighbor_dict[(1, 1) + rev_key] = sum_d
-                interface_neighbor_dict[(0, 1) + rev_key] = sum_d
-                interface_neighbor_dict[(1, 0) + rev_key] = sum_d
+                interface_neighbor_dict[(0, 0) + key] = ionic_sum_d
+                interface_neighbor_dict[(1, 1) + key] = ionic_sum_d
+                interface_neighbor_dict[(0, 1) + key] = ionic_sum_d
+                interface_neighbor_dict[(1, 0) + key] = ionic_sum_d
+                interface_neighbor_dict[(0, 0) + rev_key] = ionic_sum_d
+                interface_neighbor_dict[(1, 1) + rev_key] = ionic_sum_d
+                interface_neighbor_dict[(0, 1) + rev_key] = ionic_sum_d
+                interface_neighbor_dict[(1, 0) + rev_key] = ionic_sum_d
 
         for key, val in interface_neighbor_dict.items():
             if val is None:
-                sum_d = ionic_radius_dict[key[2]] + ionic_radius_dict[key[3]]
-                interface_neighbor_dict[key] = sub_d
+                ionic_sum_d = (
+                    ionic_radius_dict[key[2]] + ionic_radius_dict[key[3]]
+                )
+                interface_neighbor_dict[key] = ionic_sum_d
 
         return interface_neighbor_dict
 

@@ -313,10 +313,10 @@ class Surface:
 
         Examples:
             Writing a POSCAR file for a static DFT calculation:
-            >>> surface.write_file(orthogonal=True, output="POSCAR", relax=False)
+            >>> surface.write_file(output="POSCAR", orthogonal=True, relax=False)
 
             Writing a passivated POSCAR file that needs to be relaxed using DFT:
-            >>> surface.write_file(orthogonal=True, output="POSCAR", relax=True)
+            >>> surface.write_file(output="POSCAR", orthogonal=True, relax=True)
 
 
         Args:
@@ -743,9 +743,9 @@ class Surface:
         self,
         bottom: bool = True,
         top: bool = True,
-        cutoff: float = 3.0,
-        include_d_valence: bool = True,
+        cutoff: float = 4.0,
         passivated_struc: Union[str, None] = None,
+        include_d_valence: bool = True,
         manual_oxidation_states: Union[Dict[str, float], None] = None,
     ) -> None:
         """
@@ -764,10 +764,10 @@ class Surface:
             bottom: Determines if the bottom of the structure should be passivated
             top: Determines of the top of the structure should be passivated
             cutoff: Determines the cutoff in Angstroms for the nearest neighbor search. 3.0 seems to give reasonalble reasults.
-            include_d_valence: Determines if the d-orbital electrons are included the calculation of the pseudohydrogen charge.
             passivated_struc: File path to the CONTCAR/POSCAR file that contains the relaxed atomic positions of the pseudo-hydrogens.
                 This structure must have the same miller index and termination index.
-            manual_oxidation_states: Option to pass in a dictionary determining which elements are anions vs cations.
+            include_d_valence: (DO NOT CHANGE FROM DEFAULT, THIS IS ONLY FOR DEBUGING) Determines if the d-orbital electrons are included the calculation of the pseudohydrogen charge.
+            manual_oxidation_states:  (DO NOT CHANGE FROM DEFAULT, THIS IS ONLY FOR DEBUGING) Option to pass in a dictionary determining which elements are anions vs cations.
                 This will be automated hopefully at some point.
                 (i.e {"Ti": 1, "Mn": 1, "In": -1} would mean Ti and Mn are cations and In is an anion)
         """

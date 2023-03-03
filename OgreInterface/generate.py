@@ -64,12 +64,12 @@ class SurfaceGenerator(Sequence):
         >>> from pymatgen.core.structure import Structure
         >>> bulk = Structure.from_file("POSCAR_bulk")
         >>> surfaces = SurfaceGenerator(bulk=bulk, miller_index=[1, 1, 1], layers=5, vacuum=60)
-        >>> surface = surfaces.slabs[0] # OgreInterface.Surface object
+        >>> surface = surfaces[0] # OgreInterface.Surface object
 
         Creating a SurfaceGenerator object using the build in from_file() method:
         >>> from OgreInterface.generate import SurfaceGenerator
         >>> surfaces = SurfaceGenerator.from_file(filename="POSCAR_bulk", miller_index=[1, 1, 1], layers=5, vacuum=60)
-        >>> surface = surfaces.slabs[0] # OgreInterface.Surface object
+        >>> surface = surfaces[0] # OgreInterface.Surface object
 
     Args:
         bulk: Bulk crystal structure used to create the surface
@@ -829,12 +829,12 @@ class OrganicSurfaceGenerator(SurfaceGenerator):
         >>> from pymatgen.core.structure import Structure
         >>> bulk = Structure.from_file("POSCAR_bulk")
         >>> surfaces = SurfaceGenerator(bulk=bulk, miller_index=[1, 1, 1], layers=5, vacuum=60)
-        >>> surface = surfaces.slabs[0] # OgreInterface.Surface object
+        >>> surface = surfaces[0] # OgreInterface.Surface object
 
         Creating a SurfaceGenerator object using the build in from_file() method:
         >>> from OgreInterface.generate import SurfaceGenerator
         >>> surfaces = SurfaceGenerator.from_file(filename="POSCAR_bulk", miller_index=[1, 1, 1], layers=5, vacuum=60)
-        >>> surface = surfaces.slabs[0] # OgreInterface.Surface object
+        >>> surface = surfaces[0] # OgreInterface.Surface object
 
     Args:
         bulk: Bulk crystal structure used to create the surface
@@ -1002,7 +1002,7 @@ class InterfaceGenerator:
         >>> from OgreInterface.generate import SurfaceGenerator, InterfaceGenerator
         >>> subs = SurfaceGenerator.from_file(filename="POSCAR_sub", miller_index=[1,1,1], layers=5)
         >>> films = SurfaceGenerator.from_file(filename="POSCAR_film", miller_index=[1,1,1], layers=5)
-        >>> interface_generator = InterfaceGenerator(substrate=subs.slabs[0], film=films.slabs[0])
+        >>> interface_generator = InterfaceGenerator(substrate=subs[0], film=films[0])
         >>> interfaces = interface_generator.generate_interfaces() # List of OgreInterface Interface objects
 
     Args:

@@ -39,14 +39,14 @@ class Surface:
         Generating a surface with pseudo-hydrogen passivation where the atomic positions of the hydrogens need to be relaxed using DFT.
         >>> from OgreInterface.generate import SurfaceGenerator
         >>> surfaces = SurfaceGenerator.from_file(filename="POSCAR_bulk", miller_index=[1, 1, 1], layers=5, vacuum=60)
-        >>> surface = surfaces.slabs[0] # OgreInterface.Surface object
+        >>> surface = surfaces[0] # OgreInterface.Surface object
         >>> surface.passivate(bot=True, top=True)
         >>> surface.write_file(output="POSCAR_slab", orthogonal=True, relax=True) # relax=True will automatically set selective dynamics=True for all passivating hydrogens
 
         Generating a surface with pseudo-hydrogen passivation that comes from a structure with pre-relaxed pseudo-hydrogens.
         >>> from OgreInterface.generate import SurfaceGenerator
         >>> surfaces = SurfaceGenerator.from_file(filename="POSCAR_bulk", miller_index=[1, 1, 1], layers=20, vacuum=60)
-        >>> surface = surfaces.slabs[0] # OgreInterface.Surface object
+        >>> surface = surfaces[0] # OgreInterface.Surface object
         >>> surface.passivate(bot=True, top=True, passivated_struc="CONTCAR") # CONTCAR is the output of the structural relaxation
         >>> surface.write_file(output="POSCAR_slab", orthogonal=True, relax=False)
 

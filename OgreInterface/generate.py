@@ -156,7 +156,7 @@ class SurfaceGenerator(Sequence):
         else:
             self._slabs = None
 
-    def __getitem__(self, i):
+    def __getitem__(self, i) -> Surface:
         if self._slabs:
             return self._slabs[i]
         else:
@@ -164,7 +164,7 @@ class SurfaceGenerator(Sequence):
                 "The slabs have not been generated yet, please use the generate_slabs() function to create them."
             )
 
-    def __len__(self):
+    def __len__(self) -> int:
         return len(self._slabs)
 
     def generate_slabs(self) -> None:

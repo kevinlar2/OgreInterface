@@ -333,6 +333,24 @@ def reduce_vectors_zur_and_mcgill(a, b):
 
         reduced = True
 
+    final_dot = np.dot(vecs[0], vecs[1])
+    dot_0 = np.isclose(np.round(final_dot, 5), 0.0)
+    a_norm = np.linalg.norm(vecs[0])
+    b_norm = np.linalg.norm(vecs[1])
+
+    basis = np.eye(3)
+    basis[:2] = vecs
+    det = np.linalg.det(basis)
+    lefty = det < 0
+
+    if dot_0 and lefty:
+        vecs[1] *= -1
+        mat[1] *= -1
+
+    if not dot_0 and np.isclose(a_norm, b_norm) and lefty:
+        vecs = vecs[[1, 0]]
+        mat = mat[[1, 0, 2]]
+
     return vecs[0], vecs[1], mat
 
 

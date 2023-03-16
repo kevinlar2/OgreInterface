@@ -478,7 +478,8 @@ class SurfaceGenerator(Sequence):
         planar_matrix = deepcopy(planar_oriented_struc.lattice.matrix)
 
         new_a, new_b, mat = utils.reduce_vectors_zur_and_mcgill(
-            planar_matrix[0, :2], planar_matrix[1, :2]
+            planar_matrix[0],
+            planar_matrix[1],
         )
 
         planar_oriented_struc.make_supercell(mat)

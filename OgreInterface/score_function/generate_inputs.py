@@ -1,9 +1,13 @@
 from ase.neighborlist import neighbor_list
 from typing import Dict, List, Optional
 from ase import Atoms
+from pymatgen.core.periodic_table import Element
 import torch
 import numpy as np
 from OgreInterface.score_function.neighbors import TorchNeighborList
+from OgreInterface.score_function.interface_neighbors import (
+    TorchInterfaceNeighborList,
+)
 
 
 def _atoms_collate_fn(batch):
@@ -113,13 +117,18 @@ def generate_dict_ase(
 def generate_dict_torch(
     atoms: List[Atoms],
     cutoff: float,
+    interface: bool = False,
     ns_dict: Optional[Dict[str, float]] = None,
     charge_dict: Optional[Dict[str, float]] = None,
     z_shift: float = 15.0,
     z_periodic: bool = False,
 ) -> Dict:
 
-    tn = TorchNeighborList(cutoff=cutoff)
+    if interface:
+        tn = TorchInterfaceNeighborList(cutoff=cutoff)
+    else:
+        tn = TorchNeighborList(cutoff=cutoff)
+
     inputs_batch = []
 
     for at_idx, atom in enumerate(atoms):
@@ -134,6 +143,10 @@ def generate_dict_torch(
         R_z = torch.from_numpy(z_positions)
         cell = torch.from_numpy(atom.get_cell().array)
 
+        e_negs = torch.Tensor(
+            [Element(s).X for s in atom.get_chemical_symbols()]
+        )
+
         if z_periodic:
             pbc = torch.Tensor([True, True, True]).to(dtype=torch.bool)
         else:
@@ -147,6 +160,7 @@ def generate_dict_torch(
             "cell": cell,
             "pbc": pbc,
             "is_film": is_film,
+            "e_negs": e_negs,
         }
 
         if charge_dict is not None:
@@ -161,26 +175,21 @@ def generate_dict_torch(
 
         tn.forward(inputs=input_dict)
 
-        Rij = (
-            R[input_dict["idx_j"]]
-            - R[input_dict["idx_i"]]
-            + input_dict["offsets"]
-        )
-
-        Rij_z = (
-            R_z[input_dict["idx_j"]]
-            - R_z[input_dict["idx_i"]]
-            + input_dict["offsets"]
-        )
-
-        input_dict["Rij"] = Rij
-        input_dict["Rij_z"] = Rij_z
+        # input_dict["Rij"] = Rij
+        # input_dict["Rij_z"] = Rij_z
         input_dict["cell"] = input_dict["cell"].view(-1, 3, 3)
         input_dict["pbc"] = input_dict["pbc"].view(-1, 3)
 
         inputs_batch.append(input_dict)
 
     inputs = _atoms_collate_fn(inputs_batch)
+
+    # if not interface:
+    # print(torch.max(inputs["idx_i_local"]))
+    # print(torch.max(inputs["idx_i"]))
+    # print(torch.max(inputs["idx_m"]))
+    # for k, v in inputs.items():
+    #     print(k, v.shape)
 
     for k, v in inputs.items():
         if "float" in str(v.dtype):

@@ -717,7 +717,7 @@ class SurfaceGenerator(Sequence):
             vacuum,
         )
 
-    def _generate_slabs(self):
+    def _generate_slabs(self) -> List[Surface]:
         """
         This function is used to generate slab structures with all unique
         surface terminations.

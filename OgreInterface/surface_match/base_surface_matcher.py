@@ -105,7 +105,7 @@ class BaseSurfaceMatcher:
         #     X.shape + (-1,)
         # )
 
-        return prim_cart_shifts
+        return prim_cart_shifts.reshape(X.shape + (-1,))
 
     def get_cart_xy_shifts(self, a, b):
         cart_xyz = (np.array([a, b, 0.0]) + self.shift_images[0]).dot(
@@ -197,20 +197,23 @@ class BaseSurfaceMatcher:
                     X_plot.ravel(),
                     Y_plot.ravel(),
                     np.zeros(Y_plot.shape).ravel(),
-                ].dot(np.linalg.inv(self.matrix))
-                opt_shift = frac_shifts[np.argmax(Z_plot.ravel())]
+                ]
+                # .dot(np.linalg.inv(self.matrix))
+                opt_shift = frac_shifts[np.argmin(Z_plot.ravel())]
+                print(opt_shift)
                 max_Z = np.min(Z_plot)
-                plot_shift = opt_shift.dot(self.matrix)
+                plot_shift = opt_shift
+                # .dot(self.matrix)
 
-                # ax.scatter(
-                #     [plot_shift[0]],
-                #     [plot_shift[1]],
-                #     fc="white",
-                #     ec="black",
-                #     marker="X",
-                #     s=100,
-                #     zorder=10,
-                # )
+                ax.scatter(
+                    [plot_shift[0]],
+                    [plot_shift[1]],
+                    fc="white",
+                    ec="black",
+                    marker="X",
+                    s=100,
+                    zorder=10,
+                )
 
                 if shift:
                     self.opt_xy_shift = opt_shift[:2]

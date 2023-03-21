@@ -43,7 +43,6 @@ class LJ(nn.Module):
         self,
         inputs: Dict[str, torch.Tensor],
         r0_dict: Dict[Tuple[int, int, int, int], float],
-        shift: torch.Tensor = torch.zeros(3),
     ) -> Dict[str, torch.Tensor]:
         """
         Compute the Born repulsion energy.
@@ -65,8 +64,11 @@ class LJ(nn.Module):
 
         R = inputs["R"]
 
+        shift = inputs["shift"]
         shift.requires_grad_()
-        shifts = shift.repeat(len(R), 1)
+        shifts = torch.repeat_interleave(
+            shift, repeats=inputs["n_atoms"], dim=0
+        )
         shifts[is_sub_bool] *= 0.0
 
         shifts.requires_grad_()
@@ -127,13 +129,15 @@ class LJ(nn.Module):
         film_force_norm = torch.squeeze(torch.norm(film_force, dim=1) ** 2)
 
         f_go = [torch.ones_like(film_force_norm)]
-        film_shift = grad([film_force_norm], [shift], grad_outputs=f_go)[0]
+        film_norm_grad = grad([film_force_norm], [shift], grad_outputs=f_go)[0]
+        film_norm_grad = torch.squeeze(film_norm_grad)
 
         R_shift.detach_()
         shifts.detach_()
         shift.detach_()
 
         return (
+            y_energy.detach().numpy(),
             film_force_norm.detach().numpy(),
-            torch.squeeze(film_shift).detach().numpy(),
+            film_norm_grad.detach().numpy(),
         )

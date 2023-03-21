@@ -1,5 +1,6 @@
 from OgreInterface.score_function.ewald import EnergyEwald
 from OgreInterface.score_function.born import EnergyBorn
+from OgreInterface.score_function.ionic import IonicPotential
 from OgreInterface.score_function.generate_inputs import generate_dict_torch
 from OgreInterface.surfaces import Interface
 from OgreInterface.surface_match.base_surface_matcher import BaseSurfaceMatcher
@@ -249,31 +250,29 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
 
         return atoms
 
-    def _generate_inputs(self, atoms_list):
+    def _generate_inputs(self, atoms, shifts, interface=True):
         inputs = generate_dict_torch(
-            atoms=atoms_list,
+            atoms=atoms,
+            shifts=shifts,
             cutoff=self.cutoff,
+            interface=interface,
             charge_dict=self.charge_dict,
             ns_dict=self.ns_dict,
         )
 
         return inputs
 
-    def _calculate_coulomb(self, inputs, z_shift=False):
-        ewald = EnergyEwald(
+    def _calculate(self, inputs, z_shift=False):
+        ionic_potential = IonicPotential(
             alpha=self.alpha, k_max=self.k_max, cutoff=self.cutoff
         )
-        coulomb_energy = ewald.forward(inputs, z_shift)
-
-        return coulomb_energy
-
-    def _calculate_born(self, inputs, z_shift=False):
-        born = EnergyBorn(cutoff=self.cutoff)
-        born_energy = born.forward(
-            inputs, z_shift=z_shift, r0_dict=self.r0_dict
+        outputs = ionic_potential.forward(
+            inputs=inputs,
+            r0_dict=self.r0_dict,
+            z_shift=z_shift,
         )
 
-        return born_energy
+        return outputs
 
     def _get_interpolated_data(self, Z, image):
         x_grid = np.linspace(0, 1, self.grid_density_x)
@@ -301,7 +300,7 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
 
         return X_cart, Y_cart, Z_interp
 
-    def run_surface_matching(
+    def old_run_surface_matching(
         self,
         cmap: str = "jet",
         fontsize: int = 14,
@@ -485,3 +484,198 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
         plt.close(fig)
 
         return max_Z
+
+    def run_surface_matching(
+        self,
+        cmap: str = "jet",
+        fontsize: int = 14,
+        output: str = "PES.png",
+        shift: bool = True,
+        show_born_and_coulomb: bool = False,
+        dpi: int = 400,
+        show_max: bool = False,
+    ) -> float:
+        shifts = self.shifts
+        interface_atoms = self.interface.get_interface(
+            orthogonal=True, return_atoms=True
+        )
+        interface_atoms.set_array(
+            "is_film",
+            self.interface._orthogonal_structure.site_properties["is_film"],
+        )
+
+        # batch_inputs = [
+        #     for batch_shift in shifts
+        # ]
+
+        energies = []
+        film_force_norms = []
+        film_force_norm_grads = []
+        # for inputs in batch_inputs:
+        for batch_shift in shifts:
+            inputs = self._generate_inputs(
+                atoms=interface_atoms, shifts=batch_shift, interface=True
+            )
+            (
+                batch_energies,
+                batch_film_force_norms,
+                batch_film_force_norm_grads,
+            ) = self._calculate(inputs)
+            energies.append(batch_energies)
+            film_force_norms.append(batch_film_force_norms)
+            film_force_norm_grads.append(batch_film_force_norm_grads)
+
+        interface_energy = np.vstack(energies)
+        interface_film_force_norms = np.vstack(film_force_norms)
+
+        x_grid = np.linspace(0, 1, self.grid_density_x)
+        y_grid = np.linspace(0, 1, self.grid_density_y)
+        X, Y = np.meshgrid(x_grid, y_grid)
+
+        # Z = interface_film_force_norms
+        Z = interface_energy
+
+        a = self.matrix[0, :2]
+        b = self.matrix[1, :2]
+
+        borders = np.vstack([np.zeros(2), a, a + b, b, np.zeros(2)])
+
+        x_size = borders[:, 0].max() - borders[:, 0].min()
+        y_size = borders[:, 1].max() - borders[:, 1].min()
+
+        ratio = y_size / x_size
+
+        if ratio < 1:
+            figx = 5 / ratio
+            figy = 5
+        else:
+            figx = 5
+            figy = 5 * ratio
+
+        fig, ax = plt.subplots(
+            figsize=(figx, figy),
+            dpi=dpi,
+        )
+
+        ax.plot(
+            borders[:, 0],
+            borders[:, 1],
+            color="black",
+            linewidth=1,
+            zorder=300,
+        )
+
+        max_Z = self._plot_surface_matching(
+            fig=fig,
+            ax=ax,
+            X=X,
+            Y=Y,
+            Z=Z,
+            dpi=dpi,
+            cmap=cmap,
+            fontsize=fontsize,
+            show_max=show_max,
+            shift=True,
+        )
+
+        # opt_positions = self.run_surface_matching_grad()
+
+        # inds = np.linspace(0, 1, len(opt_positions))
+        # red = np.array([1, 0, 0])
+        # blue = np.array([0, 0, 1])
+        # colors = (inds[:, None] * blue[None, :]) + (
+        #     (1 - inds)[:, None] * red[None, :]
+        # )
+        # ax.scatter(
+        #     opt_positions[:, 0],
+        #     opt_positions[:, 1],
+        #     c=colors,
+        # )
+
+        # print(np.round(interface_lj_force_vec, 5))
+        # for batch_shift, batch_force_vecs in zip(
+        #     shifts, film_force_norm_grads
+        # ):
+        #     for shift, force_vec in zip(batch_shift, batch_force_vecs):
+        #         norm_force_vec = (
+        #             -(force_vec / np.linalg.norm(force_vec)) * 0.20
+        #         )
+        #         if norm_force_vec[-1] > 0:
+        #             white = np.ones(3)
+        #             green = np.array([1, 0, 0])
+        #             z_frac = norm_force_vec[-1] / 0.21
+        #             fc = (((1 - z_frac) * white) + (z_frac * green)).tolist()
+        #         elif norm_force_vec[-1] < 0:
+        #             white = np.ones(3)
+        #             purple = np.array([0, 0, 1])
+        #             z_frac = -norm_force_vec[-1] / 0.21
+        #             fc = (((1 - z_frac) * white) + (z_frac * purple)).tolist()
+        #         else:
+        #             fc = "white"
+
+        #         ax.arrow(
+        #             x=shift[0],
+        #             y=shift[1],
+        #             dx=norm_force_vec[0],
+        #             dy=norm_force_vec[1],
+        #             width=0.04,
+        #             fc=fc,
+        #             ec="black",
+        #         )
+
+        ax.set_xlim(borders[:, 0].min(), borders[:, 0].max())
+        ax.set_ylim(borders[:, 1].min(), borders[:, 1].max())
+        ax.set_aspect("equal")
+
+        fig.tight_layout()
+        fig.savefig(output, bbox_inches="tight")
+        plt.close(fig)
+
+        return max_Z
+
+    def run_z_shift(
+        self,
+        interfacial_distances,
+        fontsize: int = 14,
+        output: str = "PES.png",
+        show_born_and_coulomb: bool = False,
+        dpi: int = 400,
+    ):
+        zeros = np.zeros(len(interfacial_distances))
+        shifts = np.c_[zeros, zeros, interfacial_distances - self.d_interface]
+
+        interface_atoms = self.interface.get_interface(
+            orthogonal=True, return_atoms=True
+        )
+        interface_atoms.set_array(
+            "is_film",
+            self.interface._orthogonal_structure.site_properties["is_film"],
+        )
+
+        inputs = self._generate_inputs(
+            atoms=interface_atoms, shifts=shifts, interface=True
+        )
+
+        (
+            interface_energy,
+            interface_film_force_norms,
+            interface_film_force_norm_grads,
+        ) = self._calculate(inputs)
+
+        fig, ax = plt.subplots(
+            figsize=(4, 3),
+            dpi=dpi,
+        )
+        ax.set_ylabel("Net Force", fontsize=fontsize)
+        ax.set_xlabel("Interfacial Distance ($\\AA$)", fontsize=fontsize)
+
+        ax.plot(
+            interfacial_distances,
+            interface_film_force_norms,
+            color="black",
+            linewidth=1,
+        )
+
+        fig.tight_layout()
+        fig.savefig(output, bbox_inches="tight")
+        plt.close(fig)

@@ -10,7 +10,7 @@ class IonicPotentialError(Exception):
     pass
 
 
-class IonicPotential(nn.Module):
+class IonicPotential2D(nn.Module):
     """
     Compute the Coulomb energy of a set of point charges inside a periodic box.
     Only works for periodic boundary conditions in all three spatial directions and orthorhombic boxes.
@@ -24,9 +24,10 @@ class IonicPotential(nn.Module):
         self,
         alpha: float,
         k_max: int,
+        r_max: int,
         cutoff: Optional[float] = None,
     ):
-        super(IonicPotential, self).__init__()
+        super(IonicPotential2D, self).__init__()
 
         # Get the appropriate Coulomb constant
         ke = 14.3996
@@ -40,8 +41,144 @@ class IonicPotential(nn.Module):
 
         # Set up lattice vectors
         self.k_max = k_max
+        self.r_max = r_max
         kvecs = self._generate_kvecs()
         self.register_buffer("kvecs", kvecs)
+
+    def _sum_recip_total_energy(
+        self,
+        kmax,
+        recip_cell,
+        x,
+        y,
+        z_distance,
+        charge1,
+        charge2,
+        distance,
+        alpha,
+    ):
+        sum_addition = 0
+        for b0 in range(-kmax, kmax + 1):
+            for b1 in range(-kmax, kmax + 1):
+                if b0 == b1 == 0:
+                    continue
+
+                h = b0 * recip_cell[x] + b1 * recip_cell[y]
+                h2 = torch.dot(h, h)
+                d_h = torch.sqrt(h2)
+                exponential1 = torch.exp(d_h * z_distance) * torch.erfc(
+                    (d_h / (2 * alpha)) + alpha * z_distance
+                )
+                exponential2 = torch.exp(-d_h * z_distance) * torch.erfc(
+                    (d_h / (2 * alpha)) - alpha * z_distance
+                )
+                temp1 = (
+                    charge1
+                    * charge2
+                    * torch.cos(torch.dot(h, distance))
+                    * (exponential1 + exponential2)
+                    / d_h
+                )
+                sum_addition += temp1
+
+        return sum_addition
+
+    def _sum_real_total_energy(
+        self,
+        rmax,
+        real_cell,
+        x,
+        y,
+        charge1,
+        charge2,
+        distance,
+        alpha,
+    ):
+        sum_addition = 0
+        for n0 in range(-rmax, rmax + 1):
+            for n1 in range(-rmax, rmax + 1):
+                a = n0 * real_cell[x] + n1 * real_cell[y]
+                r = distance + a
+                dsq = torch.dot(r, r)
+                d = torch.sqrt(dsq)
+                if dsq == 0 and n0 == n1 == 0:
+                    continue
+                addition = charge1 * charge2 * torch.erfc(alpha * d) / d
+                sum_addition += addition
+
+        return sum_addition
+
+    def _coulomb_energy(self, cell, recip_cell, positions, charges):
+        Sum = 0
+        Sum2 = 0
+        pi = torch.tensor(np.pi)
+        Kcell = recip_cell * 2 * pi
+
+        ######## long range ###################
+        for r1, q1 in zip(positions, charges):
+            for r2, q2 in zip(positions, charges):
+                r1r2 = r1 - r2
+                # zij = torch.abs(r1[2] - r2[2])
+                zij = r1[2] - r2[2]
+                addition1 = self._sum_recip_total_energy(
+                    kmax=self.k_max,
+                    recip_cell=Kcell,
+                    x=0,
+                    y=1,
+                    z_distance=zij,
+                    charge1=q1,
+                    charge2=q2,
+                    distance=r1r2,
+                    alpha=self.alpha,
+                )
+                Sum += addition1
+
+        for r1, q1 in zip(positions, charges):
+            for r2, q2 in zip(positions, charges):
+                zij = r1[2] - r2[2]
+                # zij = torch.abs(r1[2] - r2[2])
+                temp = (
+                    q1
+                    * q2
+                    * (
+                        zij * torch.erf(self.alpha * zij)
+                        + torch.exp(-((self.alpha * zij) ** 2))
+                        / (self.alpha * torch.sqrt(pi))
+                    )
+                )
+                Sum2 += temp
+
+        recip_energy_1 = self.ke * pi * Sum / (2 * self.area)
+        recip_energy_2 = -self.ke * pi * Sum2 / self.area
+        recip_energy = recip_energy_1 + recip_energy_2
+
+        ######### short range ###################
+        Sum = 0
+        for r1, q1 in zip(positions, charges):
+            for r2, q2 in zip(positions, charges):
+                r1r2 = r1 - r2
+                addition1 = self._sum_real_total_energy(
+                    rmax=self.r_max,
+                    real_cell=cell,
+                    x=0,
+                    y=1,
+                    charge1=q1,
+                    charge2=q2,
+                    distance=r1r2,
+                    alpha=self.alpha,
+                )
+                Sum += addition1
+
+        real_energy = Sum * self.ke / 2
+
+        Sum = 0
+        for i in charges:
+            Sum += i * i
+
+        self_energy = ((-self.alpha) / torch.sqrt(pi)) * Sum * self.ke
+        energy = recip_energy + real_energy + self_energy
+
+        return energy
 
     def _generate_kvecs(self) -> torch.Tensor:
         """
@@ -79,6 +216,9 @@ class IonicPotential(nn.Module):
         # ns = inputs["ns"]
 
         cell = inputs["cell"]
+        # recip_cell = inputs["recip_cell"][0] * 2 * torch.tensor(np.pi)
+        self.area = torch.norm(torch.cross(cell[0][0], cell[0][1]))
+        print(self.area)
         n_atoms = q.shape[0]
         n_molecules = int(idx_m[-1]) + 1
         z = inputs["Z"]
@@ -136,19 +276,26 @@ class IonicPotential(nn.Module):
         n_atoms = z.shape[0]
         n_molecules = int(idx_m[-1]) + 1
 
-        # Get real space and reciprocal space contributions
-        y_real = self._real_space(
-            q, d_ij, idx_i, idx_j, idx_m, n_atoms, n_molecules
-        )
-        y_reciprocal = self._reciprocal_space(
-            q, R_shift, cell, idx_m, n_molecules
-        )
+        # # Get real space and reciprocal space contributions
+        # y_real = self._real_space(
+        #     q, d_ij, idx_i, idx_j, idx_m, n_atoms, n_molecules
+        # )
+        # y_reciprocal = self._reciprocal_space(
+        #     q, R_shift, cell, idx_m, n_molecules
+        # )
         y_born = self._born(d_ij, n_ij, B_ij)
         y_born = scatter_add(y_born, idx_i, dim_size=n_atoms)
         y_born = scatter_add(y_born, idx_m, dim_size=n_molecules)
         y_born = 0.5 * self.ke * torch.squeeze(y_born, -1)
 
-        y_coulomb = y_real + y_reciprocal
+        y_coulomb = self._coulomb_energy(
+            cell=inputs["cell"][0],
+            recip_cell=inputs["recip_cell"][0],
+            positions=R_shift,
+            charges=q,
+        )
+
+        # y_coulomb = y_real + y_reciprocal
         y_energy = y_coulomb + y_born
         # y_energy = y_real + y_reciprocal
 
@@ -206,15 +353,14 @@ class IonicPotential(nn.Module):
         """
 
         # Apply erfc for Ewald summation
-        f_erfc = torch.erfc(torch.sqrt(self.alpha) * d_ij)
+        f_erfc = torch.erfc(self.alpha * d_ij)
         # Combine functions and multiply with inverse distance
         f_r = f_erfc / d_ij
 
-        f_erfc_cutoff = torch.erfc(torch.sqrt(self.alpha) * self.cutoff)
+        f_erfc_cutoff = torch.erfc(self.alpha * self.cutoff)
         f_r_cutoff = f_erfc_cutoff / self.cutoff
 
         potential_ij = q[idx_i] * q[idx_j] * (f_r - f_r_cutoff)
-        # potential_ij = q[idx_i] * q[idx_j] * f_r
 
         if self.cutoff is not None:
             potential_ij = torch.where(
@@ -233,6 +379,7 @@ class IonicPotential(nn.Module):
         self,
         q: torch.Tensor,
         positions: torch.Tensor,
+        r_ij: torch.Tensor,
         cell: torch.Tensor,
         idx_m: torch.Tensor,
         n_molecules: int,
@@ -249,20 +396,18 @@ class IonicPotential(nn.Module):
             torch.Tensor: Real space Coulomb energy.
         """
         # extract box dimensions from cells
-        recip_box = 2.0 * np.pi * torch.linalg.inv(cell).transpose(1, 2)
-        v_box = torch.abs(torch.linalg.det(cell))
-
-        if torch.any(torch.isclose(v_box, torch.zeros_like(v_box))):
-            raise EnergyEwaldError("Simulation box has no volume.")
+        recip_box = 2.0 * np.pi * torch.linalg.inv(cell)
+        # .transpose(1, 2)
+        A_box = torch.norm(torch.cross(cell[0], cell[1]))
 
         # 1) compute the prefactor
-        prefactor = 2.0 * np.pi / v_box
+        prefactor = 2.0 * np.pi / A_box
 
         # setup kvecs M x K x 3
         kvecs = torch.matmul(self.kvecs[None, :, :], recip_box)
 
         # Squared length of vectors M x K
-        k_squared = torch.sum(kvecs**2, dim=2)
+        k_norms = torch.norm(kvecs, dim=2)
 
         # 2) Gaussian part of ewald sum
         q_gauss = torch.exp(-0.25 * k_squared / self.alpha)  # M x K
@@ -292,15 +437,7 @@ class IonicPotential(nn.Module):
         # Bring everything together
         y_ewald = self.ke * (y_ewald - self_interaction)
 
-        # slab correction
-        y_slab_correct = (
-            self.ke
-            * ((2 * np.pi) / v_box)
-            * torch.sum(q * positions[:, -1]) ** 2
-        )
-
-        return y_ewald + y_slab_correct
-        # return y_ewald
+        return y_ewald
 
 
 if __name__ == "__main__":

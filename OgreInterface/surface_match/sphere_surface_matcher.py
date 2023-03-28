@@ -1,6 +1,7 @@
 from OgreInterface.score_function.overlap import SphereOverlap
 from OgreInterface.surface_match.base_surface_matcher import BaseSurfaceMatcher
-from OgreInterface.score_function.generate_inputs import generate_dict_torch
+
+# from OgreInterface.score_function.generate_inputs import generate_dict_torch
 from OgreInterface.surfaces import Interface
 from ase.data import atomic_numbers
 from typing import Dict, Optional, List

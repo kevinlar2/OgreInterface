@@ -1,5 +1,6 @@
 from OgreInterface.score_function.lj import LJ
-from OgreInterface.score_function.generate_inputs import generate_dict_torch
+
+# from OgreInterface.score_function.generate_inputs import generate_dict_torch
 from OgreInterface.surfaces import Interface
 from OgreInterface.surface_match.base_surface_matcher import BaseSurfaceMatcher
 from pymatgen.analysis.local_env import CrystalNN

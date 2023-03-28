@@ -27,7 +27,6 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
             grid_density=grid_density,
         )
         self.cutoff, self.alpha, self.k_max = self._get_ewald_parameters()
-        self.cutoff = 10.0
         self.k_max = 2
         self.charge_dict = self._get_charges()
         self.r0_dict = self._get_r0s(
@@ -49,38 +48,6 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
 
         self.interface.shift_film_inplane(
             x_shift=opt_shift[0], y_shift=opt_shift[1], fractional=True
-        )
-
-    def bo_function(self, a, b, z):
-        x, y = self.get_cart_xy_shifts(a, b)
-        z_shift = z - self.d_interface
-        shift = np.array([a, b, z_shift])
-        force = self._calculate_lj(inputs=self.inputs, shift=shift)
-
-        return -force
-
-    def optimize(self, z_bounds, max_iters):
-        a_grid, b_grid, z_grid = np.meshgrid(
-            np.linspace(0, 1, 5),
-            np.linspace(0, 1, 5),
-            np.linspace(z_bounds[0], z_bounds[1], 5),
-        )
-        probe_points = np.c_[a_grid.ravel(), b_grid.ravel(), z_grid.ravel()]
-
-        interface_atoms = self.interface.get_interface(
-            orthogonal=True, return_atoms=True
-        )
-
-        # TODO make the inputs better so I can pass in a shift
-        # self.inputs = self._generate_inputs(
-        #     atoms=interface_atoms, shifts=batch_shift, interface=True
-        # )
-
-        self._optimizer(
-            func=self.bo_function,
-            z_bounds=z_bounds,
-            max_iters=max_iters,
-            probe_points=probe_points,
         )
 
     def _get_ns_dict(self):
@@ -111,10 +78,10 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
             # q_i = self.charge_dict[chemical_symbols[i]]
             # q_j = self.charge_dict[chemical_symbols[j]]
 
-            n_dict[(i, j)] = (n_vals[i] + n_vals[j]) / 2
-            n_dict[(j, i)] = (n_vals[i] + n_vals[j]) / 2
-            # n_dict[(i, j)] = n
-            # n_dict[(j, i)] = n
+            # n_dict[(i, j)] = (n_vals[i] + n_vals[j]) / 2
+            # n_dict[(j, i)] = (n_vals[i] + n_vals[j]) / 2
+            n_dict[(i, j)] = n
+            n_dict[(j, i)] = n
 
             # if q_i * q_j < 0:
             # else:
@@ -766,13 +733,6 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
         fig, axs = plt.subplots(figsize=(4 * 3, 3), dpi=dpi, ncols=3)
 
         print(interfacial_distances[np.argmin(interface_energy)])
-        np.savez(
-            "3d_ewald_energies.npz",
-            total=interface_energy,
-            born=born,
-            coulomb=coulomb,
-            dists=interfacial_distances,
-        )
 
         axs[0].plot(
             interfacial_distances,

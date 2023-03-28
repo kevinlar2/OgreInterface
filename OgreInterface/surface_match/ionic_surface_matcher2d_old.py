@@ -1,6 +1,6 @@
 from OgreInterface.score_function.ewald import EnergyEwald
 from OgreInterface.score_function.born import EnergyBorn
-from OgreInterface.score_function.ionic import IonicPotential
+from OgreInterface.score_function.ionic2d_old import IonicPotential2D
 
 # from OgreInterface.score_function.generate_inputs import generate_dict_torch
 from OgreInterface.surfaces import Interface
@@ -16,7 +16,7 @@ from scipy.interpolate import RectBivariateSpline
 from itertools import groupby, combinations_with_replacement, product
 
 
-class IonicSurfaceMatcher(BaseSurfaceMatcher):
+class IonicSurfaceMatcher2D(BaseSurfaceMatcher):
     def __init__(
         self,
         interface: Interface,
@@ -26,9 +26,15 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
             interface=interface,
             grid_density=grid_density,
         )
-        self.cutoff, self.alpha, self.k_max = self._get_ewald_parameters()
-        self.cutoff = 10.0
-        self.k_max = 2
+        (
+            self.cutoff,
+            self.alpha,
+            self.k_max,
+            self.r_max,
+        ) = self._get_ewald_parameters()
+        # self.cutoff = 10.0
+        # self.r_max = 2
+        # self.k_max = 10
         self.charge_dict = self._get_charges()
         self.r0_dict = self._get_r0s(
             sub=self.interface.substrate.bulk_structure,
@@ -51,38 +57,6 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
             x_shift=opt_shift[0], y_shift=opt_shift[1], fractional=True
         )
 
-    def bo_function(self, a, b, z):
-        x, y = self.get_cart_xy_shifts(a, b)
-        z_shift = z - self.d_interface
-        shift = np.array([a, b, z_shift])
-        force = self._calculate_lj(inputs=self.inputs, shift=shift)
-
-        return -force
-
-    def optimize(self, z_bounds, max_iters):
-        a_grid, b_grid, z_grid = np.meshgrid(
-            np.linspace(0, 1, 5),
-            np.linspace(0, 1, 5),
-            np.linspace(z_bounds[0], z_bounds[1], 5),
-        )
-        probe_points = np.c_[a_grid.ravel(), b_grid.ravel(), z_grid.ravel()]
-
-        interface_atoms = self.interface.get_interface(
-            orthogonal=True, return_atoms=True
-        )
-
-        # TODO make the inputs better so I can pass in a shift
-        # self.inputs = self._generate_inputs(
-        #     atoms=interface_atoms, shifts=batch_shift, interface=True
-        # )
-
-        self._optimizer(
-            func=self.bo_function,
-            z_bounds=z_bounds,
-            max_iters=max_iters,
-            probe_points=probe_points,
-        )
-
     def _get_ns_dict(self):
         ion_config_to_n_map = {
             "[He]": 5,
@@ -101,7 +75,6 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
             n_vals[z] = n_val
 
         combos = combinations_with_replacement(Zs, 2)
-        n = 12.0
 
         n_dict = {}
         for combo in combos:
@@ -113,8 +86,6 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
 
             n_dict[(i, j)] = (n_vals[i] + n_vals[j]) / 2
             n_dict[(j, i)] = (n_vals[i] + n_vals[j]) / 2
-            # n_dict[(i, j)] = n
-            # n_dict[(j, i)] = n
 
             # if q_i * q_j < 0:
             # else:
@@ -301,19 +272,22 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
         return interface_neighbor_dict
 
     def _get_ewald_parameters(self):
+        struc = self.interface._orthogonal_structure
+        max_len = max(struc.lattice.a, struc.lattice.b)
         struc_vol = self.interface._structure_volume
-        accf = np.sqrt(np.log(10**4))
+        accf = np.sqrt(np.log(10**12))
+        struc_len = len(self.interface._orthogonal_structure)
         w = 1 / 2**0.5
-        alpha = np.pi * (
-            len(self.interface._orthogonal_structure) * w / (struc_vol**2)
-        ) ** (1 / 3)
+        alpha = np.sqrt(np.pi * (struc_len * w / (struc_vol**2)) ** (1 / 3))
         cutoff = accf / np.sqrt(alpha)
-        k_max = 2 * np.sqrt(alpha) * accf
-        print(alpha)
-        print(cutoff)
-        print(k_max)
+        r_max = int(np.ceil(cutoff / max_len))
+        k_max = int(np.ceil(2 * alpha * accf))
+        print("alpha =", alpha)
+        print("cutoff =", cutoff)
+        print("r_max", r_max)
+        print("k_max", k_max)
 
-        return cutoff, alpha, k_max
+        return cutoff, alpha, k_max, r_max
 
     def _get_shifted_atoms(self, shifts: np.ndarray) -> List[Atoms]:
         atoms = []
@@ -359,8 +333,11 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
         return inputs
 
     def _calculate(self, inputs, z_shift=False):
-        ionic_potential = IonicPotential(
-            alpha=self.alpha, k_max=self.k_max, cutoff=self.cutoff
+        ionic_potential = IonicPotential2D(
+            alpha=self.alpha,
+            k_max=self.k_max,
+            r_max=self.r_max,
+            cutoff=self.cutoff,
         )
         outputs = ionic_potential.forward(
             inputs=inputs,
@@ -751,23 +728,33 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
             self.interface._orthogonal_structure.site_properties["is_film"],
         )
 
-        inputs = self._generate_inputs(
-            atoms=interface_atoms, shifts=shifts, interface=True
-        )
+        interface_energy = []
+        coulomb = []
+        born = []
+        for shift in shifts:
+            inputs = self._generate_inputs(
+                atoms=interface_atoms, shifts=[shift], interface=True
+            )
 
-        (
-            interface_energy,
-            coulomb,
-            born,
-            interface_film_force_norms,
-            interface_film_force_norm_grads,
-        ) = self._calculate(inputs)
+            (
+                _interface_energy,
+                _coulomb,
+                _born,
+                _,
+                _,
+            ) = self._calculate(inputs)
+            interface_energy.append(_interface_energy)
+            coulomb.append(_coulomb)
+            born.append(_born)
+
+        interface_energy = np.array(interface_energy)
+        coulomb = np.array(coulomb)
+        born = np.array(born)
 
         fig, axs = plt.subplots(figsize=(4 * 3, 3), dpi=dpi, ncols=3)
 
-        print(interfacial_distances[np.argmin(interface_energy)])
         np.savez(
-            "3d_ewald_energies.npz",
+            "2d_ewald_energies.npz",
             total=interface_energy,
             born=born,
             coulomb=coulomb,

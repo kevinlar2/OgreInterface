@@ -25,6 +25,7 @@ from ase.data import chemical_symbols
 import itertools
 import time
 from pyswarms.single.global_best import GlobalBestPSO
+import os
 
 
 class BaseSurfaceMatcher:
@@ -82,98 +83,6 @@ class BaseSurfaceMatcher:
 
         return cost, pos
 
-    def _optimizer(self, func, z_bounds, max_iters, probe_points):
-        from bayes_opt import UtilityFunction
-        from bayes_opt.event import Events
-
-        pbounds = {"a": (0, 1), "b": (0, 1), "z": z_bounds}
-        bounds_transformer = SequentialDomainReductionTransformer(
-            minimum_window=0.5
-        )
-        optimizer = BayesianOptimization(
-            f=func,
-            pbounds=pbounds,
-            verbose=1,  # verbose = 1 prints only when a maximum is observed, verbose = 0 is silent
-            random_state=1,
-            allow_duplicate_points=False,
-            bounds_transformer=bounds_transformer,
-        )
-        # utility = UtilityFunction(kind="ucb", kappa=2.5, xi=0.0)
-
-        for point in probe_points:
-            optimizer.probe(
-                params={"a": point[0], "b": point[1], "z": point[2]},
-                lazy=True,
-            )
-
-        optimizer._prime_subscriptions()
-        optimizer.dispatch(Events.OPTIMIZATION_START)
-        optimizer._prime_queue(0)
-
-        util = UtilityFunction(
-            kind="ucb",
-            kappa=2.576,
-            xi=0.0,
-            kappa_decay=1,
-            kappa_decay_delay=0,
-        )
-
-        iteration = 0
-        while not optimizer._queue.empty or iteration < max_iters:
-            try:
-                x_probe = next(optimizer._queue)
-            except StopIteration:
-                util.update_params()
-                x_probe = optimizer.suggest(util)
-                iteration += 1
-            optimizer.probe(x_probe, lazy=False)
-
-            if optimizer._bounds_transformer and iteration > 0:
-                optimizer.set_bounds(
-                    optimizer._bounds_transformer.transform(optimizer._space)
-                )
-
-        optimizer.dispatch(Events.OPTIMIZATION_END)
-
-        # optimizer.maximize(
-        #     init_points=0,
-        #     n_iter=1000,
-        # )
-
-    def _optimizer_old(self, func, z_bounds, max_iters, probe_points):
-        pbounds = {"a": (0, 1), "b": (0, 1), "z": z_bounds}
-        bounds_transformer = SequentialDomainReductionTransformer(
-            minimum_window=0.5
-        )
-        optimizer = BayesianOptimization(
-            f=func,
-            pbounds=pbounds,
-            verbose=1,  # verbose = 1 prints only when a maximum is observed, verbose = 0 is silent
-            random_state=1,
-            allow_duplicate_points=False,
-            bounds_transformer=bounds_transformer,
-        )
-
-        for point in probe_points:
-            optimizer.probe(
-                params={"a": point[0], "b": point[1], "z": point[2]},
-                lazy=True,
-            )
-
-        # logger = JSONLogger(path="./logs.json")
-        # optimizer.subscribe(Events.OPTIMIZATION_STEP, logger)
-
-        optimizer.maximize(
-            init_points=0,
-            n_iter=1000,
-        )
-
-        max_vals = optimizer.max
-        max_score = max_vals["target"]
-        max_shift = np.array(list(max_vals["params"].values()))
-
-        return -max_score, max_shift
-
     def _get_gd_init_points(self):
         sub_struc = self.interface.substrate.oriented_bulk_structure.copy()
         is_top = sub_struc.site_properties["is_top"]
@@ -216,22 +125,11 @@ class BaseSurfaceMatcher:
         Poscar(sub_struc).write_file("POSCAR_sub_top")
         Poscar(film_struc).write_file("POSCAR_film_bot")
 
-        # sub_sg = SpacegroupAnalyzer(sub_struc)
-        # film_sg = SpacegroupAnalyzer(film_struc)
-
-        # sub_dataset = sub_sg.get_symmetry_dataset()
-        # film_dataset = film_sg.get_symmetry_dataset()
-        # sub_equivs = sub_dataset["equivalent_atoms"]
-        # film_equivs = film_dataset["equivalent_atoms"]
-
         sub_equivs = sub_struc.site_properties["bulk_equivalent"]
         film_equivs = film_struc.site_properties["bulk_equivalent"]
 
         _, sub_unique = np.unique(sub_equivs, return_index=True)
         _, film_unique = np.unique(film_equivs, return_index=True)
-
-        print(sub_unique)
-        print(film_unique)
 
         film_cart_coords = film_struc.cart_coords[:, :2]
         sub_cart_coords = sub_struc.cart_coords[:, :2]
@@ -323,6 +221,27 @@ class BaseSurfaceMatcher:
         # )
 
         return prim_cart_shifts.reshape(X.shape + (-1,))
+
+    # TODO create a function that can write out the shifted structures for DFT calculations and also read in the structure and plot them nicely
+    def get_structures_for_DFT(self, output_folder="PES"):
+        # TODO might have to keep track of shifts
+        shifts = self.shifts.reshape(-1, 3).dot(self.inv_matrix)
+        shifts = np.mod(shifts, 1)
+
+        for i, shift in enumerate(shifts):
+            self.interface.shift_film_inplane(
+                x_shift=shift[0],
+                y_shift=shift[1],
+                fractional=True,
+            )
+            self.interface.write_file(
+                outupt=os.path.join(output_folder, f"POSCAR_{i:04d}")
+            )
+            self.interface.shift_film_inplane(
+                x_shift=-shift[0],
+                y_shift=-shift[1],
+                fractional=True,
+            )
 
     def get_cart_xy_shifts(self, ab):
         frac_abc = np.c_[ab, np.zeros(len(ab))]
@@ -663,3 +582,78 @@ class BaseSurfaceMatcher:
         plt.close(fig)
 
         return max_Z
+
+    def run_z_shift(
+        self,
+        interfacial_distances,
+        figsize=(4, 3),
+        fontsize: int = 12,
+        output: str = "z_shift.png",
+        dpi: int = 400,
+    ):
+        zeros = np.zeros(len(interfacial_distances))
+        shifts = np.c_[zeros, zeros, interfacial_distances - self.d_interface]
+
+        interface_energy = []
+        coulomb = []
+        born = []
+        for shift in shifts:
+            inputs = create_batch(self.iface_inputs, batch_size=1)
+
+            (
+                _interface_energy,
+                _coulomb,
+                _born,
+                _,
+                _,
+            ) = self._calculate(inputs, shifts=shift.reshape(1, -1))
+            interface_energy.append(_interface_energy)
+            coulomb.append(_coulomb)
+            born.append(_born)
+
+        interface_energy = (
+            -(
+                (self.film_energy + self.sub_energy)
+                - np.array(interface_energy)
+            )
+            / self.interface.area
+        )
+
+        fig, axs = plt.subplots(
+            figsize=figsize,
+            dpi=dpi,
+        )
+
+        cs = CubicSpline(interfacial_distances, interface_energy)
+        new_x = np.linspace(
+            interfacial_distances.min(),
+            interfacial_distances.max(),
+            201,
+        )
+        new_y = cs(new_x)
+
+        opt_d = new_x[np.argmin(new_y)]
+        opt_E = np.min(new_y)
+        self.opt_d_interface = opt_d
+
+        axs.plot(
+            new_x,
+            new_y,
+            color="black",
+            linewidth=1,
+        )
+        axs.scatter(
+            [opt_d],
+            [opt_E],
+            color="black",
+            marker="x",
+        )
+        axs.tick_params(labelsize=fontsize)
+        axs.set_ylabel("$-E_{adh}$ $(eV/\\AA$)$", fontsize=fontsize)
+        axs.set_xlabel("Interfacial Distance ($\\AA$)", fontsize=fontsize)
+
+        fig.tight_layout()
+        fig.savefig(output, bbox_inches="tight")
+        plt.close(fig)
+
+        return opt_E

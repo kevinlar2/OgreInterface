@@ -592,7 +592,7 @@ class Surface:
                             str(center_atom_equiv_index),
                             str(broken_atom_equiv_index),
                             "".join([image_map[i] for i in broken_image]),
-                            str(i),
+                            str(i),  # top or bottom bottom=0, top=1
                         ]
                     )
 
@@ -631,14 +631,16 @@ class Surface:
 
     def _passivate(self, struc, index, bond, bond_str, charge) -> None:
         position = struc[index].coords + bond
-        position = struc[index].coords + bond
+        frac_coords = np.mod(
+            np.round(struc.lattice.get_fractional_coords(position), 6), 1
+        )
         props = {k: -1 for k in struc[index].properties}
-        # props["hydrogen_str"] = f"{index}," + bond_str
+        props["hydrogen_str"] = f"{index}," + bond_str
 
         struc.append(
             Species("H", oxidation_state=charge),
-            coords=position,
-            coords_are_cartesian=True,
+            coords=frac_coords,
+            coords_are_cartesian=False,
             properties=props,
         )
 
@@ -649,26 +651,31 @@ class Surface:
         ],
         relaxed_structure_file: str,
     ) -> Dict[str, Dict[int, Dict[str, Union[np.ndarray, float, str]]]]:
-
+        # Load in the relaxed structure file to get the description string
         with open(relaxed_structure_file, "r") as f:
             poscar_str = f.read().split("\n")
 
+        # Get the description string at the top of the POSCAR/CONTCAR
         desc_str = poscar_str[0].split("|")
 
+        # Extract the number of layers
         layers = int(desc_str[0].split("=")[1])
+
+        # Extract the termination index
         termination_index = int(desc_str[1].split("=")[1])
 
+        # If the termination index is the same the proceed with passivation
         if termination_index == self.termination_index:
-            poscar = Poscar.from_string(
-                "\n".join(poscar_str), read_velocities=False
-            )
+            # Extract the structure
+            structure = Structure.from_file(relaxed_structure_file)
 
-            structure = poscar.structure
-            hydrogen_index = np.array(structure.atomic_numbers) == 1
-
+            # Make a copy of the oriented bulk structure
             obs = self.oriented_bulk_structure.copy()
+
+            # Add oxidation states for the passivation
             obs.add_oxidation_state_by_guess()
 
+            # If the OBS is left handed make it right handed like the pymatgen Poscar class does
             is_negative = np.linalg.det(obs.lattice.matrix) < 0
 
             if is_negative:
@@ -678,29 +685,81 @@ class Surface:
                     coords=structure.frac_coords,
                 )
 
-            hydrogen_coords = structure.cart_coords[hydrogen_index]
-
+            # Reproduce the passivated structure
+            vacuum_scale = 4
             layer_struc = utils.get_layer_supercelll(
-                structure=obs, layers=layers, vacuum_scale=2
+                structure=obs, layers=layers, vacuum_scale=vacuum_scale
             )
+
+            center_shift = 0.5 * (vacuum_scale / (vacuum_scale + layers))
+            layer_struc.translate_sites(
+                indices=range(len(layer_struc)),
+                vector=[0, 0, center_shift],
+                frac_coords=True,
+                to_unit_cell=True,
+            )
+
             layer_struc.sort()
 
-            surface_atom_info = []
+            # Add hydrogen_str propery. This avoids the PyMatGen warning
+            layer_struc.add_site_property(
+                "hydrogen_str", [-1] * len(layer_struc)
+            )
 
-            for side, side_dict in bond_dict.items():
-                is_top = True if side == "top" else False
-                for bulk_equiv, bonds in side_dict.items():
-                    index = self._get_passivation_atom_index(
+            # Add a site propery indexing each atom before the passivation is applied
+            layer_struc.add_site_property(
+                "pre_passivation_index", list(range(len(layer_struc)))
+            )
+
+            # Get top and bottom species to determine if the layer_struc should be
+            # passivated on the top or bottom of the structure
+            atomic_numbers = structure.atomic_numbers
+            top_species = atomic_numbers[
+                np.argmax(structure.frac_coords[:, -1])
+            ]
+            bot_species = atomic_numbers[
+                np.argmin(structure.frac_coords[:, -1])
+            ]
+
+            # If the top species is a Hydrogen then passivate the top
+            if top_species == 1:
+                for bulk_equiv, bonds in bond_dict["top"].items():
+                    ortho_index = self._get_passivation_atom_index(
+                        struc=layer_struc, bulk_equivalent=bulk_equiv, top=True
+                    )
+
+                    for bond, bond_str in zip(
+                        bonds["bonds"], bonds["bond_strings"]
+                    ):
+                        self._passivate(
+                            layer_struc,
+                            ortho_index,
+                            bond,
+                            bond_str,
+                            bonds["charge"],
+                        )
+
+            # If the bottom species is a Hydrogen then passivate the bottom
+            if bot_species == 1:
+                for bulk_equiv, bonds in bond_dict["bottom"].items():
+                    ortho_index = self._get_passivation_atom_index(
                         struc=layer_struc,
                         bulk_equivalent=bulk_equiv,
-                        top=is_top,
+                        top=False,
                     )
-                    surface_atom_info.append((index, side, bulk_equiv))
 
-            surface_atoms, _, _ = zip(*surface_atom_info)
-            surface_atom_coords = structure.cart_coords[list(surface_atoms)]
+                    for bond, bond_str in zip(
+                        bonds["bonds"], bonds["bond_strings"]
+                    ):
+                        self._passivate(
+                            layer_struc,
+                            ortho_index,
+                            bond,
+                            bond_str,
+                            bonds["charge"],
+                        )
 
-            new_bonds = {i: [] for i in surface_atom_info}
+            layer_struc.sort()
 
             shifts = np.array(
                 [
@@ -716,22 +775,79 @@ class Surface:
                 ]
             ).dot(structure.lattice.matrix)
 
-            all_surface_atom_coords = (
-                shifts[:, None] + surface_atom_coords[None, :]
-            )
+            # Get the index if the hydrogens
+            hydrogen_index = np.where(np.array(structure.atomic_numbers) == 1)[
+                0
+            ]
 
-            for hydrogen in hydrogen_coords:
-                all_dists = np.linalg.norm(
-                    hydrogen[None, None, :] - all_surface_atom_coords, axis=2
+            # Get the bond strings from the passivated structure
+            bond_strs = layer_struc.site_properties["hydrogen_str"]
+
+            # Get the index of sites before passivation
+            pre_pas_inds = layer_struc.site_properties["pre_passivation_index"]
+
+            # The bond center of the hydrogens are the first element of the bond string
+            pre_pas_bond_centers = [
+                int(bond_strs[i].split(",")[0]) for i in hydrogen_index
+            ]
+
+            # Map the pre-passivation bond index to the actual index in the passivated structure
+            post_pas_bond_centers = [
+                pre_pas_inds.index(i) for i in pre_pas_bond_centers
+            ]
+
+            # Get the coordinates of the bond centers in the actual relaxed structure
+            # and the recreated ideal passivated structure
+            relaxed_bond_centers = structure.cart_coords[post_pas_bond_centers]
+            ideal_bond_centers = layer_struc.cart_coords[post_pas_bond_centers]
+
+            # Get the coordinates of the hydrogens in the actual relaxed structure
+            # and the recreated ideal passivated structure
+            relaxed_hydrogens = structure.cart_coords[hydrogen_index]
+            ideal_hydrogens = layer_struc.cart_coords[hydrogen_index]
+
+            # Substract the bond center positions from the hydrogen positions to get only the bond vector
+            relaxed_hydrogens -= relaxed_bond_centers
+            ideal_hydrogens -= ideal_bond_centers
+
+            # Mapping to accessing the bond_dict
+            top_bot_dict = {1: "top", 0: "bottom"}
+
+            # Lopp through the matching hydrogens and indices to get the difference between the bond vectors
+            for H_ind, H_ideal, H_relaxed in zip(
+                hydrogen_index, ideal_hydrogens, relaxed_hydrogens
+            ):
+                # Find all periodic shifts of the relaxed hydrogens
+                relaxed_shifts = H_relaxed + shifts
+
+                # Find the difference between the ideal hydrogens and all 3x3 periodic images of the relaxed hydrogen
+                diffs = relaxed_shifts - H_ideal
+
+                # Find the length of the bond difference vectors
+                norm_diffs = np.linalg.norm(diffs, axis=1)
+
+                # Find the difference vector between the ideal hydrogen and the closest relaxed hydrogen image
+                bond_diff = diffs[np.argmin(norm_diffs)]
+
+                # Get the bond string of the hydrogen
+                bond_str = bond_strs[H_ind].split(",")
+
+                # Extract the side from the bond string (the last element)
+                side = top_bot_dict[int(bond_str[-1])]
+
+                # Get the center index
+                center_ind = int(bond_str[1])
+
+                # Extract the bond info from the bond_dict
+                bond_info = bond_dict[side][center_ind]
+
+                # Find which bond this hydrogen corresponds to
+                bond_ind = bond_info["bond_strings"].index(
+                    ",".join(bond_str[1:])
                 )
-                center_ind = np.where(np.isclose(all_dists, np.min(all_dists)))
-                center_atom_ind = center_ind[1][0]
-                bond = hydrogen - all_surface_atom_coords[center_ind]
-                new_bonds[surface_atom_info[center_atom_ind]].append(bond)
 
-            for k, v in new_bonds.items():
-                if k[1] in bond_dict:
-                    bond_dict[k[1]][k[2]]["bonds"] = np.vstack(v)
+                # Add the bond diff to the bond to get the relaxed position
+                bond_dict[side][center_ind]["bonds"][bond_ind] += bond_diff
 
             return bond_dict
         else:
@@ -782,6 +898,10 @@ class Surface:
 
         ortho_slab = self._orthogonal_slab_structure.copy()
         non_ortho_slab = self._non_orthogonal_slab_structure.copy()
+        ortho_slab.add_site_property("hydrogen_str", [-1] * len(ortho_slab))
+        non_ortho_slab.add_site_property(
+            "hydrogen_str", [-1] * len(non_ortho_slab)
+        )
 
         if top:
             for bulk_equiv, bonds in bond_dict["top"].items():
@@ -839,6 +959,9 @@ class Surface:
 
         ortho_slab.sort()
         non_ortho_slab.sort()
+
+        ortho_slab.remove_site_property("hydrogen_str")
+        non_ortho_slab.remove_site_property("hydrogen_str")
 
         self._passivated = True
         self._orthogonal_slab_structure = ortho_slab

@@ -653,6 +653,15 @@ class SurfaceGenerator(Sequence):
             to_unit_cell=True,
         )
 
+        slab_base = Structure(
+            lattice=self.oriented_bulk_structure.lattice,
+            species=self.oriented_bulk_structure.species,
+            coords=np.round(slab_base.frac_coords, 6),
+            to_unit_cell=True,
+            coords_are_cartesian=False,
+            site_properties=self.oriented_bulk_structure.site_properties,
+        )
+
         bottom_layer_dist = np.abs(bot_z - (top_z - 1)) * init_matrix[-1, -1]
         top_layer_dist = np.abs((bot_z + 1) - top_z) * init_matrix[-1, -1]
 
@@ -697,16 +706,24 @@ class SurfaceGenerator(Sequence):
             frac_coords=True,
             to_unit_cell=True,
         )
+        top_z = non_orthogonal_slab.frac_coords[:, -1].max()
+        top_cart = non_orthogonal_slab.lattice.matrix[-1] * top_z
+        top_cart[-1] = 0.0
+        orthogonal_slab.translate_sites(
+            indices=range(len(orthogonal_slab)),
+            vector=-top_cart,
+            frac_coords=False,
+            to_unit_cell=True,
+        )
 
-        # shift_str = f"{shift:.3f}".replace(".", "")
-        # Poscar(non_orthogonal_slab).write_file(f"POSCAR_slab_com_{shift_str}")
-
-        # if "molecules" in slab_base.site_properties:
-        #     slab_base = utils.add_molecules(slab_base)
-        #     orthogonal_slab = utils.add_molecules(orthogonal_slab)
-        #     non_orthogonal_slab = utils.add_molecules(non_orthogonal_slab)
-
-        # Poscar(non_orthogonal_slab).write_file(f"POSCAR_slab_mol_{shift_str}")
+        orthogonal_slab = Structure(
+            lattice=orthogonal_slab.lattice,
+            species=orthogonal_slab.species,
+            coords=np.round(orthogonal_slab.frac_coords, 6),
+            to_unit_cell=True,
+            coords_are_cartesian=False,
+            site_properties=orthogonal_slab.site_properties,
+        )
 
         return (
             slab_base,

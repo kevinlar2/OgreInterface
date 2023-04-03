@@ -310,22 +310,28 @@ def reduce_vectors_zur_and_mcgill(a, b):
     reduced = False
 
     while not reduced:
-        if np.dot(vecs[0], vecs[1]) < 0:
+        dot = np.round(np.dot(vecs[0], vecs[1]), 6)
+        a_norm = np.round(np.linalg.norm(vecs[0]), 6)
+        b_norm = np.round(np.linalg.norm(vecs[1]), 6)
+        b_plus_a_norm = np.round(np.linalg.norm(vecs[1] + vecs[0]), 6)
+        b_minus_a_norm = np.round(np.linalg.norm(vecs[1] - vecs[0]), 6)
+
+        if dot < 0:
             vecs[1] *= -1
             mat[1] *= -1
             continue
 
-        if np.linalg.norm(vecs[0]) > np.linalg.norm(vecs[1]):
+        if a_norm > b_norm:
             vecs = vecs[[1, 0]]
             mat = mat[[1, 0, 2]]
             continue
 
-        if np.linalg.norm(vecs[1]) > np.linalg.norm(vecs[1] + vecs[0]):
+        if b_norm > b_plus_a_norm:
             vecs[1] = vecs[1] + vecs[0]
             mat[1] = mat[1] + mat[0]
             continue
 
-        if np.linalg.norm(vecs[1]) > np.linalg.norm(vecs[1] - vecs[0]):
+        if b_norm > b_minus_a_norm:
             vecs[1] = vecs[1] - vecs[0]
             mat[1] = mat[1] - mat[0]
             reduced = True

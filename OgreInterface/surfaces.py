@@ -1075,6 +1075,20 @@ class Interface:
         self._a_shift = 0.0
         self._b_shift = 0.0
 
+    @property
+    def transformation_matrix(self):
+        """
+        Transformation matrix to convert the primitive bulk lattice vectors of the substrate material to the
+        interface supercell lattice vectors (including the vacuum region)
+
+        Examples:
+        >>> interface.transformation_matrix
+        >>> [[ -2   2   0]
+        ...  [  0   0   2]
+        ...  [ 15  15 -15]]
+        """
+        return self._M_matrix.astype(int)
+
     def get_interface(
         self,
         orthogonal: bool = True,

@@ -176,6 +176,27 @@ class Surface:
         else:
             return return_struc
 
+    def get_layer_indices(self, layer: int) -> np.ndarray:
+        """
+        This function is used to extract the atom-indicies of specific layers of the surface.
+
+        Examples:
+        ```
+        >>> surface.get_layer_indices(layer=0)
+        >>> [0 1 2 3]
+        ```
+
+        Args:
+            layer: The layer number of the surface which you would like to get atom-indices for.
+
+        Returns:
+            A numpy array of integer indices corresponding to the atom index of the surface structure
+        """
+        surface = self._non_orthogonal_slab_structure
+        site_props = surface.site_properties
+        layer_index = np.array(site_props["layer_index"])
+        return np.where(layer_index == layer)[0]
+
     @property
     def slab_transformation_matrix(self) -> np.ndarray:
         """

@@ -181,10 +181,8 @@ class Surface:
         This function is used to extract the atom-indicies of specific layers of the surface.
 
         Examples:
-        ```
-        >>> surface.get_layer_indices(layer=0)
-        >>> [0 1 2 3]
-        ```
+            >>> surface.get_layer_indices(layer=0)
+            >>> [0 1 2 3]
 
         Args:
             layer: The layer number of the surface which you would like to get atom-indices for.
@@ -204,10 +202,10 @@ class Surface:
         slab supercell lattice vectors (including the vacuum region)
 
         Examples:
-        >>> surface.slab_transformation_matrix
-        >>> [[ -1   1   0]
-        ...  [  0   0   1]
-        ...  [ 15  15 -15]]
+            >>> surface.slab_transformation_matrix
+            >>> [[ -1   1   0]
+            ...  [  0   0   1]
+            ...  [ 15  15 -15]]
         """
         layer_mat = np.eye(3)
         layer_mat[-1, -1] = self.layers + np.round(
@@ -223,10 +221,10 @@ class Surface:
         oriented unit cell of the slab structure
 
         Examples:
-        >>> surface.bulk_transformation_matrix
-        >>> [[ -1   1   0]
-        ...  [  0   0   1]
-        ...  [  1   1  -1]]
+            >>> surface.bulk_transformation_matrix
+            >>> [[ -1   1   0]
+            ...  [  0   0   1]
+            ...  [  1   1  -1]]
         """
         return self._transformation_matrix.astype(int)
 
@@ -1082,10 +1080,10 @@ class Interface:
         interface supercell lattice vectors (including the vacuum region)
 
         Examples:
-        >>> interface.transformation_matrix
-        >>> [[ -2   2   0]
-        ...  [  0   0   2]
-        ...  [ 15  15 -15]]
+            >>> interface.transformation_matrix
+            >>> [[ -2   2   0]
+            ...  [  0   0   2]
+            ...  [ 15  15 -15]]
         """
         return self._M_matrix.astype(int)
 
@@ -1176,10 +1174,9 @@ class Interface:
         This function is used to extract the atom-indicies of specific layers of the substrate part of the interface.
 
         Examples:
-        ```
-        >>> interface.get_substrate_layer_indices(layer_from_interface=0)
-        >>> [234 235 236 237 254 255 256 257]
-        ```
+            >>> interface.get_substrate_layer_indices(layer_from_interface=0)
+            >>> [234 235 236 237 254 255 256 257]
+
 
         Args:
             layer_from_interface: The layer number of the substrate which you would like to get
@@ -1204,10 +1201,8 @@ class Interface:
         This function is used to extract the atom-indicies of specific layers of the film part of the interface.
 
         Examples:
-        ```
-        >>> interface.get_substrate_layer_indices(layer_from_interface=0)
-        >>> [0 1 2 3 4 5 6 7 8 9 10 11 12]
-        ```
+            >>> interface.get_substrate_layer_indices(layer_from_interface=0)
+            >>> [0 1 2 3 4 5 6 7 8 9 10 11 12]
 
         Args:
             layer_from_interface: The layer number of the film which you would like to get atom-indices for.
@@ -1232,9 +1227,7 @@ class Interface:
         This function can be used to replace the species at a given site in the interface structure
 
         Examples:
-        ```
-        >>> interface.replace_species(site_index=42, species_mapping={"In": "Zn", "As": "Te"})
-        ```
+            >>> interface.replace_species(site_index=42, species_mapping={"In": "Zn", "As": "Te"})
 
         Args:
             site_index: Index of the site to be replaced

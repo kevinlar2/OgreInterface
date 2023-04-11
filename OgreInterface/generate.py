@@ -13,7 +13,7 @@ from pymatgen.io.ase import AseAtomsAdaptor
 from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
 from pymatgen.core.operations import SymmOp
 from pymatgen.analysis.graphs import StructureGraph
-from pymatgen.analysis.local_env import JmolNN
+from pymatgen.analysis.local_env import JmolNN, CrystalNN
 import networkx as nx
 import numpy as np
 
@@ -22,7 +22,7 @@ from tqdm import tqdm
 import numpy as np
 import math
 from copy import deepcopy
-from typing import Union, List, TypeVar
+from typing import Union, List, TypeVar, Tuple, Dict
 from itertools import combinations, product, groupby
 from ase import Atoms
 from ase.data import chemical_symbols
@@ -605,7 +605,106 @@ class SurfaceGenerator(Sequence):
 
         return shifts
 
-    def _get_slab(self, shift=0, tol: float = 0.1, energy=None):
+    def _get_neighborhood(self, cutoff: float = 5.0) -> None:
+        obs = self.oriented_bulk_structure.copy()
+        obs.add_oxidation_state_by_guess()
+
+        cnn = CrystalNN(search_cutoff=cutoff, cation_anion=True)
+
+        bond_dict = {}
+        for i, site in enumerate(obs):
+            info_dict = cnn.get_nn_info(obs, i)
+            bonds = []
+            for neighbor in info_dict:
+                bond = neighbor["site"].coords - site.coords
+                bonds.append(
+                    {
+                        "from_Z": site.specie.Z,
+                        "to_Z": neighbor["site"].specie.Z,
+                        "bond": bond,
+                    }
+                )
+
+            bond_dict[site.properties["oriented_bulk_equivalent"]] = bonds
+
+        return bond_dict
+
+    def _get_surface_atoms(
+        self,
+        obs: Structure,
+        neighbor_info: Dict[int, List[Dict[str, Union[int, np.ndarray]]]],
+    ):
+        oriented_bulk_equivalents = np.array(list(neighbor_info.keys()))
+        obs_oriented_bulk_equivalent = obs.site_properties[
+            "oriented_bulk_equivalent"
+        ]
+
+        bottom_surf = []
+        top_surf = []
+        bottom_breaks = 0
+        top_breaks = 0
+        for obe in oriented_bulk_equivalents:
+            ind = np.where(obs_oriented_bulk_equivalent == obe)[0][0]
+            center_coord = obs[ind].coords
+            bonds = np.vstack([bond["bond"] for bond in neighbor_info[obe]])
+            bonds += center_coord
+            frac_bonds = bonds.dot(obs.lattice.inv_matrix)
+            images = np.round(frac_bonds - np.mod(frac_bonds, 1)).astype(int)
+
+            bottom_broken_bonds = (images[:, -1] < 0).sum()
+            top_broken_bonds = (images[:, -1] > 0).sum()
+
+            if bottom_broken_bonds > 0:
+                bottom_breaks += bottom_broken_bonds
+                bottom_surf.append(obe)
+
+            if top_broken_bonds > 0:
+                top_breaks += top_broken_bonds
+                top_surf.append(obe)
+
+        is_top = np.isin(obs_oriented_bulk_equivalent, top_surf)
+        is_bot = np.isin(obs_oriented_bulk_equivalent, bottom_surf)
+        obs.add_site_property("is_top", is_top.tolist())
+        obs.add_site_property("is_bottom", is_bot.tolist())
+
+    def _get_surface_atoms_old(
+        self, struc: Structure, cutoff: float = 4.0
+    ) -> None:
+        obs = struc.copy()
+        obs.add_oxidation_state_by_guess()
+
+        cnn = CrystalNN(search_cutoff=cutoff)
+        top_neighborhood = []
+        bottom_neighborhood = []
+        for i in range(len(obs)):
+            info_dict = cnn.get_nn_info(obs, i)
+            top_broken_bonds = 0
+            bottom_broken_bonds = 0
+            for neighbor in info_dict:
+                if neighbor["image"][-1] > 0:
+                    top_broken_bonds += 1
+                if neighbor["image"][-1] < 0:
+                    bottom_broken_bonds += 1
+
+            if top_broken_bonds > 0:
+                top_neighborhood.append(i)
+
+            if bottom_broken_bonds > 0:
+                bottom_neighborhood.append(i)
+
+        # is_surf = np.zeros(len(obs)).astype(bool)
+        is_top = np.zeros(len(obs)).astype(bool)
+        is_bottom = np.zeros(len(obs)).astype(bool)
+
+        # is_surf[top_neighborhood + bottom_neighborhood] = True
+        is_top[top_neighborhood] = True
+        is_bottom[bottom_neighborhood] = True
+
+        # struc.add_site_property("is_surf", is_surf.tolist())
+        struc.add_site_property("is_top", is_top.tolist())
+        struc.add_site_property("is_bottom", is_bottom.tolist())
+
+    def _get_slab(self, neighbor_info, shift=0, tol: float = 0.1, energy=None):
         """
         This method takes in shift value for the c lattice direction and
         generates a slab based on the given shift. You should rarely use this
@@ -629,6 +728,7 @@ class SurfaceGenerator(Sequence):
             frac_coords=True,
             to_unit_cell=True,
         )
+        self._get_surface_atoms(slab_base, neighbor_info)
 
         z_coords = slab_base.frac_coords[:, -1]
         bot_z = z_coords.min()
@@ -734,7 +834,7 @@ class SurfaceGenerator(Sequence):
             vacuum,
         )
 
-    def _generate_slabs(self):
+    def _generate_slabs(self) -> List[Surface]:
         """
         This function is used to generate slab structures with all unique
         surface terminations.
@@ -749,6 +849,8 @@ class SurfaceGenerator(Sequence):
         non_orthogonal_slabs = []
         bottom_layer_dists = []
         top_layer_dists = []
+        neighbor_info = self._get_neighborhood()
+
         if not self.generate_all:
             (
                 shifted_slab_base,
@@ -757,7 +859,10 @@ class SurfaceGenerator(Sequence):
                 bottom_layer_dist,
                 top_layer_dist,
                 actual_vacuum,
-            ) = self._get_slab(shift=possible_shifts[0])
+            ) = self._get_slab(
+                shift=possible_shifts[0],
+                neighbor_info=neighbor_info,
+            )
             orthogonal_slab.sort_index = 0
             non_orthogonal_slab.sort_index = 0
             shifted_slab_bases.append(shifted_slab_base)
@@ -774,7 +879,10 @@ class SurfaceGenerator(Sequence):
                     bottom_layer_dist,
                     top_layer_dist,
                     actual_vacuum,
-                ) = self._get_slab(shift=possible_shift)
+                ) = self._get_slab(
+                    shift=possible_shift,
+                    neighbor_info=neighbor_info,
+                )
                 orthogonal_slab.sort_index = i
                 non_orthogonal_slab.sort_index = i
                 shifted_slab_bases.append(shifted_slab_base)

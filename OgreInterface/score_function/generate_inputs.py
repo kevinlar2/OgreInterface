@@ -1,9 +1,16 @@
 from ase.neighborlist import neighbor_list
 from typing import Dict, List, Optional
 from ase import Atoms
+from pymatgen.core.periodic_table import Element
+from pymatgen.core.structure import Structure
 import torch
 import numpy as np
 from OgreInterface.score_function.neighbors import TorchNeighborList
+from OgreInterface.score_function.interface_neighbors import (
+    TorchInterfaceNeighborList,
+)
+import time
+from copy import deepcopy
 
 
 def _atoms_collate_fn(batch):
@@ -52,54 +59,178 @@ def _atoms_collate_fn(batch):
     return coll_batch
 
 
-def generate_dict_ase(
-    atoms: List[Atoms],
+def create_batch(
+    inputs: Dict,
+    batch_size: int,
+):
+    batch_inputs = {}
+    n_atoms = int(inputs["n_atoms"][0])
+    offsets = torch.arange(0, batch_size, 1)
+    idx_m = offsets.repeat_interleave(n_atoms)
+    batch_inputs["idx_m"] = idx_m
+
+    for k, v in inputs.items():
+        repeat_val = [1] * len(v.shape)
+        repeat_val[0] = batch_size
+        repeat_val = tuple(repeat_val)
+        if "idx" in k:
+            idx_len = len(v)
+            idx_offsets = n_atoms * offsets
+            batch_offsets = idx_offsets.repeat_interleave(idx_len)
+            batch_idx = v.repeat(batch_size)
+            batch_idx += batch_offsets
+            batch_inputs[k] = batch_idx.to(dtype=v.dtype)
+        else:
+            batch_val = v.repeat(repeat_val)
+            batch_inputs[k] = batch_val.to(dtype=v.dtype)
+
+    for k, v in batch_inputs.items():
+        if "float" in str(v.dtype):
+            batch_inputs[k] = v.to(dtype=torch.float32)
+        if "idx" in k:
+            batch_inputs[k] = v.to(dtype=torch.long)
+
+        # print(k, batch_inputs[k].dtype)
+
+    return batch_inputs
+
+
+def generate_input_dict(
+    structure: Structure,
     cutoff: float,
-    charge_dict: Dict[str, float],
-    radius_dict: Dict[str, float],
-    ns_dict: Dict[str, float],
-    z_shift: float = 10.0,
+    interface: bool = False,
 ) -> Dict:
+
+    if interface:
+        tn = TorchInterfaceNeighborList(cutoff=cutoff)
+    else:
+        tn = TorchNeighborList(cutoff=cutoff)
+
+    site_props = structure.site_properties
+
+    is_film = torch.tensor(site_props["is_film"], dtype=torch.long)
+    R = torch.from_numpy(structure.cart_coords)
+    cell = torch.from_numpy(deepcopy(structure.lattice.matrix))
+
+    e_negs = torch.Tensor([s.specie.X for s in structure])
+
+    if interface:
+        pbc = torch.Tensor([True, True, False]).to(dtype=torch.bool)
+    else:
+        pbc = torch.Tensor([True, True, True]).to(dtype=torch.bool)
+
+    input_dict = {
+        "n_atoms": torch.tensor([len(structure)]),
+        "Z": torch.tensor(structure.atomic_numbers, dtype=torch.long),
+        "R": R,
+        "cell": cell,
+        "pbc": pbc,
+        "is_film": is_film,
+        "e_negs": e_negs,
+    }
+
+    if "charges" in site_props:
+        charges = torch.tensor(site_props["charges"])
+        input_dict["partial_charges"] = charges
+
+    if "born_ns" in site_props:
+        ns = torch.tensor(site_props["born_ns"])
+        input_dict["born_ns"] = ns
+
+    tn.forward(inputs=input_dict)
+    input_dict["cell"] = input_dict["cell"].view(-1, 3, 3)
+    input_dict["pbc"] = input_dict["pbc"].view(-1, 3)
+
+    for k, v in input_dict.items():
+        if "float" in str(v.dtype):
+            input_dict[k] = v.to(dtype=torch.float32)
+        if "idx" in k:
+            input_dict[k] = v.to(dtype=torch.long)
+
+    return input_dict
+
+
+def generate_dict_torch_bu(
+    atoms: Atoms,
+    shifts: np.ndarray,
+    cutoff: float,
+    interface: bool = False,
+    ns_dict: Optional[Dict[str, float]] = None,
+    charge_dict: Optional[Dict[str, float]] = None,
+    z_shift: float = 15.0,
+    z_periodic: bool = False,
+) -> Dict:
+
+    if interface:
+        tn = TorchInterfaceNeighborList(cutoff=cutoff)
+    else:
+        tn = TorchNeighborList(cutoff=cutoff)
+
+    neighbor_inputs = {}
     inputs_batch = []
 
-    for at_idx, atom in enumerate(atoms):
-        charges = torch.Tensor(
-            [charge_dict[s] for s in atom.get_chemical_symbols()]
+    for at_idx, shift in enumerate(shifts):
+        is_film = torch.from_numpy(
+            atoms.get_array("is_film", copy=True).astype(int)
         )
-        r0s = torch.Tensor(
-            [radius_dict[s] for s in atom.get_chemical_symbols()]
+        R = torch.from_numpy(atoms.get_positions())
+        z_positions = np.copy(atoms.get_positions())
+        z_positions[atoms.get_array("is_film"), -1] += z_shift
+
+        R_z = torch.from_numpy(z_positions)
+        cell = torch.from_numpy(atoms.get_cell().array)
+        recip_cell = torch.from_numpy(atoms.get_reciprocal_cell().array)
+
+        e_negs = torch.Tensor(
+            [Element(s).X for s in atoms.get_chemical_symbols()]
         )
-        is_film = torch.from_numpy(atom.get_array("is_film", copy=True))
-        ns = torch.Tensor([ns_dict[s] for s in atom.get_chemical_symbols()])
-        R = torch.from_numpy(atom.get_positions())
-        cell = torch.from_numpy(atom.get_cell().array).view(-1, 3, 3)
-        idx_i, idx_j, S = neighbor_list(
-            "ijS", atom, cutoff, self_interaction=False
-        )
-        idx_i = torch.from_numpy(idx_i)
-        idx_j = torch.from_numpy(idx_j)
-        S = torch.from_numpy(S).to(dtype=R.dtype)
-        offsets = torch.mm(S, cell.view(3, 3))
-        Rij = R[idx_j] - R[idx_i] + offsets
+
+        if interface:
+            pbc = torch.Tensor([True, True, False]).to(dtype=torch.bool)
+        else:
+            pbc = torch.Tensor([True, True, True]).to(dtype=torch.bool)
 
         input_dict = {
-            "n_atoms": torch.tensor([atom.get_global_number_of_atoms()]),
-            "Z": torch.from_numpy(atom.get_atomic_numbers()),
+            "n_atoms": torch.tensor([atoms.get_global_number_of_atoms()]),
+            "Z": torch.from_numpy(atoms.get_atomic_numbers()),
             "R": R,
+            "R_z": R_z,
             "cell": cell,
-            "idx_i": idx_i,
-            "idx_j": idx_j,
-            "Rij": Rij,
-            "pbc": torch.from_numpy(atom.get_pbc()).view(-1, 3),
-            "partial_charges": charges,
-            "r0s": r0s,
-            "ns": ns,
+            "recip_cell": recip_cell.view(-1, 3, 3),
+            "pbc": pbc,
             "is_film": is_film,
+            "e_negs": e_negs,
+            "shift": torch.from_numpy(shift).view(-1, 3),
         }
+
+        if charge_dict is not None:
+            charges = torch.Tensor(
+                [charge_dict[s] for s in atoms.get_chemical_symbols()]
+            )
+            # ns = torch.Tensor(
+            #     [ns_dict[s] for s in atoms.get_chemical_symbols()]
+            # )
+            input_dict["partial_charges"] = charges
+            # input_dict["ns"] = ns
+
+        if at_idx == 0:
+            s = time.time()
+            tn.forward(inputs=input_dict)
+            neighbor_inputs["idx_i"] = input_dict["idx_i"]
+            neighbor_inputs["idx_j"] = input_dict["idx_j"]
+            neighbor_inputs["offsets"] = input_dict["offsets"]
+            # print("Neighbor Time: ", time.time() - s)
+        else:
+            input_dict.update(neighbor_inputs)
+
+        input_dict["cell"] = input_dict["cell"].view(-1, 3, 3)
+        input_dict["pbc"] = input_dict["pbc"].view(-1, 3)
 
         inputs_batch.append(input_dict)
 
+    s = time.time()
     inputs = _atoms_collate_fn(inputs_batch)
+    # print("Collate:", time.time() - s)
 
     for k, v in inputs.items():
         if "float" in str(v.dtype):
@@ -110,16 +241,22 @@ def generate_dict_ase(
     return inputs
 
 
-def generate_dict_torch(
+def generate_dict_torch_old(
     atoms: List[Atoms],
     cutoff: float,
+    interface: bool = False,
     ns_dict: Optional[Dict[str, float]] = None,
     charge_dict: Optional[Dict[str, float]] = None,
     z_shift: float = 15.0,
     z_periodic: bool = False,
 ) -> Dict:
 
-    tn = TorchNeighborList(cutoff=cutoff)
+    if interface:
+        tn = TorchInterfaceNeighborList(cutoff=cutoff)
+    else:
+        tn = TorchNeighborList(cutoff=cutoff)
+
+    neighbor_inputs = {}
     inputs_batch = []
 
     for at_idx, atom in enumerate(atoms):
@@ -134,6 +271,10 @@ def generate_dict_torch(
         R_z = torch.from_numpy(z_positions)
         cell = torch.from_numpy(atom.get_cell().array)
 
+        e_negs = torch.Tensor(
+            [Element(s).X for s in atom.get_chemical_symbols()]
+        )
+
         if z_periodic:
             pbc = torch.Tensor([True, True, True]).to(dtype=torch.bool)
         else:
@@ -147,6 +288,7 @@ def generate_dict_torch(
             "cell": cell,
             "pbc": pbc,
             "is_film": is_film,
+            "e_negs": e_negs,
         }
 
         if charge_dict is not None:
@@ -159,22 +301,14 @@ def generate_dict_torch(
             input_dict["partial_charges"] = charges
             input_dict["ns"] = ns
 
-        tn.forward(inputs=input_dict)
+        if at_idx == 0:
+            tn.forward(inputs=input_dict)
+            neighbor_inputs["idx_i"] = input_dict["idx_i"]
+            neighbor_inputs["idx_j"] = input_dict["idx_j"]
+            neighbor_inputs["offsets"] = input_dict["offsets"]
+        else:
+            input_dict.update(neighbor_inputs)
 
-        Rij = (
-            R[input_dict["idx_j"]]
-            - R[input_dict["idx_i"]]
-            + input_dict["offsets"]
-        )
-
-        Rij_z = (
-            R_z[input_dict["idx_j"]]
-            - R_z[input_dict["idx_i"]]
-            + input_dict["offsets"]
-        )
-
-        input_dict["Rij"] = Rij
-        input_dict["Rij_z"] = Rij_z
         input_dict["cell"] = input_dict["cell"].view(-1, 3, 3)
         input_dict["pbc"] = input_dict["pbc"].view(-1, 3)
 

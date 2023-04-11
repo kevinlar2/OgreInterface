@@ -1,51 +1,125 @@
-from OgreInterface.score_function.ewald import EnergyEwald
-from OgreInterface.score_function.born import EnergyBorn
-from OgreInterface.score_function.generate_inputs import generate_dict_torch
+from OgreInterface.score_function.ionic_shifted_force import (
+    IonicShiftedForcePotential,
+)
+from OgreInterface.score_function.generate_inputs import create_batch
 from OgreInterface.surfaces import Interface
 from OgreInterface.surface_match.base_surface_matcher import BaseSurfaceMatcher
 from pymatgen.core.periodic_table import Element
 from pymatgen.analysis.local_env import CrystalNN
-from ase.data import chemical_symbols
-from typing import List
+from pymatgen.io.ase import AseAtomsAdaptor
+from ase.data import chemical_symbols, covalent_radii
+from typing import List, Dict
 from ase import Atoms
 import numpy as np
 import matplotlib.pyplot as plt
-from scipy.interpolate import RectBivariateSpline
+from scipy.interpolate import RectBivariateSpline, CubicSpline
 from itertools import groupby, combinations_with_replacement, product
+import torch
+import time
 
 
 class IonicSurfaceMatcher(BaseSurfaceMatcher):
+    """Class to perform surface matching between ionic materials
+
+    The IonicSurfaceMatcher class contain various methods to perform surface matching
+    specifically tailored towards an interface between two ionic materials.
+
+    Examples:
+        Calculating the 2D potential energy surface (PES)
+        >>> from OgreInterface.surface_match import IonicSurfaceMatcher
+        >>> surface_matcher = IonicSurfaceMatcher(interface=interface) # interface is Interface class
+        >>> E_opt = surface_matcher.run_surface_matching(output="PES.png")
+        >>> surface_matcher.get_optmized_structure() # Shift the interface to it's optimal position
+
+        Optimizing the interface in 3D using particle swarm optimization
+        >>> from OgreInterface.surface_match import IonicSurfaceMatcher
+        >>> surface_matcher = IonicSurfaceMatcher(interface=interface) # interface is Interface class
+        >>> E_opt = surface_matcher.optimizePSO(z_bounds=[1.0, 5.0], max_iters=150, n_particles=12)
+        >>> surface_matcher.get_optmized_structure() # Shift the interface to it's optimal position
+
+    Args:
+        interface: The Interface object generated using the InterfaceGenerator
+        grid_density: The sampling density of the 2D potential energy surface plot (points/Angstrom)
+    """
+
     def __init__(
         self,
         interface: Interface,
         grid_density: float = 2.5,
+        auto_determine_born_n: bool = True,
+        born_n: float = 12.0,
     ):
         super().__init__(
             interface=interface,
             grid_density=grid_density,
         )
-        self.cutoff, self.alpha, self.k_max = self._get_ewald_parameters()
-        self.k_max = 10
+        self._auto_determine_born_n = auto_determine_born_n
+        self._born_n = born_n
+        self._cutoff = 18.0
         self.charge_dict = self._get_charges()
-        self.r0_dict = self._get_r0s(
+        self.r0_array = self._get_r0s(
             sub=self.interface.substrate.bulk_structure,
             film=self.interface.film.bulk_structure,
             charge_dict=self.charge_dict,
         )
-        self.ns_dict = {element: 6.0 for element in self.charge_dict}
+        self._add_born_ns(self.iface)
+        self._add_born_ns(self.sub_part)
+        self._add_born_ns(self.film_part)
+        self._add_charges(self.iface)
+        self._add_charges(self.sub_part)
+        self._add_charges(self.film_part)
         self.d_interface = self.interface.interfacial_distance
-        self.film_part = self.interface._orthogonal_film_structure
-        self.sub_part = self.interface._orthogonal_film_structure
         self.opt_xy_shift = np.zeros(2)
+        self.opt_d_interface = self.d_interface
 
-        self.z_PES_data = None
+        self.iface_inputs = self._generate_base_inputs(structure=self.iface)
+        self.sub_inputs = self._generate_base_inputs(structure=self.sub_part)
+        self.film_inputs = self._generate_base_inputs(structure=self.film_part)
+        self.film_energy, self.sub_energy = self._get_film_sub_energies()
 
-    def get_optmized_structure(self):
+    def get_optimized_structure(self):
         opt_shift = self.opt_xy_shift
 
         self.interface.shift_film_inplane(
             x_shift=opt_shift[0], y_shift=opt_shift[1], fractional=True
         )
+        self.interface.set_interfacial_distance(
+            interfacial_distance=self.opt_d_interface
+        )
+
+        self.iface = self.interface.get_interface(orthogonal=True)
+        self.iface_inputs = self._generate_base_inputs(structure=self.iface)
+
+        self.opt_xy_shift[:2] = 0.0
+
+    def _add_charges(self, struc):
+        charges = [
+            self.charge_dict[chemical_symbols[z]] for z in struc.atomic_numbers
+        ]
+        struc.add_site_property("charges", charges)
+
+    def _add_born_ns(self, struc):
+        ion_config_to_n_map = {
+            "[He]": 5.0,
+            "[Ne]": 7.0,
+            "[Ar]": 9.0,
+            "[Kr]": 10.0,
+            "[Xe]": 12.0,
+        }
+        n_vals = {}
+
+        Zs = np.unique(struc.atomic_numbers)
+        for z in Zs:
+            element = Element(chemical_symbols[z])
+            ion_config = element.electronic_structure.split(".")[0]
+            n_val = ion_config_to_n_map[ion_config]
+            if self._auto_determine_born_n:
+                n_vals[z] = n_val
+            else:
+                n_vals[z] = self._born_n
+
+        ns = [n_vals[z] for z in struc.atomic_numbers]
+        struc.add_site_property("born_ns", ns)
 
     def _get_charges(self):
         sub = self.interface.substrate.bulk_structure
@@ -107,11 +181,10 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
 
                 neighbor_dict[n] = d1 + d2
 
-            # print(f"{s1}-{s2} ", neighbor_dict[n])
-
         return neighbor_dict
 
     def _get_r0s(self, sub, film, charge_dict):
+        r0_array = np.zeros((3, 118, 118))
         sub_dict = self._get_neighborhood_info(sub, charge_dict)
         film_dict = self._get_neighborhood_info(film, charge_dict)
 
@@ -120,6 +193,9 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
         )
 
         ionic_radius_dict = {}
+        cov_radius_dict = {
+            n: covalent_radii[n] for n in interface_atomic_numbers
+        }
 
         for n in interface_atomic_numbers:
             element = Element(chemical_symbols[n])
@@ -135,353 +211,433 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
             ionic_radius_dict[n] = d
 
         interface_combos = product(interface_atomic_numbers, repeat=2)
-        interface_neighbor_dict = {}
-        for c in interface_combos:
-            interface_neighbor_dict[(0, 0) + c] = None
-            interface_neighbor_dict[(1, 1) + c] = None
-            interface_neighbor_dict[(0, 1) + c] = None
-            interface_neighbor_dict[(1, 0) + c] = None
+        for key in interface_combos:
+            charge_sign = (
+                charge_dict[chemical_symbols[key[0]]]
+                * charge_dict[chemical_symbols[key[1]]]
+            )
+
+            if charge_sign < 0:
+                ionic_sum_d = (
+                    ionic_radius_dict[key[0]] + ionic_radius_dict[key[1]]
+                )
+                cov_sum_d = cov_radius_dict[key[0]] + cov_radius_dict[key[1]]
+                ionic_sum_d = min(ionic_sum_d, cov_sum_d)
+            else:
+                ionic_sum_d = (
+                    ionic_radius_dict[key[0]] + ionic_radius_dict[key[1]]
+                )
+                cov_sum_d = cov_radius_dict[key[0]] + cov_radius_dict[key[1]]
+                ionic_sum_d = min(ionic_sum_d, cov_sum_d)
+
+            r0_array[:, key[0], key[1]] = ionic_sum_d
+            r0_array[:, key[1], key[0]] = ionic_sum_d
 
         all_keys = np.array(list(sub_dict.keys()) + list(film_dict.keys()))
         unique_keys = np.unique(all_keys, axis=0)
         unique_keys = list(map(tuple, unique_keys))
 
         for key in unique_keys:
-            rev_key = tuple(reversed(key))
-            ionic_sum_d = ionic_radius_dict[key[0]] + ionic_radius_dict[key[1]]
+            charge_sign = (
+                charge_dict[chemical_symbols[key[0]]]
+                * charge_dict[chemical_symbols[key[1]]]
+            )
+
+            if charge_sign < 0:
+                ionic_sum_d = (
+                    ionic_radius_dict[key[0]] + ionic_radius_dict[key[1]]
+                )
+            else:
+                ionic_sum_d = cov_radius_dict[key[0]] + cov_radius_dict[key[1]]
+
             if key in sub_dict and key in film_dict:
-                sub_d = sub_dict[key]
-                film_d = film_dict[key]
-                interface_neighbor_dict[(0, 0) + key] = sub_d
-                interface_neighbor_dict[(1, 1) + key] = film_d
-                interface_neighbor_dict[(0, 1) + key] = (sub_d + film_d) / 2
-                interface_neighbor_dict[(1, 0) + key] = (sub_d + film_d) / 2
-                interface_neighbor_dict[(0, 0) + rev_key] = sub_d
-                interface_neighbor_dict[(1, 1) + rev_key] = film_d
-                interface_neighbor_dict[(0, 1) + rev_key] = (
-                    sub_d + film_d
-                ) / 2
-                interface_neighbor_dict[(1, 0) + rev_key] = (
-                    sub_d + film_d
-                ) / 2
+                sub_d = min(sub_dict[key], ionic_sum_d)
+                film_d = min(film_dict[key], ionic_sum_d)
+                r0_array[0, key[0], key[1]] = film_d
+                r0_array[1, key[0], key[1]] = (sub_d + film_d) / 2
+                r0_array[2, key[0], key[1]] = sub_d
+                r0_array[0, key[1], key[0]] = film_d
+                r0_array[1, key[1], key[0]] = (sub_d + film_d) / 2
+                r0_array[2, key[1], key[0]] = sub_d
 
             if key in sub_dict and key not in film_dict:
-                sub_d = sub_dict[key]
-                interface_neighbor_dict[(0, 0) + key] = sub_d
-                interface_neighbor_dict[(1, 1) + key] = ionic_sum_d
-                interface_neighbor_dict[(0, 1) + key] = sub_d
-                interface_neighbor_dict[(1, 0) + key] = sub_d
-                interface_neighbor_dict[(0, 0) + rev_key] = sub_d
-                interface_neighbor_dict[(1, 1) + rev_key] = ionic_sum_d
-                interface_neighbor_dict[(0, 1) + rev_key] = sub_d
-                interface_neighbor_dict[(1, 0) + rev_key] = sub_d
+                sub_d = min(sub_dict[key], ionic_sum_d)
+                r0_array[0, key[0], key[1]] = sub_d
+                r0_array[1, key[0], key[1]] = sub_d
+                r0_array[2, key[0], key[1]] = ionic_sum_d
+                r0_array[0, key[1], key[0]] = sub_d
+                r0_array[1, key[1], key[0]] = sub_d
+                r0_array[2, key[1], key[0]] = ionic_sum_d
 
             if key not in sub_dict and key in film_dict:
-                film_d = film_dict[key]
-                interface_neighbor_dict[(1, 1) + key] = film_d
-                interface_neighbor_dict[(0, 0) + key] = ionic_sum_d
-                interface_neighbor_dict[(0, 1) + key] = film_d
-                interface_neighbor_dict[(1, 0) + key] = film_d
-                interface_neighbor_dict[(1, 1) + rev_key] = film_d
-                interface_neighbor_dict[(0, 0) + rev_key] = ionic_sum_d
-                interface_neighbor_dict[(0, 1) + rev_key] = film_d
-                interface_neighbor_dict[(1, 0) + rev_key] = film_d
+                film_d = min(film_dict[key], ionic_sum_d)
+                r0_array[0, key[0], key[1]] = ionic_sum_d
+                r0_array[1, key[0], key[1]] = film_d
+                r0_array[2, key[0], key[1]] = film_d
+                r0_array[0, key[1], key[0]] = ionic_sum_d
+                r0_array[1, key[1], key[0]] = film_d
+                r0_array[2, key[1], key[0]] = film_d
 
             if key not in sub_dict and key not in film_dict:
-                interface_neighbor_dict[(0, 0) + key] = ionic_sum_d
-                interface_neighbor_dict[(1, 1) + key] = ionic_sum_d
-                interface_neighbor_dict[(0, 1) + key] = ionic_sum_d
-                interface_neighbor_dict[(1, 0) + key] = ionic_sum_d
-                interface_neighbor_dict[(0, 0) + rev_key] = ionic_sum_d
-                interface_neighbor_dict[(1, 1) + rev_key] = ionic_sum_d
-                interface_neighbor_dict[(0, 1) + rev_key] = ionic_sum_d
-                interface_neighbor_dict[(1, 0) + rev_key] = ionic_sum_d
+                r0_array[0, key[0], key[1]] = ionic_sum_d
+                r0_array[1, key[0], key[1]] = ionic_sum_d
+                r0_array[2, key[0], key[1]] = ionic_sum_d
+                r0_array[0, key[1], key[0]] = ionic_sum_d
+                r0_array[1, key[1], key[0]] = ionic_sum_d
+                r0_array[2, key[1], key[0]] = ionic_sum_d
 
-        for key, val in interface_neighbor_dict.items():
-            if val is None:
-                ionic_sum_d = (
-                    ionic_radius_dict[key[2]] + ionic_radius_dict[key[3]]
-                )
-                interface_neighbor_dict[key] = ionic_sum_d
+        return torch.from_numpy(r0_array).to(dtype=torch.float32)
 
-        return interface_neighbor_dict
+    def bo_function(self, a, b, z):
+        frac_ab = np.array([a, b]).reshape(1, 2)
+        cart_xy = self.get_cart_xy_shifts(frac_ab)
+        z_shift = z - self.d_interface
+        shift = np.c_[cart_xy, z_shift * np.ones(len(cart_xy))]
+        batch_inputs = create_batch(
+            inputs=self.iface_inputs,
+            batch_size=1,
+        )
+        E, _, _, _, _ = self._calculate(inputs=batch_inputs, shifts=shift)
 
-    def _get_ewald_parameters(self):
-        struc_vol = self.interface._structure_volume
-        accf = np.sqrt(np.log(10**4))
-        w = 1 / 2**0.5
-        alpha = np.pi * (
-            len(self.interface._orthogonal_structure) * w / (struc_vol**2)
-        ) ** (1 / 3)
-        cutoff = accf / np.sqrt(alpha)
-        k_max = 2 * np.sqrt(alpha) * accf
+        return -E[0]
 
-        return cutoff, alpha, k_max
-
-    def _get_shifted_atoms(self, shifts: np.ndarray) -> List[Atoms]:
-        atoms = []
-
-        for shift in shifts:
-            # Shift in-plane
-            self.interface.shift_film_inplane(
-                x_shift=shift[0], y_shift=shift[1], fractional=True
-            )
-
-            # Get inplane shifted atoms
-            shifted_atoms = self.interface.get_interface(
-                orthogonal=True, return_atoms=True
-            )
-
-            # Add the is_film property
-            shifted_atoms.set_array(
-                "is_film",
-                self.interface._orthogonal_structure.site_properties[
-                    "is_film"
-                ],
-            )
-
-            self.interface.shift_film_inplane(
-                x_shift=-shift[0], y_shift=-shift[1], fractional=True
-            )
-
-            # Add atoms to the list
-            atoms.append(shifted_atoms)
-
-        return atoms
-
-    def _generate_inputs(self, atoms_list):
-        inputs = generate_dict_torch(
-            atoms=atoms_list,
-            cutoff=self.cutoff,
-            charge_dict=self.charge_dict,
-            ns_dict=self.ns_dict,
+    def pso_function(self, x):
+        cart_xy = self.get_cart_xy_shifts(x[:, :2])
+        z_shift = x[:, -1] - self.d_interface
+        shift = np.c_[cart_xy, z_shift]
+        batch_inputs = create_batch(
+            inputs=self.iface_inputs,
+            batch_size=len(x),
+        )
+        E, _, _, _, _ = self._calculate(inputs=batch_inputs, shifts=shift)
+        E_adh = (
+            -((self.film_energy + self.sub_energy) - E) / self.interface.area
         )
 
-        return inputs
+        return E_adh
 
-    def _calculate_coulomb(self, inputs, z_shift=False):
-        ewald = EnergyEwald(
-            alpha=self.alpha, k_max=self.k_max, cutoff=self.cutoff
+    def _get_film_sub_energies(self):
+        sub_inputs = create_batch(inputs=self.sub_inputs, batch_size=1)
+        film_inputs = create_batch(inputs=self.film_inputs, batch_size=1)
+
+        sub_energy, _, _, _, _ = self._calculate(
+            sub_inputs,
+            shifts=np.zeros((1, 3)),
         )
-        coulomb_energy = ewald.forward(inputs, z_shift)
-
-        return coulomb_energy
-
-    def _calculate_born(self, inputs, z_shift=False):
-        born = EnergyBorn(cutoff=self.cutoff)
-        born_energy = born.forward(
-            inputs, z_shift=z_shift, r0_dict=self.r0_dict
-        )
-
-        return born_energy
-
-    def _get_interpolated_data(self, Z, image):
-        x_grid = np.linspace(0, 1, self.grid_density_x)
-        y_grid = np.linspace(0, 1, self.grid_density_y)
-        spline = RectBivariateSpline(y_grid, x_grid, Z)
-
-        x_grid_interp = np.linspace(0, 1, 101)
-        y_grid_interp = np.linspace(0, 1, 101)
-
-        X_interp, Y_interp = np.meshgrid(x_grid_interp, y_grid_interp)
-        Z_interp = spline.ev(xi=Y_interp, yi=X_interp)
-        frac_shifts = (
-            np.c_[
-                X_interp.ravel(),
-                Y_interp.ravel(),
-                np.zeros(X_interp.shape).ravel(),
-            ]
-            + image
+        film_energy, _, _, _, _ = self._calculate(
+            film_inputs,
+            shifts=np.zeros((1, 3)),
         )
 
-        cart_shifts = frac_shifts.dot(self.shift_matrix)
+        return film_energy, sub_energy
 
-        X_cart = cart_shifts[:, 0].reshape(X_interp.shape)
-        Y_cart = cart_shifts[:, 1].reshape(Y_interp.shape)
-
-        return X_cart, Y_cart, Z_interp
-
-    def run_surface_matching(
+    def optimizePSO(
         self,
-        cmap: str = "jet",
-        fontsize: int = 14,
+        z_bounds: List[float],
+        max_iters: int = 200,
+        n_particles: int = 15,
+    ) -> float:
+        """
+        This function will optimize the interface structure in 3D using Particle Swarm Optimization
+
+        Args:
+            z_bounds: A list defining the maximum and minumum interfacial distance [min, max]
+            max_iters: Maximum number of iterations of the PSO algorithm
+            n_particles: Number of particles to use for the swarm (10 - 20 is usually sufficient)
+
+        Returns:
+            The optimal value of the negated adhesion energy (smaller is better, negative = stable, positive = unstable)
+        """
+        opt_score, opt_pos = self._optimizerPSO(
+            func=self.pso_function,
+            z_bounds=z_bounds,
+            max_iters=max_iters,
+            n_particles=n_particles,
+        )
+
+        opt_cart = self.get_cart_xy_shifts(opt_pos[:2].reshape(1, -1))
+        opt_cart = np.c_[opt_cart, np.zeros(1)]
+        opt_frac = opt_cart.dot(self.inv_matrix)[0]
+
+        self.opt_xy_shift = opt_frac[:2]
+        self.opt_d_interface = opt_pos[-1]
+
+        return opt_score
+
+    # def optimize(self, z_bounds, max_iters):
+    #     probe_xy = self._get_gd_init_points()
+    #     probe_xy = np.vstack([probe_xy, probe_xy])
+    #     probe_ab = self.get_frac_xy_shifts(probe_xy)
+    #     probe_z = np.random.uniform(
+    #         z_bounds[0],
+    #         z_bounds[1],
+    #         len(probe_ab),
+    #     )
+    #     probe_points = np.c_[probe_ab, probe_z]
+
+    #     opt_score, opt_pos = self._optimizer_old(
+    #         func=self.bo_function,
+    #         z_bounds=z_bounds,
+    #         max_iters=max_iters,
+    #         probe_points=probe_points,
+    #     )
+
+    #     self.opt_xy_shift = opt_pos[:2]
+    #     self.opt_d_interface = opt_pos[-1]
+
+    #     return opt_score
+
+    def _calculate(self, inputs: Dict, shifts: np.ndarray):
+        ionic_potential = IonicShiftedForcePotential(
+            cutoff=self._cutoff,
+        )
+        outputs = ionic_potential.forward(
+            inputs=inputs,
+            shift=torch.from_numpy(shifts).to(dtype=torch.float32),
+            r0_array=self.r0_array,
+        )
+
+        return outputs
+
+    # def run_z_shift(
+    #     self,
+    #     interfacial_distances,
+    #     fontsize: int = 12,
+    #     output: str = "PES.png",
+    #     show_born_and_coulomb: bool = False,
+    #     dpi: int = 400,
+    # ):
+    #     zeros = np.zeros(len(interfacial_distances))
+    #     shifts = np.c_[zeros, zeros, interfacial_distances - self.d_interface]
+
+    #     interface_energy = []
+    #     coulomb = []
+    #     born = []
+    #     for shift in shifts:
+    #         inputs = create_batch(self.iface_inputs, batch_size=1)
+
+    #         (
+    #             _interface_energy,
+    #             _coulomb,
+    #             _born,
+    #             _,
+    #             _,
+    #         ) = self._calculate(inputs, shifts=shift.reshape(1, -1))
+    #         interface_energy.append(_interface_energy)
+    #         coulomb.append(_coulomb)
+    #         born.append(_born)
+
+    #     interface_energy = (
+    #         -(
+    #             (self.film_energy + self.sub_energy)
+    #             - np.array(interface_energy)
+    #         )
+    #         / self.interface.area
+    #     )
+
+    #     fig, axs = plt.subplots(
+    #         figsize=(3, 3),
+    #         dpi=dpi,
+    #         # ncols=3,
+    #     )
+
+    #     cs = CubicSpline(interfacial_distances, interface_energy)
+    #     new_x = np.linspace(
+    #         interfacial_distances.min(),
+    #         interfacial_distances.max(),
+    #         201,
+    #     )
+    #     new_y = cs(new_x)
+
+    #     opt_d = new_x[np.argmin(new_y)]
+    #     opt_E = np.min(new_y)
+    #     self.opt_d_interface = opt_d
+
+    #     axs.plot(
+    #         new_x,
+    #         new_y,
+    #         color="black",
+    #         linewidth=1,
+    #         label="Born+Coulomb",
+    #     )
+    #     axs.scatter(
+    #         [opt_d],
+    #         [opt_E],
+    #         color="black",
+    #         marker="x",
+    #     )
+    #     axs.tick_params(labelsize=fontsize)
+    #     axs.set_ylabel("Energy", fontsize=fontsize)
+    #     axs.set_xlabel("Interfacial Distance ($\\AA$)", fontsize=fontsize)
+    #     axs.legend(fontsize=12)
+
+    #     fig.tight_layout()
+    #     fig.savefig(output, bbox_inches="tight")
+    #     plt.close(fig)
+
+    #     return opt_E
+
+    def _run_bulk(
+        self,
+        strains,
+        fontsize: int = 12,
         output: str = "PES.png",
-        shift: bool = True,
         show_born_and_coulomb: bool = False,
         dpi: int = 400,
-        show_max: bool = False,
-    ) -> float:
-        shifts = self.shifts
-        batch_atoms_list = [self._get_shifted_atoms(shift) for shift in shifts]
-        batch_inputs = [self._generate_inputs(b) for b in batch_atoms_list]
+    ):
+        # sub = self.interface.substrate.bulk_structure
+        sub = self.interface.film.bulk_structure
+        is_film = True
 
-        # atoms_list = self._get_shifted_atoms(shifts)
-        # inputs = self._generate_inputs(atoms_list)
-
-        x_grid = np.linspace(0, 1, self.grid_density_x)
-        y_grid = np.linspace(0, 1, self.grid_density_y)
-        X, Y = np.meshgrid(x_grid, y_grid)
-
-        if self.z_PES_data is None:
-            z_interface_coulomb_energy = np.vstack(
-                [
-                    self._calculate_coulomb(b, z_shift=True)
-                    for b in batch_inputs
-                ]
+        strained_atoms = []
+        for strain in strains:
+            strain_struc = sub.copy()
+            strain_struc.apply_strain(strain)
+            strain_struc.add_site_property(
+                "is_film", [is_film] * len(strain_struc)
             )
-            z_interface_born_energy = np.vstack(
-                [self._calculate_born(b, z_shift=True) for b in batch_inputs]
-            )
-            # z_coulomb_energy = self._calculate_coulomb(inputs, z_shift=True)
-            # z_born_energy = self._calculate_born(inputs, z_shift=True)
-            # z_interface_coulomb_energy = z_coulomb_energy.reshape(X.shape)
-            # z_interface_born_energy = z_born_energy.reshape(X.shape)
-            self.z_PES_data = [
-                z_interface_coulomb_energy,
-                z_interface_born_energy,
-            ]
-        else:
-            z_interface_coulomb_energy = self.z_PES_data[0]
-            z_interface_born_energy = self.z_PES_data[1]
+            self._add_charges(strain_struc)
+            self._add_born_ns(strain_struc)
+            strained_atoms.append(strain_struc)
 
-        interface_coulomb_energy = np.vstack(
-            [self._calculate_coulomb(b, z_shift=False) for b in batch_inputs]
+        total_energy = []
+        coulomb = []
+        born = []
+        for i, atoms in enumerate(strained_atoms):
+            inputs = self._generate_base_inputs(
+                structure=atoms,
+            )
+            batch_inputs = create_batch(inputs, 1)
+
+            (
+                _total_energy,
+                _coulomb,
+                _born,
+                _,
+                _,
+            ) = self._calculate(batch_inputs, shifts=np.zeros((1, 3)))
+            total_energy.append(_total_energy)
+            coulomb.append(_coulomb)
+            born.append(_born)
+
+        total_energy = np.array(total_energy)
+        coulomb = np.array(coulomb)
+        born = np.array(born)
+
+        fig, axs = plt.subplots(figsize=(4 * 3, 3), dpi=dpi, ncols=3)
+        print("Min Strain:", strains[np.argmin(total_energy)])
+
+        axs[0].plot(
+            strains,
+            total_energy,
+            color="black",
+            linewidth=1,
+            label="Born+Coulomb",
         )
-        interface_born_energy = np.vstack(
-            [self._calculate_born(b, z_shift=False) for b in batch_inputs]
+        axs[1].plot(
+            strains,
+            coulomb,
+            color="red",
+            linewidth=1,
+            label="Coulomb",
+        )
+        axs[2].plot(
+            strains,
+            born,
+            color="blue",
+            linewidth=1,
+            label="Born",
         )
 
-        # coulomb_energy = self._calculate_coulomb(inputs, z_shift=False)
-        # born_energy = self._calculate_born(inputs, z_shift=False)
-        # interface_coulomb_energy = coulomb_energy.reshape(X.shape)
-        # interface_born_energy = born_energy.reshape(X.shape)
-
-        coulomb_adh_energy = (
-            z_interface_coulomb_energy - interface_coulomb_energy
-        )
-        born_adh_energy = z_interface_born_energy - interface_born_energy
-
-        a = self.matrix[0, :2]
-        b = self.matrix[1, :2]
-        borders = np.vstack([np.zeros(2), a, a + b, b, np.zeros(2)])
-        x_size = borders[:, 0].max() - borders[:, 0].min()
-        y_size = borders[:, 1].max() - borders[:, 1].min()
-        ratio = y_size / x_size
-
-        if show_born_and_coulomb:
-            fig, (ax1, ax2, ax3) = plt.subplots(
-                figsize=(3 * 5, 5 * ratio),
-                ncols=3,
-                dpi=dpi,
-            )
-
-            ax1.plot(
-                borders[:, 0],
-                borders[:, 1],
-                color="black",
-                linewidth=1,
-                zorder=300,
-            )
-
-            ax2.plot(
-                borders[:, 0],
-                borders[:, 1],
-                color="black",
-                linewidth=1,
-                zorder=300,
-            )
-
-            ax3.plot(
-                borders[:, 0],
-                borders[:, 1],
-                color="black",
-                linewidth=1,
-                zorder=300,
-            )
-
-            self._plot_surface_matching(
-                fig=fig,
-                ax=ax1,
-                X=X,
-                Y=Y,
-                Z=born_adh_energy / self.interface.area,
-                dpi=dpi,
-                cmap=cmap,
-                fontsize=fontsize,
-                show_max=show_max,
-                shift=False,
-            )
-
-            self._plot_surface_matching(
-                fig=fig,
-                ax=ax2,
-                X=X,
-                Y=Y,
-                Z=coulomb_adh_energy / self.interface.area,
-                dpi=dpi,
-                cmap=cmap,
-                fontsize=fontsize,
-                show_max=show_max,
-                shift=False,
-            )
-
-            max_Z = self._plot_surface_matching(
-                fig=fig,
-                ax=ax3,
-                X=X,
-                Y=Y,
-                Z=(born_adh_energy + coulomb_adh_energy) / self.interface.area,
-                dpi=dpi,
-                cmap=cmap,
-                fontsize=fontsize,
-                show_max=show_max,
-                shift=True,
-            )
-
-            ax1.set_xlim(borders[:, 0].min(), borders[:, 0].max())
-            ax1.set_ylim(borders[:, 1].min(), borders[:, 1].max())
-            ax1.set_aspect("equal")
-
-            ax2.set_xlim(borders[:, 0].min(), borders[:, 0].max())
-            ax2.set_ylim(borders[:, 1].min(), borders[:, 1].max())
-            ax2.set_aspect("equal")
-
-            ax3.set_xlim(borders[:, 0].min(), borders[:, 0].max())
-            ax3.set_ylim(borders[:, 1].min(), borders[:, 1].max())
-            ax3.set_aspect("equal")
-        else:
-            fig, ax = plt.subplots(
-                figsize=(5, 5 * ratio),
-                dpi=dpi,
-            )
-
-            ax.plot(
-                borders[:, 0],
-                borders[:, 1],
-                color="black",
-                linewidth=1,
-                zorder=300,
-            )
-
-            max_Z = self._plot_surface_matching(
-                fig=fig,
-                ax=ax,
-                X=X,
-                Y=Y,
-                Z=(born_adh_energy + coulomb_adh_energy) / self.interface.area,
-                dpi=dpi,
-                cmap=cmap,
-                fontsize=fontsize,
-                show_max=show_max,
-                shift=True,
-            )
-
-            ax.set_xlim(borders[:, 0].min(), borders[:, 0].max())
-            ax.set_ylim(borders[:, 1].min(), borders[:, 1].max())
-            ax.set_aspect("equal")
+        for ax in axs:
+            ax.tick_params(labelsize=fontsize)
+            ax.set_ylabel("Energy", fontsize=fontsize)
+            ax.set_xlabel("Strain ($\\AA$)", fontsize=fontsize)
+            ax.legend(fontsize=12)
 
         fig.tight_layout()
         fig.savefig(output, bbox_inches="tight")
         plt.close(fig)
 
-        return max_Z
+    def _run_scale(
+        self,
+        scales,
+        fontsize: int = 12,
+        output: str = "scale.png",
+        show_born_and_coulomb: bool = False,
+        dpi: int = 400,
+    ):
+        # sub = self.interface.substrate.bulk_structure
+        sub = self.interface.film.bulk_structure
+
+        strains = np.linspace(-0.1, 0.1, 21)
+        strained_atoms = []
+        # for strain in [-0.02, -0.01, 0.0, 0.01, 0.02]:
+        for strain in strains:
+            strain_struc = sub.copy()
+            strain_struc.apply_strain(strain)
+            strain_atoms = AseAtomsAdaptor().get_atoms(strain_struc)
+            strain_atoms.set_array(
+                "is_film", np.zeros(len(strain_atoms)).astype(bool)
+            )
+            strained_atoms.append(strain_atoms)
+
+        total_energy = []
+        for scale in scales:
+            strain_energy = []
+            for atoms in strained_atoms:
+                inputs = self._generate_inputs(
+                    atoms=atoms, shifts=[np.zeros(3)], interface=False
+                )
+                ionic_potential = IonicShiftedForcePotential(
+                    cutoff=self._cutoff,
+                )
+                (_total_energy, _, _, _, _,) = ionic_potential.forward(
+                    inputs=inputs,
+                    r0_dict=scale * self.r0_array,
+                    ns_dict=self.ns_dict,
+                    z_shift=False,
+                )
+                strain_energy.append(_total_energy)
+            total_energy.append(strain_energy)
+
+        total_energy = np.array(total_energy)
+        # coulomb = np.array(coulomb)
+        # born = np.array(born)
+
+        fig, axs = plt.subplots(figsize=(6, 3), dpi=dpi, ncols=2)
+
+        colors = plt.cm.jet
+        color_list = [colors(i) for i in np.linspace(0, 1, len(total_energy))]
+
+        min_strains = []
+        min_Es = []
+        for i, E in enumerate(total_energy):
+            E -= E.min()
+            E /= E.max()
+            axs[0].plot(
+                strains,
+                E,
+                color=color_list[i],
+                linewidth=1,
+                # marker=".",
+                # alpha=0.3,
+            )
+            min_strain = strains[np.argmin(E)]
+            min_E = E.min()
+            min_strains.append(min_strain)
+            min_Es.append(min_E)
+            axs[0].scatter(
+                [min_strain],
+                [min_E],
+                c=[color_list[i]],
+                s=2,
+            )
+
+        axs[1].plot(
+            scales, np.array(min_strains) ** 2, color="black", marker="."
+        )
+
+        fig.tight_layout()
+        fig.savefig(output, bbox_inches="tight")
+        plt.close(fig)

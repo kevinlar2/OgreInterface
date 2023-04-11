@@ -29,6 +29,17 @@ import os
 
 
 class BaseSurfaceMatcher:
+    """Base Class for all other surface matching classes
+
+    The BaseSurfaceMatcher contains all the basic methods to perform surface matching
+    that other classes can inherit. This class should not be called on it's own, rather it
+    should be used as a building block for other surface matching classes
+
+    Args:
+        interface: The Interface object generated using the InterfaceGenerator
+        grid_density: The sampling density of the 2D potential energy surface plot (points/Angstrom)
+    """
+
     def __init__(
         self,
         interface: Interface,
@@ -61,7 +72,7 @@ class BaseSurfaceMatcher:
     def _generate_base_inputs(self, structure: Structure):
         inputs = generate_input_dict(
             structure=structure,
-            cutoff=self.cutoff,
+            cutoff=self._cutoff,
             interface=True,
         )
 
@@ -215,6 +226,7 @@ class BaseSurfaceMatcher:
             np.c_[X.ravel(), Y.ravel(), np.zeros(Y.shape).ravel()]
             + self.shift_images[0]
         )
+
         prim_cart_shifts = prim_frac_shifts.dot(self.shift_matrix)
         # iface_frac_shifts = prim_cart_shifts.dot(iface_inv_matrix).reshape(
         #     X.shape + (-1,)
@@ -289,28 +301,52 @@ class BaseSurfaceMatcher:
             if show_max:
                 E_max = np.min(Z)
                 label = (
-                    "$E_{adh}$ (eV/$\\AA^{2}$) : "
+                    "$-E_{adh}$ (eV/$\\AA^{2}$) : "
                     + "$E_{min}$ = "
                     + f"{E_max:.4f}"
                 )
-                # label = (
-                #     "$|F_{film}|$ (eV/$\\AA$) : "
-                #     + "$|F|_{min}$ = "
-                #     + f"{E_max:.4f}"
-                # )
                 cbar.set_label(label, fontsize=fontsize)
             else:
-                label = "$E_{adh}$ (eV/$\\AA^{2}$)"
+                label = "$-E_{adh}$ (eV/$\\AA^{2}$)"
                 cbar.set_label(label, fontsize=fontsize)
 
             cax.xaxis.set_ticks_position("top")
             cax.xaxis.set_label_position("top")
             ax.tick_params(labelsize=fontsize)
 
+    # def _get_interpolated_data_old(self, Z, image):
+    #     print("Using old interpolation")
+    #     x_grid = np.linspace(0, 1, self.grid_density_x)
+    #     y_grid = np.linspace(0, 1, self.grid_density_y)
+    #     spline = RectBivariateSpline(y_grid, x_grid, Z)
+
+    #     x_grid_interp = np.linspace(0, 1, 101)
+    #     y_grid_interp = np.linspace(0, 1, 101)
+
+    #     X_interp, Y_interp = np.meshgrid(x_grid_interp, y_grid_interp)
+    #     Z_interp = spline.ev(xi=Y_interp, yi=X_interp)
+    #     frac_shifts = (
+    #         np.c_[
+    #             X_interp.ravel(),
+    #             Y_interp.ravel(),
+    #             np.zeros(X_interp.shape).ravel(),
+    #         ]
+    #         + image
+    #     )
+
+    #     cart_shifts = frac_shifts.dot(self.shift_matrix)
+
+    #     X_cart = cart_shifts[:, 0].reshape(X_interp.shape)
+    #     Y_cart = cart_shifts[:, 1].reshape(Y_interp.shape)
+
+    #     return X_cart, Y_cart, Z_interp
+
     def _get_interpolated_data(self, Z, image):
-        x_grid = np.linspace(0, 1, self.grid_density_x)
-        y_grid = np.linspace(0, 1, self.grid_density_y)
-        spline = RectBivariateSpline(y_grid, x_grid, Z)
+        x_grid = np.linspace(-1, 2, (3 * self.grid_density_x) - 2)
+        y_grid = np.linspace(-1, 2, (3 * self.grid_density_y) - 2)
+        Z_horiz = np.c_[Z, Z[:, 1:-1], Z]
+        Z_periodic = np.r_[Z_horiz, Z_horiz[1:-1, :], Z_horiz]
+        spline = RectBivariateSpline(y_grid, x_grid, Z_periodic)
 
         x_grid_interp = np.linspace(0, 1, 101)
         y_grid_interp = np.linspace(0, 1, 101)
@@ -484,10 +520,21 @@ class BaseSurfaceMatcher:
         cmap: str = "jet",
         fontsize: int = 14,
         output: str = "PES.png",
-        shift: bool = True,
         dpi: int = 400,
-        show_max: bool = False,
+        show_opt: bool = False,
     ) -> float:
+        """This function calculates the 2D potential energy surface (PES)
+
+        Args:
+            cmap: The colormap to use for the PES, any matplotlib compatible color map will work
+            fontsize: Fontsize of all the plot labels
+            output: Output file name
+            dpi: Resolution of the figure (dots per inch)
+            show_opt: Determines if the optimal value is printed on the figure
+
+        Returns:
+            The optimal value of the negated adhesion energy (smaller is better, negative = stable, positive = unstable)
+        """
         shifts = self.shifts
 
         sub_inputs = create_batch(inputs=self.sub_inputs, batch_size=1)
@@ -569,7 +616,7 @@ class BaseSurfaceMatcher:
             dpi=dpi,
             cmap=cmap,
             fontsize=fontsize,
-            show_max=show_max,
+            show_max=show_opt,
             shift=True,
         )
 
@@ -585,12 +632,24 @@ class BaseSurfaceMatcher:
 
     def run_z_shift(
         self,
-        interfacial_distances,
-        figsize=(4, 3),
+        interfacial_distances: np.ndarray,
+        figsize: tuple = (4, 3),
         fontsize: int = 12,
         output: str = "z_shift.png",
         dpi: int = 400,
     ):
+        """This function calculates the negated adhesion energy of an interface as a function of the interfacial distance
+
+        Args:
+            interfacial_distances: numpy array of the interfacial distances that should be calculated
+            figsize: Size of the figure in inches (x_size, y_size)
+            fontsize: Fontsize of all the plot labels
+            output: Output file name
+            dpi: Resolution of the figure (dots per inch)
+
+        Returns:
+            The optimal value of the negated adhesion energy (smaller is better, negative = stable, positive = unstable)
+        """
         zeros = np.zeros(len(interfacial_distances))
         shifts = np.c_[zeros, zeros, interfacial_distances - self.d_interface]
 
@@ -636,6 +695,19 @@ class BaseSurfaceMatcher:
         opt_E = np.min(new_y)
         self.opt_d_interface = opt_d
 
+        axs.annotate(
+            "$d_{int}^{opt}$" + f" $= {opt_d:.3f}$",
+            xy=(0.95, 0.95),
+            xycoords="axes fraction",
+            ha="right",
+            va="top",
+            bbox=dict(
+                boxstyle="round,pad=0.3",
+                fc="white",
+                ec="black",
+            ),
+        )
+
         axs.plot(
             new_x,
             new_y,
@@ -649,7 +721,10 @@ class BaseSurfaceMatcher:
             marker="x",
         )
         axs.tick_params(labelsize=fontsize)
-        axs.set_ylabel("$-E_{adh}$ $(eV/\\AA$)$", fontsize=fontsize)
+        axs.set_ylabel(
+            "$-E_{adh}$ (eV/$\\AA^{2}$)",
+            fontsize=fontsize,
+        )
         axs.set_xlabel("Interfacial Distance ($\\AA$)", fontsize=fontsize)
 
         fig.tight_layout()

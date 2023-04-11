@@ -1835,11 +1835,11 @@ class Interface:
 
         oriented_film = Structure(
             lattice=Lattice(new_c_matrix),
-            species=supercell_slab.species,
-            coords=supercell_slab.cart_coords,
+            species=strained_film.species,
+            coords=strained_film.cart_coords,
             coords_are_cartesian=True,
             to_unit_cell=True,
-            site_properties=supercell_slab.site_properties,
+            site_properties=strained_film.site_properties,
         )
 
         return oriented_film

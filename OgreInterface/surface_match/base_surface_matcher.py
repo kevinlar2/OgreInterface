@@ -11,10 +11,11 @@ from mpl_toolkits.axes_grid1 import make_axes_locatable
 from matplotlib.patches import Polygon
 from scipy.interpolate import RectBivariateSpline, CubicSpline
 from copy import deepcopy
-from bayes_opt import BayesianOptimization
-from bayes_opt.logger import JSONLogger
-from bayes_opt.event import Events
-from bayes_opt import SequentialDomainReductionTransformer
+
+# from bayes_opt import BayesianOptimization
+# from bayes_opt.logger import JSONLogger
+# from bayes_opt.event import Events
+# from bayes_opt import SequentialDomainReductionTransformer
 import torch
 from pymatgen.core.structure import Structure
 from pymatgen.core.lattice import Lattice
@@ -236,9 +237,13 @@ class BaseSurfaceMatcher:
 
     # TODO create a function that can write out the shifted structures for DFT calculations and also read in the structure and plot them nicely
     def get_structures_for_DFT(self, output_folder="PES"):
-        # TODO might have to keep track of shifts
-        shifts = self.shifts.reshape(-1, 3).dot(self.inv_matrix)
-        shifts = np.mod(shifts, 1)
+        if not os.path.isdir(output_folder):
+            os.mkdir(output_folder)
+
+        all_shifts = self.shifts
+        unique_shifts = all_shifts[:-1, :-1]
+        shifts = unique_shifts.reshape(-1, 3).dot(self.inv_matrix)
+        # shifts = np.mod(shifts, 1)
 
         for i, shift in enumerate(shifts):
             self.interface.shift_film_inplane(
@@ -247,13 +252,202 @@ class BaseSurfaceMatcher:
                 fractional=True,
             )
             self.interface.write_file(
-                outupt=os.path.join(output_folder, f"POSCAR_{i:04d}")
+                output=os.path.join(output_folder, f"POSCAR_{i:04d}")
             )
             self.interface.shift_film_inplane(
                 x_shift=-shift[0],
                 y_shift=-shift[1],
                 fractional=True,
             )
+
+    def get_structures_for_DFT_z_shift(
+        self,
+        interfacial_distances: np.ndarray,
+        output_folder: str = "z_shift",
+    ) -> None:
+        if not os.path.isdir(output_folder):
+            os.mkdir(output_folder)
+
+        for i, dist in enumerate(interfacial_distances):
+            self.interface.set_interfacial_distance(interfacial_distance=dist)
+            self.interface.write_file(
+                output=os.path.join(output_folder, f"POSCAR_{i:04d}")
+            )
+
+    def plot_DFT_data(
+        self,
+        energies: np.ndarray,
+        sub_energy: float = 0.0,
+        film_energy: float = 0.0,
+        cmap: str = "jet",
+        fontsize: int = 14,
+        output: str = "PES.png",
+        dpi: int = 400,
+        show_opt: bool = False,
+    ) -> float:
+        """This function plots the 2D potential energy surface (PES) from DFT (or other) calculations
+
+        Args:
+            energies: Numpy array of the DFT energies in the same order as the output of the get_structures_for_DFT() function
+            sub_energy: Total energy of the substrate supercell section of the interface (include this for adhesion energy)
+            film_energy: Total energy of the film supercell section of the interface (include this for adhesion energy)
+            cmap: The colormap to use for the PES, any matplotlib compatible color map will work
+            fontsize: Fontsize of all the plot labels
+            output: Output file name
+            dpi: Resolution of the figure (dots per inch)
+            show_opt: Determines if the optimal value is printed on the figure
+
+        Returns:
+            The optimal value of the negated adhesion energy (smaller is better, negative = stable, positive = unstable)
+        """
+        init_shape = (self.X_shape[0] - 1, self.X_shape[1] - 1)
+        unique_energies = energies.reshape(init_shape)
+        interface_energy = np.c_[unique_energies, unique_energies[:, -1]]
+        interface_energy = np.vstack([interface_energy, interface_energy[-1]])
+
+        x_grid = np.linspace(0, 1, self.grid_density_x)
+        y_grid = np.linspace(0, 1, self.grid_density_y)
+        X, Y = np.meshgrid(x_grid, y_grid)
+
+        Z = (
+            -((film_energy + sub_energy) - interface_energy)
+            / self.interface.area
+        )
+
+        a = self.matrix[0, :2]
+        b = self.matrix[1, :2]
+
+        borders = np.vstack([np.zeros(2), a, a + b, b, np.zeros(2)])
+
+        x_size = borders[:, 0].max() - borders[:, 0].min()
+        y_size = borders[:, 1].max() - borders[:, 1].min()
+
+        ratio = y_size / x_size
+
+        if ratio < 1:
+            figx = 5 / ratio
+            figy = 5
+        else:
+            figx = 5
+            figy = 5 * ratio
+
+        fig, ax = plt.subplots(
+            figsize=(figx, figy),
+            dpi=dpi,
+        )
+
+        ax.plot(
+            borders[:, 0],
+            borders[:, 1],
+            color="black",
+            linewidth=1,
+            zorder=300,
+        )
+
+        max_Z = self._plot_surface_matching(
+            fig=fig,
+            ax=ax,
+            X=X,
+            Y=Y,
+            Z=Z,
+            dpi=dpi,
+            cmap=cmap,
+            fontsize=fontsize,
+            show_max=show_opt,
+            shift=True,
+        )
+
+        ax.set_xlim(borders[:, 0].min(), borders[:, 0].max())
+        ax.set_ylim(borders[:, 1].min(), borders[:, 1].max())
+        ax.set_aspect("equal")
+
+        fig.tight_layout()
+        fig.savefig(output, bbox_inches="tight")
+        plt.close(fig)
+
+        return max_Z
+
+    def plot_DFT_z_shift(
+        self,
+        interfacial_distances: np.ndarray,
+        energies: np.ndarray,
+        film_energy: float = 0.0,
+        sub_energy: float = 0.0,
+        figsize: tuple = (4, 3),
+        fontsize: int = 12,
+        output: str = "z_shift.png",
+        dpi: int = 400,
+    ):
+        """This function calculates the negated adhesion energy of an interface as a function of the interfacial distance
+
+        Args:
+            interfacial_distances: numpy array of the interfacial distances that should be calculated
+            figsize: Size of the figure in inches (x_size, y_size)
+            fontsize: Fontsize of all the plot labels
+            output: Output file name
+            dpi: Resolution of the figure (dots per inch)
+
+        Returns:
+            The optimal value of the negated adhesion energy (smaller is better, negative = stable, positive = unstable)
+        """
+        interface_energy = (
+            -((film_energy + sub_energy) - energies) / self.interface.area
+        )
+
+        fig, axs = plt.subplots(
+            figsize=figsize,
+            dpi=dpi,
+        )
+
+        cs = CubicSpline(interfacial_distances, interface_energy)
+        new_x = np.linspace(
+            interfacial_distances.min(),
+            interfacial_distances.max(),
+            201,
+        )
+        new_y = cs(new_x)
+
+        opt_d = new_x[np.argmin(new_y)]
+        opt_E = np.min(new_y)
+        self.opt_d_interface = opt_d
+
+        axs.annotate(
+            "$d_{int}^{opt}$" + f" $= {opt_d:.3f}$",
+            xy=(0.95, 0.95),
+            xycoords="axes fraction",
+            ha="right",
+            va="top",
+            bbox=dict(
+                boxstyle="round,pad=0.3",
+                fc="white",
+                ec="black",
+            ),
+        )
+
+        axs.plot(
+            new_x,
+            new_y,
+            color="black",
+            linewidth=1,
+        )
+        axs.scatter(
+            [opt_d],
+            [opt_E],
+            color="black",
+            marker="x",
+        )
+        axs.tick_params(labelsize=fontsize)
+        axs.set_ylabel(
+            "$-E_{adh}$ (eV/$\\AA^{2}$)",
+            fontsize=fontsize,
+        )
+        axs.set_xlabel("Interfacial Distance ($\\AA$)", fontsize=fontsize)
+
+        fig.tight_layout()
+        fig.savefig(output, bbox_inches="tight")
+        plt.close(fig)
+
+        return opt_E
 
     def get_cart_xy_shifts(self, ab):
         frac_abc = np.c_[ab, np.zeros(len(ab))]
@@ -637,6 +831,7 @@ class BaseSurfaceMatcher:
         fontsize: int = 12,
         output: str = "z_shift.png",
         dpi: int = 400,
+        return_fig_ax: bool = False,
     ):
         """This function calculates the negated adhesion energy of an interface as a function of the interfacial distance
 
@@ -678,6 +873,10 @@ class BaseSurfaceMatcher:
             / self.interface.area
         )
 
+        # np.save(
+        #     "score_function_data.npy",
+        #     np.c_[interfacial_distances, interface_energy],
+        # )
         fig, axs = plt.subplots(
             figsize=figsize,
             dpi=dpi,
@@ -731,4 +930,7 @@ class BaseSurfaceMatcher:
         fig.savefig(output, bbox_inches="tight")
         plt.close(fig)
 
-        return opt_E
+        if return_fig_ax:
+            return opt_E, fig, axs
+        else:
+            return opt_E

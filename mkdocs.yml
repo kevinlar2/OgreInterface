@@ -10,6 +10,7 @@ nav:
       - Zur and McGill Algorithm: lattice_match.md
       - Surface Matching:
         - 'surface_match/ionic_surface_matcher.md'
+        - 'surface_match/base_surface_matcher.md'
         - 'surface_match/sphere_surface_matcher.md'
       - Score Function:
         - 'score_function/born.md'

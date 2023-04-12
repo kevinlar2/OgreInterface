@@ -210,25 +210,17 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
 
             ionic_radius_dict[n] = d
 
+        # ionic_radius_dict[16] = 1.84
+        # print(ionic_radius_dict)
+
         interface_combos = product(interface_atomic_numbers, repeat=2)
         for key in interface_combos:
-            charge_sign = (
-                charge_dict[chemical_symbols[key[0]]]
-                * charge_dict[chemical_symbols[key[1]]]
-            )
+            # charge_sign = (
+            #     charge_dict[chemical_symbols[key[0]]]
+            #     * charge_dict[chemical_symbols[key[1]]]
+            # )
 
-            if charge_sign < 0:
-                ionic_sum_d = (
-                    ionic_radius_dict[key[0]] + ionic_radius_dict[key[1]]
-                )
-                cov_sum_d = cov_radius_dict[key[0]] + cov_radius_dict[key[1]]
-                ionic_sum_d = min(ionic_sum_d, cov_sum_d)
-            else:
-                ionic_sum_d = (
-                    ionic_radius_dict[key[0]] + ionic_radius_dict[key[1]]
-                )
-                cov_sum_d = cov_radius_dict[key[0]] + cov_radius_dict[key[1]]
-                ionic_sum_d = min(ionic_sum_d, cov_sum_d)
+            ionic_sum_d = ionic_radius_dict[key[0]] + ionic_radius_dict[key[1]]
 
             r0_array[:, key[0], key[1]] = ionic_sum_d
             r0_array[:, key[1], key[0]] = ionic_sum_d
@@ -238,17 +230,27 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
         unique_keys = list(map(tuple, unique_keys))
 
         for key in unique_keys:
-            charge_sign = (
-                charge_dict[chemical_symbols[key[0]]]
-                * charge_dict[chemical_symbols[key[1]]]
-            )
+            # charge_sign = (
+            #     charge_dict[chemical_symbols[key[0]]]
+            #     * charge_dict[chemical_symbols[key[1]]]
+            # )
 
-            if charge_sign < 0:
-                ionic_sum_d = (
-                    ionic_radius_dict[key[0]] + ionic_radius_dict[key[1]]
-                )
-            else:
-                ionic_sum_d = cov_radius_dict[key[0]] + cov_radius_dict[key[1]]
+            # if charge_sign < 0:
+            #     ionic_sum_d = (
+            #         ionic_radius_dict[key[0]] + ionic_radius_dict[key[1]]
+            #     )
+            # else:
+            #     ionic_sum_d = cov_radius_dict[key[0]] + cov_radius_dict[key[1]]
+            #     # if key[0] == key[1]:
+            #     #     ionic_sum_d = (
+            #     #         cov_radius_dict[key[0]] + cov_radius_dict[key[1]]
+            #     #     )
+            #     # else:
+            #     #     ionic_sum_d = (
+            #     #         ionic_radius_dict[key[0]] + ionic_radius_dict[key[1]]
+            #     #     )
+
+            ionic_sum_d = ionic_radius_dict[key[0]] + ionic_radius_dict[key[1]]
 
             if key in sub_dict and key in film_dict:
                 sub_d = min(sub_dict[key], ionic_sum_d)

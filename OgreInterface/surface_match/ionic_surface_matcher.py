@@ -188,28 +188,28 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
                 r0_2 = (1 - radius_frac) * d
                 ionic_radii_dict[n[0]].append(r0_1)
                 ionic_radii_dict[n[1]].append(r0_2)
-                print(
-                    f"bond = {n[0]}-{n[1]}",
-                    "",
-                    f"d({n[0]}) = {d1:.3f}",
-                    "",
-                    f"d({n[1]}) = {d2:.3f}",
-                    "",
-                    f"center = {n[0]}",
-                    "",
-                    f"r_pred = {r0_1:.3f}",
-                )
-                print(
-                    f"bond = {n[0]}-{n[1]}",
-                    "",
-                    f"d({n[0]}) = {d1:.3f}",
-                    "",
-                    f"d({n[1]}) = {d2:.3f}",
-                    "",
-                    f"center = {n[1]}",
-                    "",
-                    f"r_pred = {r0_2:.3f}",
-                )
+                # print(
+                #     f"bond = {n[0]}-{n[1]}",
+                #     "",
+                #     f"d({n[0]}) = {d1:.3f}",
+                #     "",
+                #     f"d({n[1]}) = {d2:.3f}",
+                #     "",
+                #     f"center = {n[0]}",
+                #     "",
+                #     f"r_pred = {r0_1:.3f}",
+                # )
+                # print(
+                #     f"bond = {n[0]}-{n[1]}",
+                #     "",
+                #     f"d({n[0]}) = {d1:.3f}",
+                #     "",
+                #     f"d({n[1]}) = {d2:.3f}",
+                #     "",
+                #     f"center = {n[1]}",
+                #     "",
+                #     f"r_pred = {r0_2:.3f}",
+                # )
 
         mean_radius_dict = {k: np.mean(v) for k, v in ionic_radii_dict.items()}
 
@@ -223,23 +223,20 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
         film_dict, film_radii_dict = self._get_neighborhood_info(
             film, charge_dict
         )
-        print(sub_radii_dict)
-        print(film_radii_dict)
 
         interface_atomic_numbers = np.unique(
             np.concatenate([sub.atomic_numbers, film.atomic_numbers])
         )
 
         ionic_radius_dict = {}
-        cov_radius_dict = {
-            n: covalent_radii[n] for n in interface_atomic_numbers
-        }
 
         for n in interface_atomic_numbers:
             element = Element(chemical_symbols[n])
 
             try:
-                d = element.ionic_radii[charge_dict[chemical_symbols[n]]]
+                d = float(
+                    element.ionic_radii[charge_dict[chemical_symbols[n]]]
+                )
             except KeyError:
                 print(
                     f"No ionic radius available for {chemical_symbols[n]}, using the atomic radius instead"
@@ -258,6 +255,7 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
 
             has_film_i = True
             has_film_j = True
+
             if i in sub_radii_dict:
                 sub_r0_i = sub_radii_dict[i]
             else:
@@ -295,94 +293,6 @@ class IonicSurfaceMatcher(BaseSurfaceMatcher):
             r0_array[0, j, i] = film_r0_i + film_r0_j
             r0_array[1, j, i] = iface_i + iface_j
             r0_array[2, j, i] = sub_r0_i + sub_r0_j
-
-            # if key in sub_dict and key in film_dict:
-            #     r0_array[0, key[0], key[1]] = film_d
-            #     r0_array[1, key[0], key[1]] = (sub_d + film_d) / 2
-            #     r0_array[2, key[0], key[1]] = sub_d
-            #     r0_array[0, key[1], key[0]] = film_d
-            #     r0_array[1, key[1], key[0]] = (sub_d + film_d) / 2
-            #     r0_array[2, key[1], key[0]] = sub_d
-
-            # if key in sub_dict and key not in film_dict:
-            #     sub_d = min(sub_dict[key], ionic_sum_d)
-            #     r0_array[0, key[0], key[1]] = sub_d
-            #     r0_array[1, key[0], key[1]] = sub_d
-            #     r0_array[2, key[0], key[1]] = ionic_sum_d
-            #     r0_array[0, key[1], key[0]] = sub_d
-            #     r0_array[1, key[1], key[0]] = sub_d
-            #     r0_array[2, key[1], key[0]] = ionic_sum_d
-
-            # if key not in sub_dict and key in film_dict:
-            #     film_d = min(film_dict[key], ionic_sum_d)
-            #     r0_array[0, key[0], key[1]] = ionic_sum_d
-            #     r0_array[1, key[0], key[1]] = film_d
-            #     r0_array[2, key[0], key[1]] = film_d
-            #     r0_array[0, key[1], key[0]] = ionic_sum_d
-            #     r0_array[1, key[1], key[0]] = film_d
-            #     r0_array[2, key[1], key[0]] = film_d
-
-            # if key not in sub_dict and key not in film_dict:
-            #     r0_array[0, key[0], key[1]] = ionic_sum_d
-            #     r0_array[1, key[0], key[1]] = ionic_sum_d
-            #     r0_array[2, key[0], key[1]] = ionic_sum_d
-            #     r0_array[0, key[1], key[0]] = ionic_sum_d
-            #     r0_array[1, key[1], key[0]] = ionic_sum_d
-            #     r0_array[2, key[1], key[0]] = ionic_sum_d
-
-        # for key in interface_combos:
-        #     # charge_sign = (
-        #     #     charge_dict[chemical_symbols[key[0]]]
-        #     #     * charge_dict[chemical_symbols[key[1]]]
-        #     # )
-
-        #     ionic_sum_d = ionic_radius_dict[key[0]] + ionic_radius_dict[key[1]]
-
-        #     r0_array[:, key[0], key[1]] = ionic_sum_d
-        #     r0_array[:, key[1], key[0]] = ionic_sum_d
-
-        # all_keys = np.array(list(sub_dict.keys()) + list(film_dict.keys()))
-        # unique_keys = np.unique(all_keys, axis=0)
-        # unique_keys = list(map(tuple, unique_keys))
-
-        # for key in unique_keys:
-        #     ionic_sum_d = ionic_radius_dict[key[0]] + ionic_radius_dict[key[1]]
-
-        #     if key in sub_dict and key in film_dict:
-        #         sub_d = min(sub_dict[key], ionic_sum_d)
-        #         film_d = min(film_dict[key], ionic_sum_d)
-        #         r0_array[0, key[0], key[1]] = film_d
-        #         r0_array[1, key[0], key[1]] = (sub_d + film_d) / 2
-        #         r0_array[2, key[0], key[1]] = sub_d
-        #         r0_array[0, key[1], key[0]] = film_d
-        #         r0_array[1, key[1], key[0]] = (sub_d + film_d) / 2
-        #         r0_array[2, key[1], key[0]] = sub_d
-
-        #     if key in sub_dict and key not in film_dict:
-        #         sub_d = min(sub_dict[key], ionic_sum_d)
-        #         r0_array[0, key[0], key[1]] = sub_d
-        #         r0_array[1, key[0], key[1]] = sub_d
-        #         r0_array[2, key[0], key[1]] = ionic_sum_d
-        #         r0_array[0, key[1], key[0]] = sub_d
-        #         r0_array[1, key[1], key[0]] = sub_d
-        #         r0_array[2, key[1], key[0]] = ionic_sum_d
-
-        #     if key not in sub_dict and key in film_dict:
-        #         film_d = min(film_dict[key], ionic_sum_d)
-        #         r0_array[0, key[0], key[1]] = ionic_sum_d
-        #         r0_array[1, key[0], key[1]] = film_d
-        #         r0_array[2, key[0], key[1]] = film_d
-        #         r0_array[0, key[1], key[0]] = ionic_sum_d
-        #         r0_array[1, key[1], key[0]] = film_d
-        #         r0_array[2, key[1], key[0]] = film_d
-
-        #     if key not in sub_dict and key not in film_dict:
-        #         r0_array[0, key[0], key[1]] = ionic_sum_d
-        #         r0_array[1, key[0], key[1]] = ionic_sum_d
-        #         r0_array[2, key[0], key[1]] = ionic_sum_d
-        #         r0_array[0, key[1], key[0]] = ionic_sum_d
-        #         r0_array[1, key[1], key[0]] = ionic_sum_d
-        #         r0_array[2, key[1], key[0]] = ionic_sum_d
 
         return torch.from_numpy(r0_array).to(dtype=torch.float32)
 

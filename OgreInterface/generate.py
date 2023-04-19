@@ -233,6 +233,7 @@ class SurfaceGenerator(Sequence):
             prim_structure = self._add_symmetry_info(
                 conventional_structure, return_primitive=True
             )
+            print(utils.conv_a_to_b(prim_structure, conventional_structure))
             # prim_structure = sg.get_primitive_standard_structure()
             prim_atoms = AseAtomsAdaptor.get_atoms(prim_structure)
             conventional_atoms = AseAtomsAdaptor.get_atoms(

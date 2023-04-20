@@ -16,6 +16,7 @@ from pymatgen.analysis.graphs import StructureGraph
 from pymatgen.analysis.local_env import JmolNN, CrystalNN
 import networkx as nx
 import numpy as np
+import spglib
 
 
 from tqdm import tqdm
@@ -114,13 +115,13 @@ class SurfaceGenerator(Sequence):
         miller_index: List[int],
         layers: int,
         vacuum: float,
-        convert_to_conventional: bool = True,
+        refine_structure: bool = True,
         generate_all: bool = True,
         filter_ionic_slabs: bool = False,
         lazy: bool = False,
     ) -> None:
         super().__init__()
-        self.convert_to_conventional = convert_to_conventional
+        self.refine_structure = refine_structure
 
         (
             self.bulk_structure,
@@ -227,14 +228,35 @@ class SurfaceGenerator(Sequence):
                 f"structure accepts 'pymatgen.core.structure.Structure' or 'ase.Atoms' not '{type(atoms_or_struc).__name__}'"
             )
 
-        if self.convert_to_conventional:
+        if self.refine_structure:
+            init_lattice = init_structure.lattice.matrix
+            init_positions = init_structure.frac_coords
+            init_numbers = np.array(init_structure.atomic_numbers)
+            init_cell = (init_lattice, init_positions, init_numbers)
+
+            (
+                conv_lattice,
+                conv_positions,
+                conv_numbers,
+            ) = spglib.standardize_cell(
+                init_cell,
+                to_primitive=False,
+                no_idealize=False,
+            )
+
+            conventional_structure = Structure(
+                lattice=Lattice(conv_lattice),
+                species=conv_numbers,
+                coords=conv_positions,
+                to_unit_cell=True,
+                coords_are_cartesian=False,
+            )
+
             sg = SpacegroupAnalyzer(init_structure)
             conventional_structure = sg.get_conventional_standard_structure()
             prim_structure = self._add_symmetry_info(
                 conventional_structure, return_primitive=True
             )
-            print(utils.conv_a_to_b(prim_structure, conventional_structure))
-            # prim_structure = sg.get_primitive_standard_structure()
             prim_atoms = AseAtomsAdaptor.get_atoms(prim_structure)
             conventional_atoms = AseAtomsAdaptor.get_atoms(
                 conventional_structure
@@ -274,6 +296,57 @@ class SurfaceGenerator(Sequence):
         return unique_operations
 
     def _add_symmetry_info(self, struc, return_primitive=False):
+        init_lattice = struc.lattice.matrix
+        init_positions = struc.frac_coords
+        init_numbers = np.array(struc.atomic_numbers)
+        init_cell = (init_lattice, init_positions, init_numbers)
+
+        init_dataset = spglib.get_symmetry_dataset(init_cell)
+
+        struc.add_site_property(
+            "bulk_wyckoff",
+            init_dataset["wyckoffs"],
+        )
+
+        struc.add_site_property(
+            "bulk_equivalent",
+            init_dataset["equivalent_atoms"].tolist(),
+        )
+
+        if return_primitive:
+            prim_mapping = init_dataset["mapping_to_primitive"]
+            _, prim_inds = np.unique(prim_mapping, return_index=True)
+
+            (
+                prim_lattice,
+                prim_positions,
+                prim_numbers,
+            ) = spglib.standardize_cell(
+                init_cell,
+                to_primitive=True,
+                no_idealize=True,
+            )
+
+            prim_bulk = Structure(
+                lattice=Lattice(prim_lattice),
+                species=prim_numbers,
+                coords=prim_positions,
+                to_unit_cell=True,
+                coords_are_cartesian=False,
+            )
+
+            prim_bulk.add_site_property(
+                "bulk_wyckoff",
+                [init_dataset["wyckoffs"][i] for i in prim_inds],
+            )
+            prim_bulk.add_site_property(
+                "bulk_equivalent",
+                init_dataset["equivalent_atoms"][prim_inds].tolist(),
+            )
+
+            return prim_bulk
+
+    def _add_symmetry_info_old(self, struc, return_primitive=False):
         sg = SpacegroupAnalyzer(struc)
         dataset = sg.get_symmetry_dataset()
         struc.add_site_property("bulk_wyckoff", dataset["wyckoffs"])
@@ -299,6 +372,19 @@ class SurfaceGenerator(Sequence):
             return prim_bulk
 
     def _add_symmetry_info_molecule(self, struc):
+        lattice = struc.lattice.matrix
+        positions = struc.frac_coords
+        numbers = np.array(struc.atomic_numbers)
+        cell = (lattice, positions, numbers)
+        dataset = spglib.get_symmetry_dataset(cell)
+        wyckoffs = dataset["wyckoffs"]
+        equivalent_atoms = dataset["equivalent_atoms"]
+        molecule_index = struc.site_properties["molecule_index"]
+        equivalent_molecules = [molecule_index[i] for i in equivalent_atoms]
+        struc.add_site_property("bulk_wyckoff", wyckoffs)
+        struc.add_site_property("bulk_equivalent", equivalent_molecules)
+
+    def _add_symmetry_info_molecule_old(self, struc):
         sg = SpacegroupAnalyzer(struc)
         dataset = sg.get_symmetry_dataset()
         wyckoffs = dataset["wyckoffs"]
@@ -1039,7 +1125,7 @@ class OrganicSurfaceGenerator(SurfaceGenerator):
             miller_index=miller_index,
             layers=layers,
             vacuum=vacuum,
-            convert_to_conventional=False,
+            refine_structure=False,
             generate_all=generate_all,
             filter_ionic_slabs=False,
             lazy=True,

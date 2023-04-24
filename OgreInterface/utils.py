@@ -14,6 +14,7 @@ import collections
 from pymatgen.analysis.graphs import StructureGraph
 from pymatgen.analysis.local_env import JmolNN
 import networkx as nx
+import spglib
 
 
 def _get_colored_molecules(struc, output):
@@ -28,6 +29,37 @@ def _get_colored_molecules(struc, output):
 
     colored_struc.sort()
     Poscar(colored_struc).write_file(output)
+
+
+def spglib_standardize(
+    structure: Structure,
+    to_primitive: bool = False,
+    no_idealize: bool = False,
+) -> Structure:
+    init_lattice = structure.lattice.matrix
+    init_positions = structure.frac_coords
+    init_numbers = np.array(structure.atomic_numbers)
+    init_cell = (init_lattice, init_positions, init_numbers)
+
+    (
+        standardized_lattice,
+        standardized_positions,
+        standardized_numbers,
+    ) = spglib.standardize_cell(
+        init_cell,
+        to_primitive=to_primitive,
+        no_idealize=no_idealize,
+    )
+
+    standardized_structure = Structure(
+        lattice=Lattice(standardized_lattice),
+        species=standardized_numbers,
+        coords=standardized_positions,
+        to_unit_cell=True,
+        coords_are_cartesian=False,
+    )
+
+    return standardized_structure
 
 
 def apply_op_to_mols(struc, op):

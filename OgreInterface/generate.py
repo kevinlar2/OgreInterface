@@ -38,8 +38,8 @@ SelfSurfaceGenerator = TypeVar(
     "SelfSurfaceGenerator", bound="SurfaceGenerator"
 )
 
-SelfOrganicSurfaceGenerator = TypeVar(
-    "SelfOrganicSurfaceGenerator", bound="OrganicSurfaceGenerator"
+SelfMolecularSurfaceGenerator = TypeVar(
+    "SelfMolecularSurfaceGenerator", bound="MolecularSurfaceGenerator"
 )
 
 SelfInterfaceGenerator = TypeVar(
@@ -77,11 +77,14 @@ class SurfaceGenerator(Sequence):
         miller_index: Miller index of the surface
         layers: Number of layers to include in the surface
         vacuum: Size of the vacuum to include over the surface in Angstroms
+        refine_structure: Determines if the structure is first refined to it's standard settings according to it's spacegroup.
+            This is done using spglib.standardize_cell(cell, to_primitive=False, no_idealize=False). Mainly this is usefull if
+            users want to input a primitive cell of a structure instead of generating a conventional cell because most DFT people
+            work exclusively with the primitive sturcture so we always have it on hand.
         generate_all: Determines if all possible surface terminations are generated.
-        filter_ionic_slab: Determines if the terminations of ionic crystals should be filtered out based on their
-            predicted stability calculated using the IonicScoreFunction
         lazy: Determines if the surfaces are actually generated, or if only the surface basis vectors are found.
             (this is used for the MillerIndex search to make things faster)
+        supress_warnings: This gives the user the option to supress warnings if they know what they are doing and don't need to see the warning messages
 
     Attributes:
         slabs (list): List of OgreInterface Surface objects with different surface terminations.
@@ -93,8 +96,6 @@ class SurfaceGenerator(Sequence):
         layers (int): Number of layers to include in the surface
         vacuum (float): Size of the vacuum to include over the surface in Angstroms
         generate_all (bool): Determines if all possible surface terminations are generated.
-        filter_ionic_slab (bool): Determines if the terminations of ionic crystals should be filtered out based on their
-            predicted stability calculated using the IonicScoreFunction
         lazy (bool): Determines if the surfaces are actually generated, or if only the surface basis vectors are found.
             (this is used for the MillerIndex search to make things faster)
         oriented_bulk_structure (Structure): Pymatgen Structure class of the smallest building block of the slab,
@@ -117,11 +118,12 @@ class SurfaceGenerator(Sequence):
         vacuum: float,
         refine_structure: bool = True,
         generate_all: bool = True,
-        filter_ionic_slabs: bool = False,
         lazy: bool = False,
+        supress_warnings: bool = False,
     ) -> None:
         super().__init__()
         self.refine_structure = refine_structure
+        self._supress_warnings = supress_warnings
 
         (
             self.bulk_structure,
@@ -140,7 +142,6 @@ class SurfaceGenerator(Sequence):
         self.layers = layers
         self.vacuum = vacuum
         self.generate_all = generate_all
-        self.filter_ionic_slabs = filter_ionic_slabs
         self.lazy = lazy
         (
             self.oriented_bulk_structure,
@@ -184,10 +185,10 @@ class SurfaceGenerator(Sequence):
         miller_index: List[int],
         layers: int,
         vacuum: float,
-        convert_to_conventional: bool = True,
+        refine_structure: bool = True,
         generate_all: bool = True,
-        filter_ionic_slabs: bool = False,
         lazy: bool = False,
+        supress_warnings: bool = False,
     ) -> SelfSurfaceGenerator:
         """Creating a SurfaceGenerator from a file (i.e. POSCAR, cif, etc)
 
@@ -197,10 +198,13 @@ class SurfaceGenerator(Sequence):
             layers: Number of layers to include in the surface
             vacuum: Size of the vacuum to include over the surface in Angstroms
             generate_all: Determines if all possible surface terminations are generated
-            filter_ionic_slab: Determines if the terminations of ionic crystals should be filtered out based on their
-                predicted stability calculated using the IonicScoreFunction
+            refine_structure: Determines if the structure is first refined to it's standard settings according to it's spacegroup.
+                This is done using spglib.standardize_cell(cell, to_primitive=False, no_idealize=False). Mainly this is usefull if
+                users want to input a primitive cell of a structure instead of generating a conventional cell because most DFT people
+                work exclusively with the primitive sturcture so we always have it on hand.
             lazy: Determines if the surfaces are actually generated, or if only the surface basis vectors are found.
                 (this is used for the MillerIndex search to make things faster)
+            supress_warnings: This gives the user the option to supress warnings if they know what they are doing and don't need to see the warning messages
 
         Returns:
             SurfaceGenerator
@@ -212,10 +216,10 @@ class SurfaceGenerator(Sequence):
             miller_index,
             layers,
             vacuum,
-            convert_to_conventional,
+            refine_structure,
             generate_all,
-            filter_ionic_slabs,
             lazy,
+            supress_warnings,
         )
 
     def _get_bulk(self, atoms_or_struc):
@@ -229,31 +233,59 @@ class SurfaceGenerator(Sequence):
             )
 
         if self.refine_structure:
-            init_lattice = init_structure.lattice.matrix
-            init_positions = init_structure.frac_coords
-            init_numbers = np.array(init_structure.atomic_numbers)
-            init_cell = (init_lattice, init_positions, init_numbers)
-
-            (
-                conv_lattice,
-                conv_positions,
-                conv_numbers,
-            ) = spglib.standardize_cell(
-                init_cell,
+            conventional_structure = utils.spglib_standardize(
+                init_structure,
                 to_primitive=False,
                 no_idealize=False,
             )
 
-            conventional_structure = Structure(
-                lattice=Lattice(conv_lattice),
-                species=conv_numbers,
-                coords=conv_positions,
-                to_unit_cell=True,
-                coords_are_cartesian=False,
+            init_angles = init_structure.lattice.angles
+            init_lengths = init_structure.lattice.lengths
+            init_length_and_angles = np.concatenate(
+                [list(init_lengths), list(init_angles)]
             )
 
-            sg = SpacegroupAnalyzer(init_structure)
-            conventional_structure = sg.get_conventional_standard_structure()
+            conv_angles = conventional_structure.lattice.angles
+            conv_lengths = conventional_structure.lattice.lengths
+            conv_length_and_angles = np.concatenate(
+                [list(conv_lengths), list(conv_angles)]
+            )
+
+            if not np.isclose(
+                conv_length_and_angles - init_length_and_angles, 0
+            ).all():
+                if not self._supress_warnings:
+                    labels = ["a", "b", "c", "alpha", "beta", "gamma"]
+                    init_cell_str = ", ".join(
+                        [
+                            f"{label} = {val:.3f}"
+                            for label, val in zip(
+                                labels, init_length_and_angles
+                            )
+                        ]
+                    )
+                    conv_cell_str = ", ".join(
+                        [
+                            f"{label} = {val:.3f}"
+                            for label, val in zip(
+                                labels, conv_length_and_angles
+                            )
+                        ]
+                    )
+                    warning_str = "\n".join(
+                        [
+                            "----------------------------------------------------------",
+                            "WARNING: The refined cell is different from the input cell",
+                            f"Initial: {init_cell_str}",
+                            f"Refined: {conv_cell_str}",
+                            "Make sure the input miller index is for the refined structure, otherwise set refine_structure=False",
+                            "To turn off this warning set supress_warnings=True",
+                            "----------------------------------------------------------",
+                            "",
+                        ]
+                    )
+                    print(warning_str)
+
             prim_structure = self._add_symmetry_info(
                 conventional_structure, return_primitive=True
             )
@@ -271,12 +303,14 @@ class SurfaceGenerator(Sequence):
         else:
             if "molecule_index" in init_structure.site_properties:
                 self._add_symmetry_info_molecule(init_structure)
+                # TODO: Primitive structure with spglib for molecular crystals
+                prim_structure = init_structure.get_primitive_structure()
             else:
-                self._add_symmetry_info(init_structure, return_primitive=False)
+                prim_structure = self._add_symmetry_info(
+                    init_structure, return_primitive=True
+                )
 
             init_atoms = AseAtomsAdaptor().get_atoms(init_structure)
-
-            prim_structure = init_structure.get_primitive_structure()
             prim_atoms = AseAtomsAdaptor().get_atoms(prim_structure)
 
             # utils._get_colored_molecules(
@@ -317,22 +351,10 @@ class SurfaceGenerator(Sequence):
             prim_mapping = init_dataset["mapping_to_primitive"]
             _, prim_inds = np.unique(prim_mapping, return_index=True)
 
-            (
-                prim_lattice,
-                prim_positions,
-                prim_numbers,
-            ) = spglib.standardize_cell(
-                init_cell,
+            prim_bulk = utils.spglib_standardize(
+                structure=struc,
                 to_primitive=True,
                 no_idealize=True,
-            )
-
-            prim_bulk = Structure(
-                lattice=Lattice(prim_lattice),
-                species=prim_numbers,
-                coords=prim_positions,
-                to_unit_cell=True,
-                coords_are_cartesian=False,
             )
 
             prim_bulk.add_site_property(
@@ -1030,10 +1052,10 @@ class SurfaceGenerator(Sequence):
         }
 
 
-class OrganicSurfaceGenerator(SurfaceGenerator):
-    """Class for generating surfaces from a given bulk structure.
+class MolecularSurfaceGenerator(SurfaceGenerator):
+    """Class for generating surfaces from a given bulk molecular crystal structure.
 
-    The SurfaceGenerator classes generates surfaces with all possible terminations and contains
+    The MolecularSurfaceGenerator class generates surfaces with all possible terminations and contains
     information pertinent to generating interfaces with the InterfaceGenerator.
 
     Examples:
@@ -1068,8 +1090,6 @@ class OrganicSurfaceGenerator(SurfaceGenerator):
         layers (int): Number of layers to include in the surface
         vacuum (float): Size of the vacuum to include over the surface in Angstroms
         generate_all (bool): Determines if all possible surface terminations are generated.
-        filter_ionic_slab (bool): Determines if the terminations of ionic crystals should be filtered out based on their
-            predicted stability calculated using the IonicScoreFunction
         lazy (bool): Determines if the surfaces are actually generated, or if only the surface basis vectors are found.
             (this is used for the MillerIndex search to make things faster)
         oriented_bulk_structure (Structure): Pymatgen Structure class of the smallest building block of the slab,
@@ -1095,6 +1115,14 @@ class OrganicSurfaceGenerator(SurfaceGenerator):
     ) -> None:
         # Get the primitive structure to label the molecuels
         prim_bulk = bulk.get_primitive_structure()
+        print(
+            "TODO: Use spglib for molecular crystals. Need to think about indexing more"
+        )
+        # prim_bulk = utils.spglib_standardize(
+        #     bulk,
+        #     to_primitive=True,
+        #     no_idealize=True,
+        # )
 
         # Get the primitive to conventional transformation matrix
         prim_to_conv = np.round(utils.conv_a_to_b(prim_bulk, bulk), 3)
@@ -1127,7 +1155,6 @@ class OrganicSurfaceGenerator(SurfaceGenerator):
             vacuum=vacuum,
             refine_structure=False,
             generate_all=generate_all,
-            filter_ionic_slabs=False,
             lazy=True,
         )
 
@@ -1160,8 +1187,8 @@ class OrganicSurfaceGenerator(SurfaceGenerator):
         vacuum: float,
         generate_all: bool = True,
         lazy: bool = False,
-    ) -> SelfOrganicSurfaceGenerator:
-        """Creating a OrganicSurfaceGenerator from a file (i.e. POSCAR, cif, etc)
+    ) -> SelfMolecularSurfaceGenerator:
+        """Creating a MolecularSurfaceGenerator from a file (i.e. POSCAR, cif, etc)
 
         Args:
             filename: File path to the structure file
@@ -1173,7 +1200,7 @@ class OrganicSurfaceGenerator(SurfaceGenerator):
                 (this is used for the MillerIndex search to make things faster)
 
         Returns:
-            OrganicSurfaceGenerator
+            MolecularSurfaceGenerator
         """
         structure = Structure.from_file(filename=filename)
 

@@ -5,7 +5,7 @@ from OgreInterface.score_function.generate_inputs import (
 )
 from typing import List
 import numpy as np
-from matplotlib.colors import Normalize
+from matplotlib.colors import Normalize, ListedColormap
 import matplotlib.pyplot as plt
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 from matplotlib.patches import Polygon
@@ -302,8 +302,8 @@ class BaseSurfaceMatcher:
         """
         init_shape = (self.X_shape[0] - 1, self.X_shape[1] - 1)
         unique_energies = energies.reshape(init_shape)
-        interface_energy = np.c_[unique_energies, unique_energies[:, -1]]
-        interface_energy = np.vstack([interface_energy, interface_energy[-1]])
+        interface_energy = np.c_[unique_energies, unique_energies[:, 0]]
+        interface_energy = np.vstack([interface_energy, interface_energy[0]])
 
         x_grid = np.linspace(0, 1, self.grid_density_x)
         y_grid = np.linspace(0, 1, self.grid_density_y)
@@ -476,13 +476,59 @@ class BaseSurfaceMatcher:
         ax.set_xlabel(r"Shift in $x$ ($\AA$)", fontsize=fontsize)
         ax.set_ylabel(r"Shift in $y$ ($\AA$)", fontsize=fontsize)
 
+        mpl_diverging_names = [
+            "PiYG",
+            "PRGn",
+            "BrBG",
+            "PuOr",
+            "RdGy",
+            "RdBu",
+            "RdYlBu",
+            "RdYlGn",
+            "Spectral",
+            "coolwarm",
+            "bwr",
+            "seismic",
+        ]
+        cm_diverging_names = [
+            "broc",
+            "cork",
+            "vik",
+            "lisbon",
+            "tofino",
+            "berlin",
+            "roma",
+            "bam",
+            "vanimo",
+        ]
+        diverging_names = mpl_diverging_names + cm_diverging_names
+
+        min_Z = np.nanmin(Z)
+        max_Z = np.nanmax(Z)
+        if type(cmap) == str:
+            if cmap in diverging_names:
+                bound = np.max([np.abs(min_Z), np.abs(max_Z)])
+                norm = Normalize(vmin=-bound, vmax=bound)
+            else:
+                norm = Normalize(vmin=min_Z, vmax=max_Z)
+        elif type(cmap) == ListedColormap:
+            name = cmap.name
+            if name in diverging_names:
+                bound = np.max([np.abs(min_Z), np.abs(max_Z)])
+                norm = Normalize(vmin=-bound, vmax=bound)
+            else:
+                norm = Normalize(vmin=min_Z, vmax=max_Z)
+        else:
+            norm = Normalize(vmin=min_Z, vmax=max_Z)
+
         im = ax.contourf(
             X,
             Y,
             Z,
             cmap=cmap,
             levels=200,
-            norm=Normalize(vmin=np.nanmin(Z), vmax=np.nanmax(Z)),
+            # norm=Normalize(vmin=np.nanmin(Z), vmax=np.nanmax(Z)),
+            norm=norm,
         )
 
         if add_color_bar:
@@ -716,6 +762,7 @@ class BaseSurfaceMatcher:
         output: str = "PES.png",
         dpi: int = 400,
         show_opt: bool = False,
+        save_raw_data_file=None,
     ) -> float:
         """This function calculates the 2D potential energy surface (PES)
 
@@ -725,6 +772,9 @@ class BaseSurfaceMatcher:
             output: Output file name
             dpi: Resolution of the figure (dots per inch)
             show_opt: Determines if the optimal value is printed on the figure
+            save_raw_data_file: If you put a valid file path (i.e. anything ending with .npz) then the
+                raw data will be saved there. It can be loaded in via data = np.load(save_raw_data_file)
+                and the data is: x_shifts = data["x_shifts"], y_shifts = data["y_shifts"], energies = data["energies"]
 
         Returns:
             The optimal value of the negated adhesion energy (smaller is better, negative = stable, positive = unstable)
@@ -770,6 +820,19 @@ class BaseSurfaceMatcher:
             -((film_energy + sub_energy) - interface_energy)
             / self.interface.area
         )
+
+        if save_raw_data_file is not None:
+            if save_raw_data_file.split(".")[-1] != "npz":
+                save_raw_data_file = ".".join(
+                    save_raw_data_file.split(".")[:-1] + ["npz"]
+                )
+
+            np.savez(
+                save_raw_data_file,
+                x_shifts=X,
+                y_shifts=Y,
+                energies=Z,
+            )
 
         a = self.matrix[0, :2]
         b = self.matrix[1, :2]
@@ -831,7 +894,7 @@ class BaseSurfaceMatcher:
         fontsize: int = 12,
         output: str = "z_shift.png",
         dpi: int = 400,
-        return_fig_ax: bool = False,
+        save_raw_data_file=None,
     ):
         """This function calculates the negated adhesion energy of an interface as a function of the interfacial distance
 
@@ -841,6 +904,9 @@ class BaseSurfaceMatcher:
             fontsize: Fontsize of all the plot labels
             output: Output file name
             dpi: Resolution of the figure (dots per inch)
+            save_raw_data_file: If you put a valid file path (i.e. anything ending with .npz) then the
+                raw data will be saved there. It can be loaded in via data = np.load(save_raw_data_file)
+                and the data is: interfacial_distances = data["interfacial_distances"], energies = data["energies"]
 
         Returns:
             The optimal value of the negated adhesion energy (smaller is better, negative = stable, positive = unstable)
@@ -873,10 +939,18 @@ class BaseSurfaceMatcher:
             / self.interface.area
         )
 
-        # np.save(
-        #     "score_function_data.npy",
-        #     np.c_[interfacial_distances, interface_energy],
-        # )
+        if save_raw_data_file is not None:
+            if save_raw_data_file.split(".")[-1] != "npz":
+                save_raw_data_file = ".".join(
+                    save_raw_data_file.split(".")[:-1] + ["npz"]
+                )
+
+            np.savez(
+                save_raw_data_file,
+                interfacial_distances=interfacial_distances,
+                energies=interface_energy,
+            )
+
         fig, axs = plt.subplots(
             figsize=figsize,
             dpi=dpi,
@@ -930,7 +1004,4 @@ class BaseSurfaceMatcher:
         fig.savefig(output, bbox_inches="tight")
         plt.close(fig)
 
-        if return_fig_ax:
-            return opt_E, fig, axs
-        else:
-            return opt_E
+        return opt_E

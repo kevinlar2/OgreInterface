@@ -201,7 +201,7 @@ class SurfaceGenerator(Sequence):
             refine_structure: Determines if the structure is first refined to it's standard settings according to it's spacegroup.
                 This is done using spglib.standardize_cell(cell, to_primitive=False, no_idealize=False). Mainly this is usefull if
                 users want to input a primitive cell of a structure instead of generating a conventional cell because most DFT people
-                work exclusively with the primitive sturcture so we always have it on hand.
+                work exclusively with the primitive structure so we always have it on hand.
             lazy: Determines if the surfaces are actually generated, or if only the surface basis vectors are found.
                 (this is used for the MillerIndex search to make things faster)
             supress_warnings: This gives the user the option to supress warnings if they know what they are doing and don't need to see the warning messages

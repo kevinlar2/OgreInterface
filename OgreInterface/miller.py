@@ -39,8 +39,10 @@ class MillerSearch(object):
         max_angle_strain: Angle strain tolerance for the InterfaceGenerator
         max_linear_strain: Lattice vectors length mismatch tolerance for the InterfaceGenerator
         max_area: Maximum area of the matched supercells
-        convert_to_conventional: Determines if the input structure is converted to it's conventional standard structure according to
-            the Pymatgen SpacegroupAnalyzer.
+        refine_structure: Determines if the structure is first refined to it's standard settings according to it's spacegroup.
+            This is done using spglib.standardize_cell(cell, to_primitive=False, no_idealize=False). Mainly this is usefull if
+            users want to input a primitive cell of a structure instead of generating a conventional cell because most DFT people
+            work exclusively with the primitive structure so we always have it on hand.
 
     Attributes:
         substrate (Structure): Pymatgen Structure of the substrate
@@ -51,8 +53,10 @@ class MillerSearch(object):
         max_angle_strain (float): Angle strain tolerance for the InterfaceGenerator
         max_linear_strain (float): Lattice vectors length mismatch tolerance for the InterfaceGenerator
         max_area (float): Maximum area of the matched supercells
-        convert_to_conventional (bool): Determines if the input structure is converted to it's conventional standard structure according to
-            the Pymatgen SpacegroupAnalyzer.
+        refine_structure: Determines if the structure is first refined to it's standard settings according to it's spacegroup.
+            This is done using spglib.standardize_cell(cell, to_primitive=False, no_idealize=False). Mainly this is usefull if
+            users want to input a primitive cell of a structure instead of generating a conventional cell because most DFT people
+            work exclusively with the primitive structure so we always have it on hand.
         substrate_inds (list): List of unique substrate surface miller indices
         film_inds (list): List of unique film surface miller indices
     """
@@ -67,9 +71,9 @@ class MillerSearch(object):
         max_angle_strain: float = 0.01,
         max_linear_strain: float = 0.01,
         max_area: float = 500.0,
-        convert_to_conventional: bool = True,
+        refine_structure: bool = True,
     ) -> None:
-        self.convert_to_conventional = convert_to_conventional
+        self.refine_structure = refine_structure
         if type(substrate) == str:
             self.substrate, _ = self._get_bulk(Structure.from_file(substrate))
         else:
@@ -107,16 +111,93 @@ class MillerSearch(object):
                 f"structure accepts 'pymatgen.core.structure.Structure' or 'ase.Atoms' not '{type(atoms_or_struc).__name__}'"
             )
 
-        if self.convert_to_conventional:
-            sg = SpacegroupAnalyzer(init_structure)
-            conventional_structure = sg.get_conventional_standard_structure()
-            prim_structure = sg.get_primitive_standard_structure()
+        if self.refine_structure:
+            conventional_structure = utils.spglib_standardize(
+                init_structure,
+                to_primitive=False,
+                no_idealize=False,
+            )
 
-            return (conventional_structure, prim_structure)
+            init_angles = init_structure.lattice.angles
+            init_lengths = init_structure.lattice.lengths
+            init_length_and_angles = np.concatenate(
+                [list(init_lengths), list(init_angles)]
+            )
+
+            conv_angles = conventional_structure.lattice.angles
+            conv_lengths = conventional_structure.lattice.lengths
+            conv_length_and_angles = np.concatenate(
+                [list(conv_lengths), list(conv_angles)]
+            )
+
+            if not np.isclose(
+                conv_length_and_angles - init_length_and_angles, 0
+            ).all():
+                if not self._supress_warnings:
+                    labels = ["a", "b", "c", "alpha", "beta", "gamma"]
+                    init_cell_str = ", ".join(
+                        [
+                            f"{label} = {val:.3f}"
+                            for label, val in zip(
+                                labels, init_length_and_angles
+                            )
+                        ]
+                    )
+                    conv_cell_str = ", ".join(
+                        [
+                            f"{label} = {val:.3f}"
+                            for label, val in zip(
+                                labels, conv_length_and_angles
+                            )
+                        ]
+                    )
+                    warning_str = "\n".join(
+                        [
+                            "----------------------------------------------------------",
+                            "WARNING: The refined cell is different from the input cell",
+                            f"Initial: {init_cell_str}",
+                            f"Refined: {conv_cell_str}",
+                            "Make sure the input miller index is for the refined structure, otherwise set refine_structure=False",
+                            "To turn off this warning set supress_warnings=True",
+                            "----------------------------------------------------------",
+                            "",
+                        ]
+                    )
+                    print(warning_str)
+
+            conventional_atoms = AseAtomsAdaptor.get_atoms(
+                conventional_structure
+            )
+
+            return (
+                conventional_structure,
+                conventional_atoms,
+            )
         else:
-            prim_structure = init_structure.get_primitive_structure()
+            init_atoms = AseAtomsAdaptor().get_atoms(init_structure)
 
-            return init_structure, prim_structure
+            return init_structure, init_atoms
+
+    # def _get_bulk(self, atoms_or_struc):
+    #     if type(atoms_or_struc) == Atoms:
+    #         init_structure = AseAtomsAdaptor.get_structure(atoms_or_struc)
+    #     elif type(atoms_or_struc) == Structure:
+    #         init_structure = atoms_or_struc
+    #     else:
+    #         raise TypeError(
+    #             f"structure accepts 'pymatgen.core.structure.Structure' or 'ase.Atoms' not '{type(atoms_or_struc).__name__}'"
+    #         )
+
+    #     if self.convert_to_conventional:
+    #         sg = SpacegroupAnalyzer(init_structure)
+    #         conventional_structure = sg.get_conventional_standard_structure()
+    #         prim_structure = sg.get_primitive_standard_structure()
+
+    #         return (conventional_structure, prim_structure)
+    #     else:
+    #         prim_structure = init_structure.get_primitive_structure()
+
+    #         return init_structure, prim_structure
 
     # def _get_bulk(self, atoms_or_struc):
     #     if type(atoms_or_struc) == Atoms:
@@ -253,7 +334,7 @@ class MillerSearch(object):
                 vacuum=10,
                 generate_all=False,
                 lazy=True,
-                convert_to_conventional=self.convert_to_conventional,
+                refine_structure=self.refine_structure,
             )
             sub_inplane_vectors = sg_sub.inplane_vectors
             sub_area = np.linalg.norm(
@@ -271,7 +352,7 @@ class MillerSearch(object):
                 vacuum=10,
                 generate_all=False,
                 lazy=True,
-                convert_to_conventional=self.convert_to_conventional,
+                refine_structure=self.refine_structure,
             )
             film_inplane_vectors = sg_film.inplane_vectors
             film_area = np.linalg.norm(

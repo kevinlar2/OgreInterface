@@ -297,6 +297,7 @@ class BaseSurfaceMatcher:
             dpi: Resolution of the figure (dots per inch)
             show_opt: Determines if the optimal value is printed on the figure
 
+
         Returns:
             The optimal value of the negated adhesion energy (smaller is better, negative = stable, positive = unstable)
         """
@@ -503,6 +504,8 @@ class BaseSurfaceMatcher:
         ]
         diverging_names = mpl_diverging_names + cm_diverging_names
 
+        Z /= np.abs(np.min(Z))
+
         min_Z = np.nanmin(Z)
         max_Z = np.nanmax(Z)
         if type(cmap) == str:
@@ -540,15 +543,17 @@ class BaseSurfaceMatcher:
 
             if show_max:
                 E_max = np.min(Z)
-                label = (
-                    "$-E_{adh}$ (eV/$\\AA^{2}$) : "
-                    + "$E_{min}$ = "
-                    + f"{E_max:.4f}"
-                )
-                cbar.set_label(label, fontsize=fontsize)
+                label = "$-E_{adh}/|E_{min}|$ : $E_{min}$ = " + f"{E_max:.4f}"
+                # label = (
+                #     "$-E_{adh}$ (eV/$\\AA^{2}$) : "
+                #     + "$E_{min}$ = "
+                #     + f"{E_max:.4f}"
+                # )
+                cbar.set_label(label, fontsize=fontsize, labelpad=8)
             else:
-                label = "$-E_{adh}$ (eV/$\\AA^{2}$)"
-                cbar.set_label(label, fontsize=fontsize)
+                # label = "$-E_{adh}$ (eV/$\\AA^{2}$)"
+                label = "$-E_{adh}/|E_{min}|$"
+                cbar.set_label(label, fontsize=fontsize, labelpad=8)
 
             cax.xaxis.set_ticks_position("top")
             cax.xaxis.set_label_position("top")

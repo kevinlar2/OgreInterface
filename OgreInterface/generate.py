@@ -135,6 +135,7 @@ class SurfaceGenerator(Sequence):
         self._use_prim = len(self.bulk_structure) != len(
             self.primitive_structure
         )
+        # self._use_prim = False
 
         self._point_group_operations = self._get_point_group_operations()
 
@@ -538,10 +539,12 @@ class SurfaceGenerator(Sequence):
                     break
             # We want the indices with the maximum absolute cosine,
             # but smallest possible length.
+
             uvw, cosine, l, diff = max(
                 candidates,
                 key=lambda x: (-x[3], x[1], -x[2]),
             )
+
             basis = np.vstack([basis, uvw])
 
         init_oriented_struc = struc_for_slab.copy()
@@ -580,6 +583,7 @@ class SurfaceGenerator(Sequence):
         #         planar_mol.apply_operation(to_planar_operation)
         #         centered_mol = planar_mol.get_centered_molecule()
         #         site.properties["molecules"] = centered_mol
+        # Poscar(init_oriented_struc).write_file("POSCAR_obs_001")
 
         planar_oriented_struc = init_oriented_struc.copy()
         planar_oriented_struc.apply_operation(to_planar_operation)

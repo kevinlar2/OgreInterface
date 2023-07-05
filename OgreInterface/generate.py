@@ -223,6 +223,30 @@ class SurfaceGenerator(Sequence):
             supress_warnings,
         )
 
+    @classmethod
+    def not_lazy(
+        cls,
+        lazy_surface_generator: SelfSurfaceGenerator
+    ) -> SelfSurfaceGenerator:
+         """Creating a SurfaceGenerator that is not lazy from a lazy SurfaceGenerator
+
+         Args:
+             lazy_surface_generator: the lazy SurfaceGenerator
+
+        Returns:
+            SurfaceGenerator
+        """
+        return cls(
+            structure=lazy_surface_generator.structure,
+            miller_index=lazy_surface_generator.miller_index,
+            layers=lazy_surface_generator.layers,
+            vacuum=lazy_surface_generator.vacuum,
+            refine_structure=lazy_surface_generator.refine_structure,
+            generate_all=lazy_surface_generator.generate_all,
+            lazy=False,
+            supress_warnings=lazy_surface_generator.supress_warnings,
+        )
+
     def _get_bulk(self, atoms_or_struc):
         if type(atoms_or_struc) == Atoms:
             init_structure = AseAtomsAdaptor.get_structure(atoms_or_struc)

@@ -1,21 +1,91 @@
-from __future__ import annotations
-import numpy as np
-import copy
-from functools import reduce
-from pymatgen.core.structure import Structure, Molecule
-from pymatgen.core.lattice import Lattice
-from pymatgen.io.ase import AseAtomsAdaptor
-from pymatgen.io.vasp.inputs import Poscar
-from pymatgen.core.periodic_table import DummySpecies
-import itertools
-import functools
-import math
 import collections
+import copy
+import functools
+from functools import reduce
+from __future__ import annotations
+import itertools
+import math
+
+import networkx as nx
+import numpy as np
 from pymatgen.analysis.graphs import StructureGraph
 from pymatgen.analysis.local_env import JmolNN
-import networkx as nx
+from pymatgen.core.lattice import Lattice
+from pymatgen.core.periodic_table import DummySpecies
+from pymatgen.core.structure import Structure, Molecule
+from pymatgen.io.ase import AseAtomsAdaptor
+from pymatgen.io.vasp.inputs import Poscar
+from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
 import spglib
 
+def _get_unique_miller_indices(struc: Structure, max_index: int):
+    struc_sg = SpacegroupAnalyzer(struc)
+    lattice = struc.lattice
+    recip = struc.lattice.reciprocal_lattice_crystallographic
+    symmops = struc_sg.get_point_group_operations(cartesian=False)
+    planes = set(list(product(range(-max_index, max_index + 1), repeat=3)))
+    planes.remove((0, 0, 0))
+
+    reduced_planes = []
+    for plane in planes:
+        reduced_plane = _get_reduced_vector(
+            np.array(plane).astype(float)
+        )
+        reduced_plane = reduced_plane.astype(int)
+        reduced_planes.append(tuple(reduced_plane))
+
+    reduced_planes = set(reduced_planes)
+
+    planes_dict = {p: [] for p in reduced_planes}
+
+    for plane in reduced_planes:
+        frac_vec = np.array(plane).dot(recip.metric_tensor)
+        if plane in planes_dict.keys():
+            for i, symmop in enumerate(symmops):
+                frac_point_out = symmop.apply_rotation_only(frac_vec)
+                point_out = frac_point_out.dot(lattice.metric_tensor)
+                point_out = _get_reduced_vector(np.round(point_out))
+                point_out = tuple(point_out.astype(int))
+                planes_dict[plane].append(point_out)
+                if point_out != plane:
+                    if point_out in planes_dict.keys():
+                        del planes_dict[point_out]
+
+    unique_planes = []
+
+    for k in planes_dict:
+        equivalent_planes = np.array(list(set(planes_dict[k])))
+        diff = np.abs(np.sum(np.sign(equivalent_planes), axis=1))
+        like_signs = equivalent_planes[diff == np.max(diff)]
+        if len(like_signs) == 1:
+            unique_planes.append(like_signs[0])
+        else:
+            first_max = like_signs[
+                np.abs(like_signs)[:, 0]
+                == np.max(np.abs(like_signs)[:, 0])
+            ]
+            if len(first_max) == 1:
+                unique_planes.append(first_max[0])
+            else:
+                second_max = first_max[
+                    np.abs(first_max)[:, 1]
+                    == np.max(np.abs(first_max)[:, 1])
+                ]
+                if len(second_max) == 1:
+                    unique_planes.append(second_max[0])
+                else:
+                    unique_planes.append(
+                        second_max[
+                            np.argmax(np.sign(second_max).sum(axis=1))
+                        ]
+                    )
+
+    unique_planes = np.vstack(unique_planes)
+    sorted_planes = sorted(
+        unique_planes, key=lambda x: (np.linalg.norm(x), -np.sign(x).sum())
+    )
+
+    return np.vstack(sorted_planes)
 
 def _get_colored_molecules(struc, output):
     colored_struc = struc.copy()

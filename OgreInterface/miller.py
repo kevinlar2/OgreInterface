@@ -90,11 +90,11 @@ class MillerSearch(object):
         self.max_angle_strain = max_angle_strain
         self.max_linear_strain = max_linear_strain
         self.max_area = max_area
-        self.substrate_inds = self._get_unique_miller_indices(
+        self.substrate_inds = utils._get_unique_miller_indices(
             self.substrate, self.max_substrate_index
         )
 
-        self.film_inds = self._get_unique_miller_indices(
+        self.film_inds = utils._get_unique_miller_indices(
             self.film, self.max_film_index
         )
 
@@ -248,75 +248,6 @@ class MillerSearch(object):
         output = utils._get_reduced_vector(output)
 
         return output.astype(int)
-
-    def _get_unique_miller_indices(self, struc: Structure, max_index: int):
-        struc_sg = SpacegroupAnalyzer(struc)
-        lattice = struc.lattice
-        recip = struc.lattice.reciprocal_lattice_crystallographic
-        symmops = struc_sg.get_point_group_operations(cartesian=False)
-        planes = set(list(product(range(-max_index, max_index + 1), repeat=3)))
-        planes.remove((0, 0, 0))
-
-        reduced_planes = []
-        for plane in planes:
-            reduced_plane = utils._get_reduced_vector(
-                np.array(plane).astype(float)
-            )
-            reduced_plane = reduced_plane.astype(int)
-            reduced_planes.append(tuple(reduced_plane))
-
-        reduced_planes = set(reduced_planes)
-
-        planes_dict = {p: [] for p in reduced_planes}
-
-        for plane in reduced_planes:
-            frac_vec = np.array(plane).dot(recip.metric_tensor)
-            if plane in planes_dict.keys():
-                for i, symmop in enumerate(symmops):
-                    frac_point_out = symmop.apply_rotation_only(frac_vec)
-                    point_out = frac_point_out.dot(lattice.metric_tensor)
-                    point_out = utils._get_reduced_vector(np.round(point_out))
-                    point_out = tuple(point_out.astype(int))
-                    planes_dict[plane].append(point_out)
-                    if point_out != plane:
-                        if point_out in planes_dict.keys():
-                            del planes_dict[point_out]
-
-        unique_planes = []
-
-        for k in planes_dict:
-            equivalent_planes = np.array(list(set(planes_dict[k])))
-            diff = np.abs(np.sum(np.sign(equivalent_planes), axis=1))
-            like_signs = equivalent_planes[diff == np.max(diff)]
-            if len(like_signs) == 1:
-                unique_planes.append(like_signs[0])
-            else:
-                first_max = like_signs[
-                    np.abs(like_signs)[:, 0]
-                    == np.max(np.abs(like_signs)[:, 0])
-                ]
-                if len(first_max) == 1:
-                    unique_planes.append(first_max[0])
-                else:
-                    second_max = first_max[
-                        np.abs(first_max)[:, 1]
-                        == np.max(np.abs(first_max)[:, 1])
-                    ]
-                    if len(second_max) == 1:
-                        unique_planes.append(second_max[0])
-                    else:
-                        unique_planes.append(
-                            second_max[
-                                np.argmax(np.sign(second_max).sum(axis=1))
-                            ]
-                        )
-
-        unique_planes = np.vstack(unique_planes)
-        sorted_planes = sorted(
-            unique_planes, key=lambda x: (np.linalg.norm(x), -np.sign(x).sum())
-        )
-
-        return np.vstack(sorted_planes)
 
     def run_scan(self) -> None:
         """
